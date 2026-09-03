@@ -228,15 +228,13 @@ impl IrBackend {
                 }
                 Instruction::SetTableFast { table, key, val } => {
                     out.push_str(&format!(
-                        "    // HOT PATH: Pure raw C-style write\n\
-                         \x20   unsafe {{ *p_r{table}.add(i_r{key} as usize) = i_r{val}; }}\n",
+                        "    unsafe {{ *p_r{table}.add(i_r{key} as usize) = i_r{val}; }}\n",
                         table = table, key = key, val = val
                     ));
                 }
                 Instruction::GetTableFast { target, table, key } => {
                     out.push_str(&format!(
-                        "    // HOT PATH: Pure raw C-style read\n\
-                         \x20   i_r{target} = unsafe {{ *p_r{table}.add(i_r{key} as usize) }};\n",
+                        "    i_r{target} = unsafe {{ *p_r{table}.add(i_r{key} as usize) }};\n",
                         target = target, table = table, key = key
                     ));
                 }

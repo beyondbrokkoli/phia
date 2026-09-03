@@ -63,7 +63,6 @@ pub fn run_baked() -> Vec<Box<Table>> {
     loop {
     b_r4 = i_r3 < i_r0;
     if !b_r4 { break; }
-    // HOT PATH: Pure raw C-style write
     unsafe { *p_r2.add(i_r3 as usize) = i_r3; }
     i_r4 = 1;
     i_r3 = i_r3 + i_r4;
@@ -82,11 +81,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
     loop {
     b_r6 = i_r5 < i_r0;
     if !b_r6 { break; }
-    // HOT PATH: Pure raw C-style read
     i_r6 = unsafe { *p_r2.add(i_r5 as usize) };
     i_r7 = i_r6 + i_r4;
     i_r8 = i_r7 - i_r5;
-    // HOT PATH: Pure raw C-style write
     unsafe { *p_r2.add(i_r5 as usize) = i_r8; }
     i_r7 = 1;
     i_r5 = i_r5 + i_r7;
