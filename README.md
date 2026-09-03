@@ -45,6 +45,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut b_r5 = false;
     let mut b_r6 = false;
     let mut t_r2: *mut Table = std::ptr::null_mut();
+    let mut p_r2: *mut i64 = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     i_r0 = 200;
@@ -58,15 +59,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     if cap_limit > t.array.len() {
         t.array.resize(cap_limit, 0);
     }
+    p_r2 = unsafe { (*t_r2).array.as_mut_ptr() };
     loop {
     b_r4 = i_r3 < i_r0;
     if !b_r4 { break; }
-    i_r4 = i_r3;
-    i_r5 = i_r3;
-    let idx = i_r4 as usize;
-    let t = unsafe { &mut *t_r2 };
-    // HOT PATH: pure unchecked assignment, capacity proven!
-    unsafe { *t.array.get_unchecked_mut(idx) = i_r5; }
+    // HOT PATH: Pure raw C-style write
+    unsafe { *p_r2.add(i_r3 as usize) = i_r3; }
     i_r4 = 1;
     i_r3 = i_r3 + i_r4;
     }
@@ -76,6 +74,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     if cap_limit > t.array.len() {
         t.array.resize(cap_limit, 0);
     }
+    p_r2 = unsafe { (*t_r2).array.as_mut_ptr() };
     loop {
     b_r5 = i_r4 < i_r1;
     if !b_r5 { break; }
@@ -83,18 +82,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     loop {
     b_r6 = i_r5 < i_r0;
     if !b_r6 { break; }
-    i_r7 = i_r5;
-    let idx = i_r7 as usize;
-    // Explicitly create a safe reference first to satisfy the borrow checker
-    let t = unsafe { &*t_r2 };
-    i_r6 = unsafe { *t.array.get_unchecked(idx) };
-    i_r7 = i_r5;
-    i_r8 = i_r6 + i_r4;
-    i_r8 = i_r8 - i_r5;
-    let idx = i_r7 as usize;
-    let t = unsafe { &mut *t_r2 };
-    // HOT PATH: pure unchecked assignment, capacity proven!
-    unsafe { *t.array.get_unchecked_mut(idx) = i_r8; }
+    // HOT PATH: Pure raw C-style read
+    i_r6 = unsafe { *p_r2.add(i_r5 as usize) };
+    i_r7 = i_r6 + i_r4;
+    i_r8 = i_r7 - i_r5;
+    // HOT PATH: Pure raw C-style write
+    unsafe { *p_r2.add(i_r5 as usize) = i_r8; }
     i_r7 = 1;
     i_r5 = i_r5 + i_r7;
     }

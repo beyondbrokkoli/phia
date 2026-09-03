@@ -5,35 +5,38 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-#[path = "src/compiler.rs"]
-pub mod compiler;
-#[path = "src/ir.rs"]
-pub mod ir;
-#[path = "src/lexer.rs"]
-pub mod lexer;
-#[path = "src/memory.rs"]
-pub mod memory;
+#[path = "src/lexer.rs"] pub mod lexer;
+#[path = "src/ast.rs"] pub mod ast;
+#[path = "src/parser.rs"] pub mod parser;
+#[path = "src/type_checker.rs"] pub mod type_checker;
+#[path = "src/lowerer.rs"] pub mod lowerer;
+#[path = "src/ir.rs"] pub mod ir;
 
 fn main() {
     println!("cargo:rerun-if-changed=test.lua");
-    println!("cargo:rerun-if-changed=src/ir.rs");
 
-    let source_code = std::fs::read_to_string("test.lua").expect("Failed to read test.lua");
-    let tokens: Vec<lexer::Token> = lexer::Token::lexer(&source_code)
-        .filter_map(|res| res.ok())
-        .collect();
+    let source = std::fs::read_to_string("test.lua").expect("Failed to read");
+    let tokens = lexer::Token::lexer(&source).filter_map(|res| res.ok()).collect();
 
-    let backend = ir::IrBackend::new();
-    let mut comp = compiler::Compiler::new(tokens, backend);
+    // 1. AST Generation
+    let mut parser = parser::Parser::new(tokens);
+    let ast = parser.parse_program();
 
-    while !comp.is_done() {
-        comp.compile_stmt();
-    }
+    // 2. Semantic Analysis & Type Checking
+    let mut checker = type_checker::TypeChecker::new();
+    checker.check_program(&ast);
 
-    // -> Add this line to trigger your new pass!
-    comp.backend.optimize();
+    // 3. IR Lowering
+    let mut lowerer = lowerer::IrLowerer::new();
+    lowerer.lower_program(&ast);
 
-    let final_code = comp.backend.generate_rust_code();
+    // 4. Optimization
+    let mut backend = ir::IrBackend::new();
+    backend.ir = lowerer.ir; // Transfer the flat IR
+    backend.optimize();
+
+    // 5. Code Generation
+    let final_code = backend.generate_rust_code();
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("baked_native.rs");

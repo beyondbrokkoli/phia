@@ -1,7 +1,7 @@
 use logos::Logos;
 
 // 1. THE ZERO-ALLOCATION LEXER & INTERNER
-#[derive(Logos, Debug, PartialEq)]
+#[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\n\f]+")]
 // We explicitly tell Logos this is intentional!
 #[logos(skip(r"--[^\n]*", allow_greedy = true))]
