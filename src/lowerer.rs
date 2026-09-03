@@ -6,7 +6,7 @@ use crate::ir::Instruction;
 struct Local {
     name: String,
     depth: usize,
-    reg: u8,
+    reg: u32,
     ty: StaticType,
 }
 
@@ -14,7 +14,7 @@ pub struct IrLowerer {
     pub ir: Vec<Instruction>,
     locals: Vec<Local>,
     scope_depth: usize,
-    free_reg: u8,
+    free_reg: u32,
 }
 
 impl IrLowerer {
@@ -27,7 +27,7 @@ impl IrLowerer {
         }
     }
 
-    fn next_reg(&mut self) -> u8 {
+    fn next_reg(&mut self) -> u32 {
         let r = self.free_reg;
         self.free_reg += 1;
         r
@@ -117,7 +117,7 @@ impl IrLowerer {
 
     // Evaluates an expression, placing the result in `target_reg` if provided.
     // Returns the register containing the final value, and its type.
-    fn lower_expr(&mut self, expr: &Expr, target_reg: Option<u8>) -> (u8, StaticType) {
+    fn lower_expr(&mut self, expr: &Expr, target_reg: Option<u32>) -> (u32, StaticType) {
         match expr {
             Expr::Integer(val) => {
                 let reg = target_reg.unwrap_or_else(|| self.next_reg());

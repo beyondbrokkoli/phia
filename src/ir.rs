@@ -6,23 +6,21 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    LoadInt { target: u8, val: i64 },
-    NewTable { target: u8 },
-    SetTable { table: u8, key: u8, val: u8 },
-    GetTable { target: u8, table: u8, key: u8 },
-    Move { target: u8, source: u8, ty: StaticType },
-    Add { target: u8, left: u8, right: u8 },
-    Sub { target: u8, left: u8, right: u8 },
-    Less { target: u8, left: u8, right: u8 },
+    LoadInt { target: u32, val: i64 },
+    NewTable { target: u32 },
+    SetTable { table: u32, key: u32, val: u32 },
+    GetTable { target: u32, table: u32, key: u32 },
+    Move { target: u32, source: u32, ty: StaticType },
+    Add { target: u32, left: u32, right: u32 },
+    Sub { target: u32, left: u32, right: u32 },
+    Less { target: u32, left: u32, right: u32 },
     BeginWhile,
-    WhileCondition { cond_reg: u8 },
+    WhileCondition { cond_reg: u32 },
     EndWhile,
-
-    // The newly optimized instructions
-    EnsureCapacity { table: u8, limit: u8 },
-    HoistRawPtr { table: u8 },
-    SetTableFast { table: u8, key: u8, val: u8 },
-    GetTableFast { target: u8, table: u8, key: u8 },
+    EnsureCapacity { table: u32, limit: u32 },
+    HoistRawPtr { table: u32 },
+    SetTableFast { table: u32, key: u32, val: u32 },
+    GetTableFast { target: u32, table: u32, key: u32 },
 }
 
 pub struct IrBackend {
