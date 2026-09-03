@@ -13,9 +13,9 @@ use std::path::Path;
 #[path = "src/ir.rs"] pub mod ir;
 
 fn main() {
-    println!("cargo:rerun-if-changed=test.lua");
+    println!("cargo:rerun-if-changed=main.lua");
 
-    let source = std::fs::read_to_string("test.lua").expect("Failed to read");
+    let source = std::fs::read_to_string("main.lua").expect("Failed to read main.lua");
     let tokens = lexer::Token::lexer(&source).filter_map(|res| res.ok()).collect();
 
     // 1. AST Generation

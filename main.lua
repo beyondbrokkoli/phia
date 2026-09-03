@@ -1,4 +1,4 @@
--- stress.lua
+-- main.lua
 -- Tests scope shadowing, register recycling, and optimizer fallbacks.
 
 local size = 50000
