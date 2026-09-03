@@ -1,6 +1,6 @@
 // src/compiler.rs
-use std::iter::Peekable;
 use crate::lexer::Token;
+use std::iter::Peekable;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StaticType {
@@ -62,14 +62,18 @@ impl<'a, B: Backend> Compiler<'a, B> {
         self.free_reg = self.locals.last().map(|l| l.reg as u16 + 1).unwrap_or(0);
     }
 
-    fn begin_scope(&mut self) { self.scope_depth += 1; }
+    fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
 
     fn end_scope(&mut self) {
         self.scope_depth -= 1;
         while let Some(local) = self.locals.last() {
             if local.depth > self.scope_depth {
                 self.locals.pop();
-            } else { break; }
+            } else {
+                break;
+            }
         }
         self.reset_temps(); // Free registers belonging to out-of-scope locals
     }
@@ -85,7 +89,11 @@ impl<'a, B: Backend> Compiler<'a, B> {
                 self.tokens.next(); // Consume '='
                 let target_reg = self.next_reg();
                 self.compile_expr(target_reg);
-                self.locals.push(Local { name, depth: self.scope_depth, reg: target_reg });
+                self.locals.push(Local {
+                    name,
+                    depth: self.scope_depth,
+                    reg: target_reg,
+                });
                 self.reset_temps();
             }
             Some(Token::Identifier(_)) => {
@@ -150,14 +158,22 @@ impl<'a, B: Backend> Compiler<'a, B> {
             match token {
                 Token::Plus | Token::Minus | Token::LessThan => {
                     has_operator = true;
-                    let op = if token == &Token::Plus { 0 } else if token == &Token::Minus { 1 } else { 2 };
+                    let op = if token == &Token::Plus {
+                        0
+                    } else if token == &Token::Minus {
+                        1
+                    } else {
+                        2
+                    };
                     self.tokens.next();
 
                     let rhs_reg = self.compile_simple_expr(None);
 
-                    if op == 0 { self.backend.emit_add(target_reg, lhs_reg, rhs_reg); }
-                    else if op == 1 { self.backend.emit_sub(target_reg, lhs_reg, rhs_reg); }
-                    else {
+                    if op == 0 {
+                        self.backend.emit_add(target_reg, lhs_reg, rhs_reg);
+                    } else if op == 1 {
+                        self.backend.emit_sub(target_reg, lhs_reg, rhs_reg);
+                    } else {
                         self.backend.emit_less(target_reg, lhs_reg, rhs_reg);
                         self.reg_types[target_reg as usize] = StaticType::Boolean;
                     }
@@ -170,7 +186,8 @@ impl<'a, B: Backend> Compiler<'a, B> {
         // Only emit a move if there were no operations AND the simple_expr didn't already
         // write directly into our target_reg.
         if !has_operator && lhs_reg != target_reg {
-            self.backend.emit_move(target_reg, lhs_reg, self.reg_types[lhs_reg as usize]);
+            self.backend
+                .emit_move(target_reg, lhs_reg, self.reg_types[lhs_reg as usize]);
             self.reg_types[target_reg as usize] = self.reg_types[lhs_reg as usize];
         }
     }

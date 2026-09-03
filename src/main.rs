@@ -28,7 +28,8 @@ fn main() {
         println!("  Table {}:", arena_id);
 
         for (i, val) in table.array.iter().take(20).enumerate() {
-            if *val != 0 { // Changed from Value::nil()
+            if *val != 0 {
+                // Changed from Value::nil()
                 println!("    [{}] = {}", i, val);
             }
         }

@@ -1,8 +1,8 @@
-# i_we
-
-**Intermediate / Working Environment**
+# phia
 
 An experimental Ahead-Of-Time (AOT) Lua-to-Rust transpiler architected to isolate and evaluate the maximum theoretical optimization ceiling of Lua logic mapped to LLVM IR.
+
+Supported features: while, do, end, local, integers, integer-only tables
 
 ## Input
 ```lua
