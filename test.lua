@@ -1,7 +1,6 @@
 -- test.lua
-
 local table_size = 200
-local outer_loops = 5000000
+local outer_loops = 50000000
 local data = {}
 local i = 0
 while i < table_size do

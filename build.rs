@@ -30,6 +30,9 @@ fn main() {
         comp.compile_stmt();
     }
 
+    // -> Add this line to trigger your new pass!
+    comp.backend.optimize();
+
     let final_code = comp.backend.generate_rust_code();
 
     let out_dir = env::var("OUT_DIR").unwrap();

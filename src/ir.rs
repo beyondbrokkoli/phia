@@ -48,6 +48,16 @@ pub enum Instruction {
         cond_reg: u8,
     },
     EndWhile,
+
+    EnsureCapacity {
+        table: u8,
+        limit: u8,
+    },
+    SetTableFast {
+        table: u8,
+        key: u8,
+        val: u8,
+    },
 }
 
 pub struct IrBackend {
@@ -58,6 +68,68 @@ impl IrBackend {
     pub fn new() -> Self {
         Self {
             ir: Vec::with_capacity(1024),
+        }
+    }
+
+    // NEW: The Optimization Pass (with Copy Propagation)
+    pub fn optimize(&mut self) {
+        let mut i = 0;
+        while i < self.ir.len() {
+            if let Instruction::BeginWhile = self.ir[i] {
+                let mut limit_reg = None;
+                let mut idx_reg = None;
+
+                // 1. Lookahead: Scan forward to see if this loop has a clean `<` bounds check
+                for j in i + 1..self.ir.len() {
+                    match self.ir[j] {
+                        Instruction::Less { target, left, right } => {
+                            if let Some(Instruction::WhileCondition { cond_reg }) = self.ir.get(j + 1) {
+                                if *cond_reg == target {
+                                    idx_reg = Some(left);
+                                    limit_reg = Some(right);
+                                }
+                            }
+                        }
+                        Instruction::EndWhile => break,
+                        _ => {}
+                    }
+                }
+
+                // 2. If we proved the bounds, find SetTable instructions that use this index (or a copy of it)
+                if let (Some(idx), Some(limit)) = (idx_reg, limit_reg) {
+                    let mut hoists = Vec::new();
+                    let mut j = i + 1;
+
+                    // Track the canonical index, plus any temporary registers it gets moved into
+                    let mut active_aliases = vec![idx];
+
+                    while j < self.ir.len() {
+                        match self.ir[j] {
+                            Instruction::Move { target, source, .. } => {
+                                // If the loop index gets copied to a temporary, track the temporary!
+                                if active_aliases.contains(&source) {
+                                    active_aliases.push(target);
+                                }
+                            }
+                            Instruction::SetTable { table, key, val } if active_aliases.contains(&key) => {
+                                // Swap to the branchless fast-path instruction
+                                self.ir[j] = Instruction::SetTableFast { table, key, val };
+                                hoists.push(table);
+                            }
+                            Instruction::EndWhile => break,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+
+                    // 3. Hoist the capacity check to BEFORE the loop begins
+                    for table in hoists {
+                        self.ir.insert(i, Instruction::EnsureCapacity { table, limit });
+                        i += 1; // Keep `i` pointing at BeginWhile after insertion
+                    }
+                }
+            }
+            i += 1;
         }
     }
 
@@ -132,6 +204,16 @@ impl IrBackend {
                     used_b.insert(*cond_reg);
                 }
                 Instruction::BeginWhile | Instruction::EndWhile => {}
+
+                Instruction::EnsureCapacity { table, limit } => {
+                    used_t.insert(*table);
+                    used_i.insert(*limit);
+                }
+                Instruction::SetTableFast { table, key, val } => {
+                    used_t.insert(*table);
+                    used_i.insert(*key);
+                    used_i.insert(*val);
+                }
             }
         }
 
@@ -240,6 +322,29 @@ impl IrBackend {
                     out.push_str(&format!("    if !b_r{} {{ break; }}\n", cond_reg));
                 }
                 Instruction::EndWhile => out.push_str("    }\n"),
+
+                Instruction::EnsureCapacity { table, limit } => {
+                    out.push_str(&format!(
+                        "    let cap_limit = i_r{limit} as usize;\n\
+                         \x20   let t = unsafe {{ &mut *t_r{table} }};\n\
+                         \x20   if cap_limit > t.array.len() {{\n\
+                         \x20       t.array.resize(cap_limit, Value::nil());\n\
+                         \x20   }}\n",
+                        table = table,
+                        limit = limit
+                    ));
+                }
+                Instruction::SetTableFast { table, key, val } => {
+                    out.push_str(&format!(
+                        "    let idx = i_r{key} as usize;\n\
+                         \x20   let t = unsafe {{ &mut *t_r{table} }};\n\
+                         \x20   // HOT PATH: pure unchecked assignment, capacity proven!\n\
+                         \x20   unsafe {{ *t.array.get_unchecked_mut(idx) = Value::integer(i_r{val} as i32); }}\n",
+                        table = table,
+                        key = key,
+                        val = val
+                    ));
+                }
             }
         }
 
