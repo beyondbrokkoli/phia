@@ -65,9 +65,9 @@ impl IrBackend {
         let mut out = String::new();
 
         out.push_str("use crate::memory::{Value, Table};\n\n");
-        // Add unused_assignments to this list!
         out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
-        out.push_str("pub fn run_baked() -> Vec<Table> {\n");
+        // 1. Change the return type to Box<Table>
+        out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
 
         let mut used_i = BTreeSet::new();
         let mut used_b = BTreeSet::new();
@@ -142,9 +142,11 @@ impl IrBackend {
             out.push_str(&format!("    let mut b_r{} = false;\n", r));
         }
         for r in used_t {
-            out.push_str(&format!("    let mut t_r{} = 0usize;\n", r));
+            // 2. Table registers are now literal CPU pointers!
+            out.push_str(&format!("    let mut t_r{}: *mut Table = std::ptr::null_mut();\n", r));
         }
-        out.push_str("    let mut tables = Vec::<Table>::with_capacity(128);\n\n");
+        // 3. The arena holds boxed tables so their heap addresses never change
+        out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
         for instr in &self.ir {
             match instr {
@@ -152,14 +154,15 @@ impl IrBackend {
                     out.push_str(&format!("    i_r{} = {};\n", target, val));
                 }
                 Instruction::NewTable { target } => {
-                    out.push_str("    tables.push(Table::new());\n");
-                    out.push_str(&format!("    t_r{} = tables.len() - 1;\n", target));
+                    out.push_str("    let mut new_table = Box::new(Table::new());\n");
+                    out.push_str(&format!("    t_r{} = &mut *new_table as *mut Table;\n", target));
+                    out.push_str("    tables.push(new_table);\n");
                 }
                 Instruction::SetTable { table, key, val } => {
                     out.push_str(&format!(
                         "    let idx = i_r{k} as usize;\n\
-                         \x20   // SAFETY: We assume the table index exists.\n\
-                         \x20   let t = unsafe {{ tables.get_unchecked_mut(t_r{tbl}) }};\n\
+                         \x20   // Direct pointer deref - zero arena lookups!\n\
+                         \x20   let t = unsafe {{ &mut *t_r{tbl} }};\n\
                          \x20   if idx >= t.array.len() {{\n\
                          \x20       if idx == t.array.len() {{\n\
                          \x20           t.array.push(Value::nil());\n\
@@ -167,7 +170,6 @@ impl IrBackend {
                          \x20           t.array.resize(idx + 1, Value::nil());\n\
                          \x20       }}\n\
                          \x20   }}\n\
-                         \x20   // Hot path: guaranteed to be in bounds now, no panic edge for LLVM.\n\
                          \x20   unsafe {{ *t.array.get_unchecked_mut(idx) = Value::integer(i_r{v} as i32); }}\n",
                         tbl = table,
                         k = key,
@@ -177,9 +179,9 @@ impl IrBackend {
                 Instruction::GetTable { target, table, key } => {
                     out.push_str(&format!(
                         "    let idx = i_r{k} as usize;\n\
-                         \x20   // SAFETY: For max benchmark speed, we assume reads are strictly in-bounds.\n\
-                         \x20   // (A production Lua engine would do: if idx < len {{ get_unchecked }} else {{ Value::nil() }})\n\
-                         \x20   let raw_val = unsafe {{ *tables.get_unchecked(t_r{tbl}).array.get_unchecked(idx) }};\n\
+                         \x20   // Explicitly create a safe reference first to satisfy the borrow checker\n\
+                         \x20   let t = unsafe {{ &*t_r{tbl} }};\n\
+                         \x20   let raw_val = unsafe {{ *t.array.get_unchecked(idx) }};\n\
                          \x20   i_r{t} = (raw_val.0 & 0xFFFF_FFFF) as i32 as i64;\n",
                         t = target,
                         tbl = table,
