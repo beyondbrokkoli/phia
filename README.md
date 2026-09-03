@@ -29,7 +29,7 @@ end
 
 ## Output
 ```rust
-use crate::memory::{Value, Table};
+use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
@@ -48,7 +48,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     i_r0 = 200;
-    i_r1 = 5000000;
+    i_r1 = 50000000;
     let mut new_table = Box::new(Table::new());
     t_r2 = &mut *new_table as *mut Table;
     tables.push(new_table);
@@ -56,7 +56,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let cap_limit = i_r0 as usize;
     let t = unsafe { &mut *t_r2 };
     if cap_limit > t.array.len() {
-        t.array.resize(cap_limit, Value::nil());
+        t.array.resize(cap_limit, 0);
     }
     loop {
     b_r4 = i_r3 < i_r0;
@@ -66,7 +66,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let idx = i_r4 as usize;
     let t = unsafe { &mut *t_r2 };
     // HOT PATH: pure unchecked assignment, capacity proven!
-    unsafe { *t.array.get_unchecked_mut(idx) = Value::integer(i_r5 as i32); }
+    unsafe { *t.array.get_unchecked_mut(idx) = i_r5; }
     i_r4 = 1;
     i_r3 = i_r3 + i_r4;
     }
@@ -74,7 +74,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let cap_limit = i_r0 as usize;
     let t = unsafe { &mut *t_r2 };
     if cap_limit > t.array.len() {
-        t.array.resize(cap_limit, Value::nil());
+        t.array.resize(cap_limit, 0);
     }
     loop {
     b_r5 = i_r4 < i_r1;
@@ -87,15 +87,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let idx = i_r7 as usize;
     // Explicitly create a safe reference first to satisfy the borrow checker
     let t = unsafe { &*t_r2 };
-    let raw_val = unsafe { *t.array.get_unchecked(idx) };
-    i_r6 = (raw_val.0 & 0xFFFF_FFFF) as i32 as i64;
+    i_r6 = unsafe { *t.array.get_unchecked(idx) };
     i_r7 = i_r5;
     i_r8 = i_r6 + i_r4;
     i_r8 = i_r8 - i_r5;
     let idx = i_r7 as usize;
     let t = unsafe { &mut *t_r2 };
     // HOT PATH: pure unchecked assignment, capacity proven!
-    unsafe { *t.array.get_unchecked_mut(idx) = Value::integer(i_r8 as i32); }
+    unsafe { *t.array.get_unchecked_mut(idx) = i_r8; }
     i_r7 = 1;
     i_r5 = i_r5 + i_r7;
     }

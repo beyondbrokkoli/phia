@@ -1,7 +1,7 @@
 // src/main.rs
 mod memory;
 
-use memory::Value;
+//use memory::Value;
 
 mod aot {
     include!(concat!(env!("OUT_DIR"), "/baked_native.rs"));
@@ -28,8 +28,8 @@ fn main() {
         println!("  Table {}:", arena_id);
 
         for (i, val) in table.array.iter().take(20).enumerate() {
-            if *val != Value::nil() {
-                println!("    [{}] = {:?}", i, val);
+            if *val != 0 { // Changed from Value::nil()
+                println!("    [{}] = {}", i, val);
             }
         }
         if table.array.len() > 20 {
