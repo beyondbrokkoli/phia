@@ -120,6 +120,30 @@ impl IrBackend {
 
                     // Only proceed if the limit is safe
                     if limit_is_invariant {
+                        // THE SINGLE SOURCE OF TRUTH FOR REGISTER ALIASING
+                        let update_aliases = |instr: &Instruction, aliases: &mut Vec<u32>| {
+                            match instr {
+                                Instruction::Move { target, source, .. } => {
+                                    if aliases.contains(source) {
+                                        if !aliases.contains(target) { aliases.push(*target); }
+                                    } else {
+                                        aliases.retain(|&r| r != *target);
+                                    }
+                                }
+                                Instruction::LoadInt { target, .. } |
+                                Instruction::Add { target, .. } |
+                                Instruction::Sub { target, .. } |
+                                Instruction::Less { target, .. } |
+                                Instruction::GetTable { target, .. } |
+                                Instruction::GetTableFast { target, .. } |
+                                Instruction::NewTable { target } => {
+                                    // Any other write to a register destroys its alias status
+                                    aliases.retain(|&r| r != *target);
+                                }
+                                _ => {}
+                            }
+                        };
+
                         // PASS 1: The Safety Scan
                         let mut clobbered_tables = std::collections::BTreeSet::new();
                         let mut active_aliases_scan = vec![idx];
@@ -136,39 +160,39 @@ impl IrBackend {
                         };
 
                         for k in (i + 1)..self.ir.len() {
-                            match self.ir[k].clone() {
+                            let instr = self.ir[k].clone();
+
+                            // Check usage BEFORE applying definitions
+                            let is_alias = match instr {
+                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => active_aliases_scan.contains(&key),
+                                _ => false,
+                            };
+
+                            match instr {
                                 Instruction::BeginWhile => scan_depth += 1,
                                 Instruction::EndWhile => {
                                     scan_depth -= 1;
                                     if scan_depth == 0 { break; }
                                 }
                                 Instruction::NewTable { target } => clobber_root(target, &mut clobbered_tables),
-                                Instruction::Move { target, source, ty } => {
-                                    if active_aliases_scan.contains(&source) {
-                                        if !active_aliases_scan.contains(&target) { active_aliases_scan.push(target); }
-                                    } else {
-                                        active_aliases_scan.retain(|&r| r != target);
-                                    }
-                                    if ty == StaticType::Table {
-                                        // Fix for #12: Clobber both target AND source on internal table Moves
+                                Instruction::Move { target, source, ref ty } => {
+                                    if *ty == StaticType::Table {
                                         clobber_root(target, &mut clobbered_tables);
                                         clobber_root(source, &mut clobbered_tables);
                                     }
                                 }
-                                Instruction::LoadInt { target, .. } | Instruction::Add { target, .. } |
-                                Instruction::Sub { target, .. } | Instruction::Less { target, .. } => {
-                                    active_aliases_scan.retain(|&r| r != target);
-                                }
-                                Instruction::SetTable { table, key, .. } | Instruction::GetTable { target: _, table, key } => {
-                                    if !active_aliases_scan.contains(&key) {
+                                Instruction::SetTable { table, .. } | Instruction::GetTable { target: _, table, .. } => {
+                                    if !is_alias {
                                         clobber_root(table, &mut clobbered_tables);
                                     }
                                 }
                                 _ => {}
                             }
+
+                            // Update aliases AFTER usage checks
+                            update_aliases(&instr, &mut active_aliases_scan);
                         }
 
-                        // If a dynamic access hit an ambiguous table, the blast radius is unknown. Abort.
                         if abort_optimization {
                             i += 1;
                             continue;
@@ -181,25 +205,22 @@ impl IrBackend {
                         let mut j_depth = 1;
 
                         while j < self.ir.len() {
-                            match self.ir[j].clone() {
+                            let instr = self.ir[j].clone();
+
+                            // Check usage BEFORE applying definitions
+                            let is_alias = match instr {
+                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => active_aliases.contains(&key),
+                                _ => false,
+                            };
+
+                            match instr {
                                 Instruction::BeginWhile => j_depth += 1,
                                 Instruction::EndWhile => {
                                     j_depth -= 1;
                                     if j_depth == 0 { break; }
                                 }
-                                Instruction::Move { target, source, ty: _ } => {
-                                    if active_aliases.contains(&source) {
-                                        if !active_aliases.contains(&target) { active_aliases.push(target); }
-                                    } else {
-                                        active_aliases.retain(|&r| r != target);
-                                    }
-                                }
-                                Instruction::LoadInt { target, .. } | Instruction::Add { target, .. } |
-                                Instruction::Sub { target, .. } | Instruction::Less { target, .. } => {
-                                    active_aliases.retain(|&r| r != target);
-                                }
                                 Instruction::SetTable { table, key, val } => {
-                                    if active_aliases.contains(&key) {
+                                    if is_alias {
                                         if let Some(r) = get_table_root(table) {
                                             if !clobbered_tables.contains(&r) {
                                                 self.ir[j] = Instruction::SetTableFast { table, key, val };
@@ -209,8 +230,6 @@ impl IrBackend {
                                     }
                                 }
                                 Instruction::GetTable { target, table, key } => {
-                                    let is_alias = active_aliases.contains(&key);
-                                    active_aliases.retain(|&r| r != target);
                                     if is_alias {
                                         if let Some(r) = get_table_root(table) {
                                             if !clobbered_tables.contains(&r) {
@@ -222,6 +241,9 @@ impl IrBackend {
                                 }
                                 _ => {}
                             }
+
+                            // Update aliases AFTER usage checks
+                            update_aliases(&instr, &mut active_aliases);
                             j += 1;
                         }
 
