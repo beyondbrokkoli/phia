@@ -33,17 +33,34 @@ impl IrBackend {
     }
 
     pub fn optimize(&mut self) {
-        // GLOBAL TABLE ALIAS TRACKING (Fixes Bug #4)
+        // GLOBAL TABLE ALIAS TRACKING (Fixes Bugs #4, #11, #12)
         let mut table_roots = std::collections::HashMap::new();
+        let mut ambiguous_roots = std::collections::BTreeSet::new();
+
         for instr in &self.ir {
             if let Instruction::Move { target, source, ty: StaticType::Table } = instr {
-                table_roots.insert(*target, *source);
+                if table_roots.contains_key(target) {
+                    ambiguous_roots.insert(*target);
+                } else {
+                    table_roots.insert(*target, *source);
+                }
             }
         }
-        // Helper to resolve any table register to its root allocation
-        let get_table_root = |mut reg: u32| -> u32 {
-            while let Some(&parent) = table_roots.get(&reg) { reg = parent; }
-            reg
+
+        // Cycle-safe and ambiguity-aware root resolution.
+        // Returns `None` if a cycle is detected or if the register is ambiguously reassigned.
+        let get_table_root = |mut reg: u32| -> Option<u32> {
+            let mut seen = std::collections::BTreeSet::new();
+            loop {
+                if ambiguous_roots.contains(&reg) { return None; }
+                if !seen.insert(reg) { return None; } // Cycle detected
+
+                if let Some(&parent) = table_roots.get(&reg) {
+                    reg = parent;
+                } else {
+                    return Some(reg); // Found the root!
+                }
+            }
         };
 
         let mut i = 0;
@@ -103,10 +120,20 @@ impl IrBackend {
 
                     // Only proceed if the limit is safe
                     if limit_is_invariant {
-                        // PASS 1: The Safety Scan (Fixes Bug #8)
+                        // PASS 1: The Safety Scan
                         let mut clobbered_tables = std::collections::BTreeSet::new();
                         let mut active_aliases_scan = vec![idx];
                         let mut scan_depth = 1;
+                        let mut abort_optimization = false;
+
+                        // Helper to safely clobber a root, or abort if ambiguous
+                        let mut clobber_root = |reg: u32, clobbers: &mut std::collections::BTreeSet<u32>| {
+                            if let Some(r) = get_table_root(reg) {
+                                clobbers.insert(r);
+                            } else {
+                                abort_optimization = true;
+                            }
+                        };
 
                         for k in (i + 1)..self.ir.len() {
                             match self.ir[k].clone() {
@@ -115,36 +142,39 @@ impl IrBackend {
                                     scan_depth -= 1;
                                     if scan_depth == 0 { break; }
                                 }
-                                Instruction::NewTable { target } => {
-                                    clobbered_tables.insert(get_table_root(target));
-                                }
+                                Instruction::NewTable { target } => clobber_root(target, &mut clobbered_tables),
                                 Instruction::Move { target, source, ty } => {
                                     if active_aliases_scan.contains(&source) {
-                                        if !active_aliases_scan.contains(&target) {
-                                            active_aliases_scan.push(target);
-                                        }
+                                        if !active_aliases_scan.contains(&target) { active_aliases_scan.push(target); }
                                     } else {
                                         active_aliases_scan.retain(|&r| r != target);
                                     }
                                     if ty == StaticType::Table {
-                                        clobbered_tables.insert(get_table_root(target));
+                                        // Fix for #12: Clobber both target AND source on internal table Moves
+                                        clobber_root(target, &mut clobbered_tables);
+                                        clobber_root(source, &mut clobbered_tables);
                                     }
                                 }
                                 Instruction::LoadInt { target, .. } | Instruction::Add { target, .. } |
                                 Instruction::Sub { target, .. } | Instruction::Less { target, .. } => {
                                     active_aliases_scan.retain(|&r| r != target);
                                 }
-                                // THE FATAL INVALIDATOR: Any dynamic access to a table completely ruins hoisting
                                 Instruction::SetTable { table, key, .. } | Instruction::GetTable { target: _, table, key } => {
                                     if !active_aliases_scan.contains(&key) {
-                                        clobbered_tables.insert(get_table_root(table));
+                                        clobber_root(table, &mut clobbered_tables);
                                     }
                                 }
                                 _ => {}
                             }
                         }
 
-                        // PASS 2: The Rewrite Pass (Using the flawless clobber list)
+                        // If a dynamic access hit an ambiguous table, the blast radius is unknown. Abort.
+                        if abort_optimization {
+                            i += 1;
+                            continue;
+                        }
+
+                        // PASS 2: The Rewrite Pass
                         let mut hoists = Vec::new();
                         let mut j = i + 1;
                         let mut active_aliases = vec![idx];
@@ -157,11 +187,9 @@ impl IrBackend {
                                     j_depth -= 1;
                                     if j_depth == 0 { break; }
                                 }
-                                Instruction::Move { target, source, .. } => {
+                                Instruction::Move { target, source, ty: _ } => {
                                     if active_aliases.contains(&source) {
-                                        if !active_aliases.contains(&target) {
-                                            active_aliases.push(target);
-                                        }
+                                        if !active_aliases.contains(&target) { active_aliases.push(target); }
                                     } else {
                                         active_aliases.retain(|&r| r != target);
                                     }
@@ -171,20 +199,24 @@ impl IrBackend {
                                     active_aliases.retain(|&r| r != target);
                                 }
                                 Instruction::SetTable { table, key, val } => {
-                                    if active_aliases.contains(&key) && !clobbered_tables.contains(&get_table_root(table)) {
-                                        self.ir[j] = Instruction::SetTableFast { table, key, val };
-                                        if !hoists.contains(&table) {
-                                            hoists.push(table);
+                                    if active_aliases.contains(&key) {
+                                        if let Some(r) = get_table_root(table) {
+                                            if !clobbered_tables.contains(&r) {
+                                                self.ir[j] = Instruction::SetTableFast { table, key, val };
+                                                if !hoists.contains(&table) { hoists.push(table); }
+                                            }
                                         }
                                     }
                                 }
                                 Instruction::GetTable { target, table, key } => {
                                     let is_alias = active_aliases.contains(&key);
                                     active_aliases.retain(|&r| r != target);
-                                    if is_alias && !clobbered_tables.contains(&get_table_root(table)) {
-                                        self.ir[j] = Instruction::GetTableFast { target, table, key };
-                                        if !hoists.contains(&table) {
-                                            hoists.push(table);
+                                    if is_alias {
+                                        if let Some(r) = get_table_root(table) {
+                                            if !clobbered_tables.contains(&r) {
+                                                self.ir[j] = Instruction::GetTableFast { target, table, key };
+                                                if !hoists.contains(&table) { hoists.push(table); }
+                                            }
                                         }
                                     }
                                 }
