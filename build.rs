@@ -13,9 +13,12 @@ use std::path::Path;
 #[path = "src/ir.rs"] pub mod ir;
 
 fn main() {
-    println!("cargo:rerun-if-changed=main.lua");
+    // CRITICAL: without this, cargo won't re-run build.rs for different test files
+    println!("cargo:rerun-if-env-changed=PHIA_SOURCE");
+    let source_path = env::var("PHIA_SOURCE").unwrap_or_else(|_| "main.lua".to_string());
+    println!("cargo:rerun-if-changed={}", source_path);
 
-    let source = std::fs::read_to_string("main.lua").expect("Failed to read main.lua");
+    let source = std::fs::read_to_string(&source_path).expect("Failed to read source");
     let mut tokens = Vec::new();
     let mut lexer = lexer::Token::lexer(&source);
 
@@ -26,7 +29,7 @@ fn main() {
                 let span = lexer.span();
                 let snippet = &source[span.clone()];
                 panic!(
-                    "Lexer Error: Unrecognized token or invalid literal '{}' at bytes {:?}", 
+                    "Lexer Error: Unrecognized token or invalid literal '{}' at bytes {:?}",
                     snippet, span
                 );
             }
@@ -51,7 +54,28 @@ fn main() {
     backend.optimize();
 
     // 5. Code Generation
-    let final_code = backend.generate_rust_code();
+    let mut final_code = backend.generate_rust_code();
+
+    // Regression stats: computed from the FINAL IR, grep-able via the binary.
+    let (mut fs_, mut fg, mut ds, mut dg, mut ho, mut dep) = (0, 0, 0, 0, 0, 0i32);
+    let mut ctx = String::new();
+    for ins in &backend.ir {
+        use ir::Instruction as I;
+        match ins {
+            I::SetTableFast { .. } => fs_ += 1,
+            I::GetTableFast { .. } => fg += 1,
+            I::SetTable { .. } => ds += 1,
+            I::GetTable { .. } => dg += 1,
+            I::HoistRawPtr { .. } => { ho += 1; ctx.push_str(&format!("{dep},")); }
+            I::BeginWhile => dep += 1,
+            I::EndWhile => dep -= 1,
+            _ => {}
+        }
+    }
+    final_code.push_str(&format!(
+        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={}\";\n",
+        ctx.trim_end_matches(',')
+    ));
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("baked_native.rs");

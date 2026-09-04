@@ -1,42 +1,85 @@
 -- main.lua
--- Tests scope shadowing, register recycling, and optimizer fallbacks.
+-- Features: Strict Phia subset (integers, tables, local, while, +, -)
 
-local size = 50000
-local data_a = {}
-local data_b = {}
-
--- 1. Initialize data_a using the FAST PATH (Optimizer will hoist this)
-local i = 0
-while i < size do
-    data_a[i] = i
-    i = i + 1
+-- PHASE 1: The Autobahn (Massive Linear Allocation)
+-- Goal: Test pure `SetTableFast` throughput and basic loop hoisting.
+-- Size: 50 Million iterations.
+local p1_table = {}
+local p1_size = 50000000
+local p1_i = 0
+while p1_i < p1_size do
+    p1_table[p1_i] = p1_i
+    p1_i = p1_i + 1
 end
 
--- 2. The Torture Loop
-local iter = 0
-while iter < 50000 do
-    local idx = 0
 
-    -- Register Exhaustion Test:
-    -- This creates a massive temporary expression tree.
-    local crazy_math = 0 + 1 + 2 + 3 + 4 + 5 - 15 + iter
+-- PHASE 2: The Alias Trap (Safeguards #12 & #13)
+-- Goal: Force the optimizer to recognize aliases and safely disable
+-- fast-paths mid-loop without crashing or hanging.
+-- Size: 10 Million iterations.
+local p2_table = {}
+local p2_alias = p2_table
+local p2_size = 10000000
+local p2_i = 0
+while p2_i < p2_size do
+    -- Fast write via original
+    p2_table[p2_i] = p2_i + 100
 
-    while idx < size do
-        -- Scope Shadowing Test:
-        -- 'crazy_math' exists outside, but we declare it AGAIN inside.
-        local crazy_math = data_a[idx]
+    -- The trap: dynamic write via alias (forces clobber)
+    local j = p2_i
+    p2_alias[j + 1000] = 1
 
-        -- Optimizer Bypass Test:
-        -- 'offset_idx' is NOT the loop variable. The compiler cannot prove
-        -- the bounds ahead of time. It MUST fall back to the dynamic resize()
-        -- path instead of the C-style raw pointer path.
-        local offset_idx = idx + 2
+    p2_i = p2_i + 1
+end
 
-        -- Write to a new table using the un-hoistable index
-        data_b[offset_idx] = crazy_math - 1 + 1
 
-        idx = idx + 1
+-- PHASE 3: The Dynamic Resize Minefield (Safeguard #8)
+-- Goal: Interleave sequential writes with out-of-bounds jumps to force
+-- the arena to dynamically grow, testing pointer invalidation.
+-- Size: 20 Million iterations (40 Million total table writes).
+local p3_table = {}
+local p3_size = 20000000
+local p3_i = 0
+while p3_i < p3_size do
+    -- Expected fast set
+    p3_table[p3_i] = 7
+
+    -- OOB jump (disables hoisting for this write, forces arena resize)
+    local jump = p3_i + 30000
+    p3_table[jump] = 8
+
+    p3_i = p3_i + 1
+end
+
+
+-- PHASE 4: The Matrix (Safeguards #4 & #9)
+-- Goal: Deep loop depth hoisting and register survival across massive iterations.
+-- Size: 150,000 * 150,000 = 22.5 BILLION iterations.
+local p4_src = {}
+local p4_dst = {}
+local p4_size = 150000
+
+-- Setup source table
+local p4_setup = 0
+while p4_setup < p4_size do
+    p4_src[p4_setup] = p4_setup
+    p4_setup = p4_setup + 1
+end
+
+-- The 22.5 Billion Iteration Meat Grinder
+local outer = 0
+while outer < p4_size do
+    local inner = 0
+    -- Fake math noise to ensure the register allocator doesn't just sleep
+    local math_noise = outer + 1 - 1 + 5 - 5
+
+    while inner < p4_size do
+        -- Fast Get from src, Fast Set to dst (testing context depth 1)
+        local val = p4_src[inner]
+        local offset = inner + 2
+        p4_dst[offset] = val + math_noise
+
+        inner = inner + 1
     end
-
-    iter = iter + 1
+    outer = outer + 1
 end

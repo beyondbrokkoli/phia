@@ -1,40 +1,23 @@
 // src/main.rs
 mod memory;
 
-//use memory::Value;
-
 mod aot {
     include!(concat!(env!("OUT_DIR"), "/baked_native.rs"));
 }
 
 fn main() {
-    println!("Booting Phia Native Engine (Inlined Memory Workload)...");
-
-    let start_time = std::time::Instant::now();
-
-    // Bind the returned tables to 'tables'
+    let t0 = std::time::Instant::now();
     let tables = aot::run_baked();
+    let elapsed = t0.elapsed();
 
-    let elapsed = start_time.elapsed();
-
-    println!("--- EXECUTION FINISHED IN {:?} ---", elapsed);
-
-    println!("\n[ ARENA TABLES ]");
-    if tables.is_empty() {
-        println!("  (No tables allocated)");
-    }
-
-    for (arena_id, table) in tables.iter().enumerate() {
-        println!("  Table {}:", arena_id);
-
-        for (i, val) in table.array.iter().take(20).enumerate() {
-            if *val != 0 {
-                // Changed from Value::nil()
-                println!("    [{}] = {}", i, val);
-            }
+    for (id, t) in tables.iter().enumerate() {
+        let (mut nz, mut ck) = (0u64, 0i64);
+        for (i, v) in t.array.iter().enumerate() {
+            if *v != 0 { nz += 1; }
+            ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v)); // position-weighted
         }
-        if table.array.len() > 20 {
-            println!("    ... ({} more items)", table.array.len() - 20);
-        }
+        println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.array.len());
     }
+    println!("STATS {}", aot::STATS);
+    println!("TIME {:?}", elapsed);
 }
