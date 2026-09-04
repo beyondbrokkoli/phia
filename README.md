@@ -91,26 +91,28 @@ pub fn run_baked() -> Vec<Box<Table>> {
     t_r2 = &mut *new_table as *mut Table;
     tables.push(new_table);
     i_r3 = 0;
-    let cap_limit = i_r0 as usize;
-    let t = unsafe { &mut *t_r1 };
-    if cap_limit > t.array.len() {
-        t.array.resize(cap_limit, 0);
-    }
-    p_r1 = unsafe { (*t_r1).array.as_mut_ptr() };
+    let lim = i_r0;
+if lim > 0 {
+let cap_limit = lim as usize;
+let t = unsafe { &mut *t_r1 };
+if cap_limit > t.array.len() {
+t.array.resize(cap_limit, 0);
+}
+}
+    let len_r1 = unsafe { (*t_r1).array.len() };
+p_r1 = unsafe { (*t_r1).array.as_mut_ptr() };
     loop {
     b_r4 = i_r3 < i_r0;
     if !b_r4 { break; }
-    unsafe { *p_r1.add(i_r3 as usize) = i_r3; }
+    let k = i_r3;
+if k < 0 { panic!("Runtime Error: Negative index in fast path"); }
+if (k as usize) < len_r1 {
+unsafe { *p_r1.add(k as usize) = i_r3; }
+}
     i_r4 = 1;
     i_r3 = i_r3 + i_r4;
     }
     i_r4 = 0;
-    let cap_limit = i_r0 as usize;
-    let t = unsafe { &mut *t_r1 };
-    if cap_limit > t.array.len() {
-        t.array.resize(cap_limit, 0);
-    }
-    p_r1 = unsafe { (*t_r1).array.as_mut_ptr() };
     loop {
     i_r5 = 50000;
     b_r6 = i_r4 < i_r5;
@@ -130,26 +132,44 @@ pub fn run_baked() -> Vec<Box<Table>> {
     i_r18 = 15;
     i_r19 = i_r17 - i_r18;
     i_r6 = i_r19 + i_r4;
+    let lim = i_r0;
+if lim > 0 {
+let cap_limit = lim as usize;
+let t = unsafe { &mut *t_r1 };
+if cap_limit > t.array.len() {
+t.array.resize(cap_limit, 0);
+}
+}
+    let len_r1 = unsafe { (*t_r1).array.len() };
+p_r1 = unsafe { (*t_r1).array.as_mut_ptr() };
     loop {
     b_r7 = i_r5 < i_r0;
     if !b_r7 { break; }
-    i_r7 = unsafe { *p_r1.add(i_r5 as usize) };
+    let k = i_r5;
+if k < 0 { panic!("Runtime Error: Negative index in fast path"); }
+i_r7 = if (k as usize) < len_r1 {
+unsafe { *p_r1.add(k as usize) }
+} else {
+0
+};
     i_r9 = 2;
     i_r8 = i_r5 + i_r9;
     i_r9 = 1;
     i_r10 = i_r7 - i_r9;
     i_r11 = 1;
     i_r12 = i_r10 + i_r11;
-    let idx = i_r8 as usize;
-    let t = unsafe { &mut *t_r2 };
-    if idx >= t.array.len() {
-        if idx == t.array.len() {
-            t.array.push(0);
-        } else {
-            t.array.resize(idx + 1, 0);
-        }
-    }
-    unsafe { *t.array.get_unchecked_mut(idx) = i_r12; }
+    let k = i_r8;
+if k < 0 { panic!("Runtime Error: Negative table index"); }
+let idx = k as usize;
+let t = unsafe { &mut *t_r2 };
+if idx >= t.array.len() {
+if idx == t.array.len() {
+t.array.push(0);
+} else {
+t.array.resize(idx + 1, 0);
+}
+}
+unsafe { *t.array.get_unchecked_mut(idx) = i_r12; }
     i_r9 = 1;
     i_r5 = i_r5 + i_r9;
     }
