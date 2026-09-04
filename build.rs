@@ -16,7 +16,22 @@ fn main() {
     println!("cargo:rerun-if-changed=main.lua");
 
     let source = std::fs::read_to_string("main.lua").expect("Failed to read main.lua");
-    let tokens = lexer::Token::lexer(&source).filter_map(|res| res.ok()).collect();
+    let mut tokens = Vec::new();
+    let mut lexer = lexer::Token::lexer(&source);
+
+    while let Some(res) = lexer.next() {
+        match res {
+            Ok(token) => tokens.push(token),
+            Err(_) => {
+                let span = lexer.span();
+                let snippet = &source[span.clone()];
+                panic!(
+                    "Lexer Error: Unrecognized token or invalid literal '{}' at bytes {:?}", 
+                    snippet, span
+                );
+            }
+        }
+    }
 
     // 1. AST Generation
     let mut parser = parser::Parser::new(tokens);

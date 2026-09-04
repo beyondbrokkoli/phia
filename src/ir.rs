@@ -33,15 +33,34 @@ impl IrBackend {
     }
 
     pub fn optimize(&mut self) {
+        // GLOBAL TABLE ALIAS TRACKING (Fixes Bug #4)
+        let mut table_roots = std::collections::HashMap::new();
+        for instr in &self.ir {
+            if let Instruction::Move { target, source, ty: StaticType::Table } = instr {
+                table_roots.insert(*target, *source);
+            }
+        }
+        // Helper to resolve any table register to its root allocation
+        let get_table_root = |mut reg: u32| -> u32 {
+            while let Some(&parent) = table_roots.get(&reg) { reg = parent; }
+            reg
+        };
+
         let mut i = 0;
         while i < self.ir.len() {
             if let Instruction::BeginWhile = self.ir[i] {
                 let mut limit_reg = None;
                 let mut idx_reg = None;
+                let mut header_depth = 1;
 
                 for j in i + 1..self.ir.len() {
                     match self.ir[j] {
-                        Instruction::Less { target, left, right } => {
+                        Instruction::BeginWhile => header_depth += 1,
+                        Instruction::EndWhile => {
+                            header_depth -= 1;
+                            if header_depth == 0 { break; }
+                        }
+                        Instruction::Less { target, left, right } if header_depth == 1 => {
                             if let Some(Instruction::WhileCondition { cond_reg }) = self.ir.get(j + 1) {
                                 if *cond_reg == target {
                                     idx_reg = Some(left);
@@ -49,47 +68,138 @@ impl IrBackend {
                                 }
                             }
                         }
-                        Instruction::EndWhile => break,
+                        Instruction::WhileCondition { .. } if header_depth == 1 => {
+                            // The header for THIS loop ends here.
+                            // If we haven't found our `Less` by now, it doesn't exist.
+                            break;
+                        }
                         _ => {}
                     }
                 }
 
                 if let (Some(idx), Some(limit)) = (idx_reg, limit_reg) {
-                    let mut hoists = Vec::new();
-                    let mut j = i + 1;
-                    let mut active_aliases = vec![idx];
-
-                    while j < self.ir.len() {
-                        match self.ir[j] {
-                            Instruction::Move { target, source, .. } => {
-                                if active_aliases.contains(&source) {
-                                    active_aliases.push(target);
+                    // --- BUG #1 & BUG #3 FIX: Limit Invariance Scan ---
+                    let mut limit_is_invariant = true;
+                    let mut loop_depth = 0;
+                    for k in i..self.ir.len() {
+                        match self.ir[k] {
+                            Instruction::BeginWhile => loop_depth += 1,
+                            Instruction::EndWhile => {
+                                loop_depth -= 1;
+                                if loop_depth == 0 { break; }
+                            }
+                            Instruction::LoadInt { target, .. } | Instruction::Move { target, .. } |
+                            Instruction::Add { target, .. } | Instruction::Sub { target, .. } |
+                            Instruction::Less { target, .. } | Instruction::GetTable { target, .. } |
+                            Instruction::GetTableFast { target, .. } | Instruction::NewTable { target } => {
+                                if target == limit {
+                                    limit_is_invariant = false;
+                                    break;
                                 }
                             }
-                            Instruction::SetTable { table, key, val } if active_aliases.contains(&key) => {
-                                self.ir[j] = Instruction::SetTableFast { table, key, val };
-                                if !hoists.contains(&table) {
-                                    hoists.push(table);
-                                }
-                            }
-                            Instruction::GetTable { target, table, key } if active_aliases.contains(&key) => {
-                                self.ir[j] = Instruction::GetTableFast { target, table, key };
-                                if !hoists.contains(&table) {
-                                    hoists.push(table);
-                                }
-                            }
-                            Instruction::EndWhile => break,
                             _ => {}
                         }
-                        j += 1;
                     }
 
-                    // Hoist capacity AND raw pointer extraction BEFORE the loop
-                    for table in hoists {
-                        self.ir.insert(i, Instruction::EnsureCapacity { table, limit });
-                        i += 1;
-                        self.ir.insert(i, Instruction::HoistRawPtr { table });
-                        i += 1;
+                    // Only proceed if the limit is safe
+                    if limit_is_invariant {
+                        // PASS 1: The Safety Scan (Fixes Bug #8)
+                        let mut clobbered_tables = std::collections::BTreeSet::new();
+                        let mut active_aliases_scan = vec![idx];
+                        let mut scan_depth = 1;
+
+                        for k in (i + 1)..self.ir.len() {
+                            match self.ir[k].clone() {
+                                Instruction::BeginWhile => scan_depth += 1,
+                                Instruction::EndWhile => {
+                                    scan_depth -= 1;
+                                    if scan_depth == 0 { break; }
+                                }
+                                Instruction::NewTable { target } => {
+                                    clobbered_tables.insert(get_table_root(target));
+                                }
+                                Instruction::Move { target, source, ty } => {
+                                    if active_aliases_scan.contains(&source) {
+                                        if !active_aliases_scan.contains(&target) {
+                                            active_aliases_scan.push(target);
+                                        }
+                                    } else {
+                                        active_aliases_scan.retain(|&r| r != target);
+                                    }
+                                    if ty == StaticType::Table {
+                                        clobbered_tables.insert(get_table_root(target));
+                                    }
+                                }
+                                Instruction::LoadInt { target, .. } | Instruction::Add { target, .. } |
+                                Instruction::Sub { target, .. } | Instruction::Less { target, .. } => {
+                                    active_aliases_scan.retain(|&r| r != target);
+                                }
+                                // THE FATAL INVALIDATOR: Any dynamic access to a table completely ruins hoisting
+                                Instruction::SetTable { table, key, .. } | Instruction::GetTable { target: _, table, key } => {
+                                    if !active_aliases_scan.contains(&key) {
+                                        clobbered_tables.insert(get_table_root(table));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // PASS 2: The Rewrite Pass (Using the flawless clobber list)
+                        let mut hoists = Vec::new();
+                        let mut j = i + 1;
+                        let mut active_aliases = vec![idx];
+                        let mut j_depth = 1;
+
+                        while j < self.ir.len() {
+                            match self.ir[j].clone() {
+                                Instruction::BeginWhile => j_depth += 1,
+                                Instruction::EndWhile => {
+                                    j_depth -= 1;
+                                    if j_depth == 0 { break; }
+                                }
+                                Instruction::Move { target, source, .. } => {
+                                    if active_aliases.contains(&source) {
+                                        if !active_aliases.contains(&target) {
+                                            active_aliases.push(target);
+                                        }
+                                    } else {
+                                        active_aliases.retain(|&r| r != target);
+                                    }
+                                }
+                                Instruction::LoadInt { target, .. } | Instruction::Add { target, .. } |
+                                Instruction::Sub { target, .. } | Instruction::Less { target, .. } => {
+                                    active_aliases.retain(|&r| r != target);
+                                }
+                                Instruction::SetTable { table, key, val } => {
+                                    if active_aliases.contains(&key) && !clobbered_tables.contains(&get_table_root(table)) {
+                                        self.ir[j] = Instruction::SetTableFast { table, key, val };
+                                        if !hoists.contains(&table) {
+                                            hoists.push(table);
+                                        }
+                                    }
+                                }
+                                Instruction::GetTable { target, table, key } => {
+                                    let is_alias = active_aliases.contains(&key);
+                                    active_aliases.retain(|&r| r != target);
+                                    if is_alias && !clobbered_tables.contains(&get_table_root(table)) {
+                                        self.ir[j] = Instruction::GetTableFast { target, table, key };
+                                        if !hoists.contains(&table) {
+                                            hoists.push(table);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+
+                        // Hoist capacity AND raw pointer extraction BEFORE the loop
+                        for table in hoists {
+                            self.ir.insert(i, Instruction::EnsureCapacity { table, limit });
+                            i += 1;
+                            self.ir.insert(i, Instruction::HoistRawPtr { table });
+                            i += 1;
+                        }
                     }
                 }
             }
@@ -166,29 +276,7 @@ impl IrBackend {
                     out.push_str(&format!("    t_r{} = &mut *new_table as *mut Table;\n", target));
                     out.push_str("    tables.push(new_table);\n");
                 }
-                Instruction::SetTable { table, key, val } => {
-                    out.push_str(&format!(
-                        "    let idx = i_r{k} as usize;\n\
-                         \x20   let t = unsafe {{ &mut *t_r{tbl} }};\n\
-                         \x20   if idx >= t.array.len() {{\n\
-                         \x20       if idx == t.array.len() {{\n\
-                         \x20           t.array.push(0);\n\
-                         \x20       }} else {{\n\
-                         \x20           t.array.resize(idx + 1, 0);\n\
-                         \x20       }}\n\
-                         \x20   }}\n\
-                         \x20   unsafe {{ *t.array.get_unchecked_mut(idx) = i_r{v}; }}\n",
-                        tbl = table, k = key, v = val
-                    ));
-                }
-                Instruction::GetTable { target, table, key } => {
-                    out.push_str(&format!(
-                        "    let idx = i_r{k} as usize;\n\
-                         \x20   let t = unsafe {{ &*t_r{tbl} }};\n\
-                         \x20   i_r{t} = unsafe {{ *t.array.get_unchecked(idx) }};\n",
-                        t = target, tbl = table, k = key
-                    ));
-                }
+
                 Instruction::Move { target, source, ty } => match ty {
                     StaticType::Integer => out.push_str(&format!("    i_r{} = i_r{};\n", target, source)),
                     StaticType::Boolean => out.push_str(&format!("    b_r{} = b_r{};\n", target, source)),
@@ -209,33 +297,87 @@ impl IrBackend {
                 }
                 Instruction::EndWhile => out.push_str("    }\n"),
 
-                // NEW: The highly optimized hoisted pointer logic
-                Instruction::EnsureCapacity { table, limit } => {
+                // 1. Guard the Dynamic Write Path
+                Instruction::SetTable { table, key, val } => {
                     out.push_str(&format!(
-                        "    let cap_limit = i_r{limit} as usize;\n\
-                         \x20   let t = unsafe {{ &mut *t_r{table} }};\n\
-                         \x20   if cap_limit > t.array.len() {{\n\
-                         \x20       t.array.resize(cap_limit, 0);\n\
-                         \x20   }}\n",
-                        table = table, limit = limit
+                        "    let k = i_r{k};\n\
+                             if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                             let idx = k as usize;\n\
+                             let t = unsafe {{ &mut *t_r{tbl} }};\n\
+                             if idx >= t.array.len() {{\n\
+                                 if idx == t.array.len() {{\n\
+                                     t.array.push(0);\n\
+                                 }} else {{\n\
+                                     t.array.resize(idx + 1, 0);\n\
+                                 }}\n\
+                             }}\n\
+                             unsafe {{ *t.array.get_unchecked_mut(idx) = i_r{v}; }}\n",
+                        tbl = table, k = key, v = val
                     ));
                 }
-                Instruction::HoistRawPtr { table } => {
+
+                // 2. Guard the Dynamic Read Path
+                Instruction::GetTable { target, table, key } => {
                     out.push_str(&format!(
-                        "    p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n",
-                        table = table
+                        "    let k = i_r{k};\n\
+                             if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                             let idx = k as usize;\n\
+                             let t = unsafe {{ &*t_r{tbl} }};\n\
+                             i_r{t} = if idx < t.array.len() {{\n\
+                                 unsafe {{ *t.array.get_unchecked(idx) }}\n\
+                             }} else {{\n\
+                                 0\n\
+                             }};\n",
+                        t = target, tbl = table, k = key
                     ));
                 }
+
+                // 3. Guard the Fast Paths (Upgrade the Interim Fence)
                 Instruction::SetTableFast { table, key, val } => {
                     out.push_str(&format!(
-                        "    unsafe {{ *p_r{table}.add(i_r{key} as usize) = i_r{val}; }}\n",
+                        "    let k = i_r{key};\n\
+                             if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                             if (k as usize) < len_r{table} {{\n\
+                                 unsafe {{ *p_r{table}.add(k as usize) = i_r{val}; }}\n\
+                             }}\n",
                         table = table, key = key, val = val
                     ));
                 }
+
                 Instruction::GetTableFast { target, table, key } => {
                     out.push_str(&format!(
-                        "    i_r{target} = unsafe {{ *p_r{table}.add(i_r{key} as usize) }};\n",
+                        "    let k = i_r{key};\n\
+                             if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                             i_r{target} = if (k as usize) < len_r{table} {{\n\
+                                 unsafe {{ *p_r{table}.add(k as usize) }}\n\
+                             }} else {{\n\
+                                 0\n\
+                             }};\n",
                         target = target, table = table, key = key
+                    ));
+                }
+
+                // 3. EnsureCapacity (Protect against negative loop limit)
+                Instruction::EnsureCapacity { table, limit } => {
+                    out.push_str(&format!(
+                        "    let lim = i_r{limit};\n\
+                             if lim > 0 {{\n\
+                                 let cap_limit = lim as usize;\n\
+                                 let t = unsafe {{ &mut *t_r{table} }};\n\
+                                 if cap_limit > t.array.len() {{\n\
+                                     t.array.resize(cap_limit, 0);\n\
+                                 }}\n\
+                             }}\n",
+                        table = table, limit = limit
+                    ));
+                }
+
+                // 4. Hoist the Length Alongside the Pointer
+                Instruction::HoistRawPtr { table } => {
+                    out.push_str(&format!(
+                        "    let len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
+                             p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n",
+                        table = table
                     ));
                 }
             }
