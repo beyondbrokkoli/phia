@@ -1,5 +1,5 @@
 // src/lowerer.rs
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, BTreeSet};
 use crate::ast::{Expr, Stmt, BinOp, StaticType};
 use crate::ir::{Instruction, BasicBlock, Terminator, BlockId, RegId, IrProgram};
 
@@ -236,8 +236,8 @@ impl IrLowerer {
 }
 
 // Simple pre-pass to find variables reassigned in a block
-fn find_mutated_vars(stmts: &[Stmt]) -> HashSet<String> {
-    let mut mutated = HashSet::new();
+fn find_mutated_vars(stmts: &[Stmt]) -> BTreeSet<String> {
+    let mut mutated = BTreeSet::new();
     for stmt in stmts {
         match stmt {
             Stmt::Assignment { name, .. } => { mutated.insert(name.clone()); }

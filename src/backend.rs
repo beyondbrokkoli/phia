@@ -1,6 +1,6 @@
 // src/backend.rs
 use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, BlockId, RegId};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeSet};
 use crate::ast::StaticType;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -142,8 +142,6 @@ fn indent(d: usize) -> String { "    ".repeat(d) }
 
 pub struct IrBackend {
     pub program: IrProgram,
-    pub coalesce: bool,
-    pub structured: bool,
     n_int: usize, n_bool: usize, n_table: usize,
     phys_base: RegId, did_alloc: bool,
     consts_i: HashMap<RegId, i64>,
@@ -153,7 +151,7 @@ pub struct IrBackend {
 impl IrBackend {
     pub fn new(program: IrProgram) -> Self {
         Self {
-            program, coalesce: true, structured:true,
+            program,
             n_int: 0, n_bool: 0, n_table: 0,
             phys_base: 0, did_alloc: false,
             consts_i: HashMap::new(), consts_b: HashMap::new(),
@@ -372,6 +370,10 @@ impl IrBackend {
         let base = max_reg + 1;
 
         let mut vregs: Vec<RegId> = ty.keys().copied().collect();
+
+        // LOAD-BEARING: the `r` tiebreak makes this a total order. Without it,
+        // equal-interval regs fall back to HashMap iteration order (random per
+        // process) and allocation becomes non-deterministic.
         vregs.sort_by_key(|&r| (iv.get(&r).copied().unwrap_or((0, 0)), r));
 
         let mut active: HashMap<Pool, Vec<(RegId, usize)>> = HashMap::new();
@@ -497,7 +499,7 @@ impl IrBackend {
 
                         if limit_is_invariant {
                             let mut clobbered_roots = HashSet::new();
-                            let mut hoists = HashSet::new();
+                            let mut hoists = BTreeSet::new(); // <-- Changed to BTreeSet
                             let mut upgrades = Vec::new();
 
                             // PASS 1: Read-Only. Find Poisoned Chalices!
@@ -625,7 +627,7 @@ impl IrBackend {
             let mut done = false;
             if let Some((pre, back)) = shape {
                 let b_res = resolve_via(&rename, back.1);
-                if self.coalesce && single_def(&defs, back.1) && b_res != *target {
+                if single_def(&defs, back.1) && b_res != *target {
                     rename.insert(*target, b_res);
                     injects.push((pre.0, back.1, pre.1, ty.clone()));
                     done = true;
@@ -837,7 +839,7 @@ impl IrBackend {
         }
     }
 
-    fn generate_structured(&self) -> String {
+    pub fn generate_rust_code(&self) -> String {
         let mut out = String::new();
         out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
         out.push_str("use crate::memory::Table;\n\n");
@@ -886,170 +888,6 @@ impl IrBackend {
         }
 
         out.push_str("}\n");
-        out
-    }
-
-    pub fn generate_rust_code(&self) -> String {
-        if self.structured { self.generate_structured() } else { self.generate_dispatched() }
-    }
-
-    pub fn generate_dispatched(&self) -> String {
-        let mut out = String::new();
-        out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
-        out.push_str("use crate::memory::Table;\n\n");
-        out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
-        out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
-
-        let mut fast_phys: HashSet<RegId> = HashSet::new();
-        for b in &self.program.blocks {
-            for i in &b.instrs {
-                match i {
-                    Instruction::HoistRawPtr { table }
-                    | Instruction::SetTableFast { table, .. }
-                    | Instruction::GetTableFast { table, .. } => { fast_phys.insert(*table); }
-                    _ => {}
-                }
-            }
-        }
-
-        // constants render by value; everything else by register
-        let iop = |r: RegId| -> String {
-            self.consts_i.get(&r).map(|v| v.to_string())
-                .unwrap_or_else(|| format!("i_r{}", r))
-        };
-        let bop = |r: RegId| -> String {
-            self.consts_b.get(&r)
-                .map(|v| if *v { "true" } else { "false" }.to_string())
-                .unwrap_or_else(|| format!("b_r{}", r))
-        };
-
-        let (n_i, n_b, n_t, base) = if self.did_alloc {
-            (self.n_int, self.n_bool, self.n_table, self.phys_base as usize)
-        } else {
-            let mut max: RegId = 0;
-            for b in &self.program.blocks {
-                for i in &b.instrs {
-                    if let Some(d) = def_reg(i) { if d > max { max = d; } }
-                }
-            }
-            (max as usize + 1, max as usize + 1, max as usize + 1, 0usize)
-        };
-
-        for r in base..base + n_i { out.push_str(&format!("    let mut i_r{} = 0i64;\n", r)); }
-        for r in base..base + n_b { out.push_str(&format!("    let mut b_r{} = false;\n", r)); }
-        for r in base..base + n_t {
-            out.push_str(&format!("    let mut t_r{}: *mut Table = std::ptr::null_mut();\n", r));
-            if fast_phys.contains(&(r as RegId)) {
-                out.push_str(&format!("    let mut p_r{}: *mut i64 = std::ptr::null_mut();\n", r));
-                out.push_str(&format!("    let mut len_r{} = 0usize;\n", r));
-            }
-        }
-        out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
-
-        out.push_str("    let mut current_block = 0;\n");
-        out.push_str("    'cfg: loop {\n");
-        out.push_str("        match current_block {\n");
-
-        for block in &self.program.blocks {
-            out.push_str(&format!("            {} => {{\n", block.id));
-
-            for instr in &block.instrs {
-                // compile-time-computed defs emit nothing: their uses are
-                // literals. (Const targets are always pure defs.)
-                if let Some(t) = def_reg(instr) {
-                    if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
-                        continue;
-                    }
-                }
-
-                match instr {
-                    Instruction::LoadInt { target, val } =>
-                        out.push_str(&format!("                i_r{} = {};\n", target, val)),
-                    Instruction::NewTable { target } => {
-                        out.push_str("                let mut new_table = Box::new(Table::new());\n");
-                        out.push_str(&format!("                t_r{} = &mut *new_table as *mut Table;\n", target));
-                        out.push_str("                tables.push(new_table);\n");
-                    }
-                    Instruction::Move { target, source, ty } => match ty {
-                        StaticType::Integer => out.push_str(&format!("                i_r{} = {};\n", target, iop(*source))),
-                        StaticType::Boolean => out.push_str(&format!("                b_r{} = {};\n", target, bop(*source))),
-                        StaticType::Table => out.push_str(&format!("                t_r{} = t_r{};\n", target, source)),
-                    },
-                    Instruction::Add { target, left, right } =>
-                        out.push_str(&format!("                i_r{} = {} + {};\n", target, iop(*left), iop(*right))),
-                    Instruction::Sub { target, left, right } =>
-                        out.push_str(&format!("                i_r{} = {} - {};\n", target, iop(*left), iop(*right))),
-                    Instruction::Less { target, left, right } =>
-                        out.push_str(&format!("                b_r{} = {} < {};\n", target, iop(*left), iop(*right))),
-
-                    Instruction::EnsureCapacity { table, limit } => out.push_str(&format!(
-                        "                let lim = {lim};\n\
-                                         if lim > 0 {{\n\
-                                             let t = unsafe {{ &mut *t_r{table} }};\n\
-                                             if (lim as usize) > t.array.len() {{\n\
-                                                 t.array.resize(lim as usize, 0);\n\
-                                             }}\n\
-                                         }}\n",
-                        lim = iop(*limit)
-                    )),
-                    Instruction::HoistRawPtr { table } => out.push_str(&format!(
-                        "                len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
-                                         p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n"
-                    )),
-
-                    Instruction::SetTable { table, key, val } => out.push_str(&format!(
-                        "                let k = {key};\n\
-                                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                                         let idx = k as usize;\n\
-                                         let t = unsafe {{ &mut *t_r{table} }};\n\
-                                         if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
-                                         unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
-                        key = iop(*key), val = iop(*val)
-                    )),
-                    Instruction::GetTable { target, table, key } => out.push_str(&format!(
-                        "                let k = {key};\n\
-                                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                                         let idx = k as usize;\n\
-                                         let t = unsafe {{ &*t_r{table} }};\n\
-                                         i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
-                        key = iop(*key)
-                    )),
-                    Instruction::SetTableFast { table, key, val } => out.push_str(&format!(
-                        "                let k = {key};\n\
-                                         if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                                         if (k as usize) < len_r{table} {{\n\
-                                             unsafe {{ *p_r{table}.add(k as usize) = {val}; }}\n\
-                                         }} else {{\n\
-                                             panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                                         }}\n",
-                        key = iop(*key), val = iop(*val)
-                    )),
-                    Instruction::GetTableFast { target, table, key } => out.push_str(&format!(
-                        "                let k = {key};\n\
-                                         if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                                         if (k as usize) < len_r{table} {{\n\
-                                             i_r{target} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
-                                         }} else {{\n\
-                                             panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                                         }}\n",
-                        key = iop(*key)
-                    )),
-                    Instruction::Phi { .. } => {}
-                }
-            }
-
-            match &block.terminator {
-                Some(Terminator::Jump(target)) =>
-                    out.push_str(&format!("                current_block = {};\n", target)),
-                Some(Terminator::Branch { cond, true_block, false_block }) =>
-                    out.push_str(&format!("                current_block = if {} {{ {} }} else {{ {} }};\n",
-                                         bop(*cond), true_block, false_block)),
-                Some(Terminator::Halt) | None => out.push_str("                break 'cfg;\n"),
-            }
-            out.push_str("            }\n");
-        }
-
-        out.push_str("            _ => unreachable!(),\n        }\n    }\n    tables\n}\n");
         out
     }
 }

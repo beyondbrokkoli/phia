@@ -47,17 +47,16 @@ fn main() {
     let mut checker = type_checker::TypeChecker::new();
     checker.check_program(&ast);
 
-    // 3. IR Lowering (Now returns an IrProgram)
+    // 3. IR Lowering
     let lowerer = lowerer::IrLowerer::new();
     let ir_program = lowerer.lower_program(&ast);
 
     // 4. Optimization & De-SSA
     let mut backend_engine = backend::IrBackend::new(ir_program);
-    backend_engine.structured = std::env::var("PHIA_NO_STRUCT").is_err();
-    backend_engine.coalesce = std::env::var("PHIA_NO_COALESCE").is_err();
+
     backend_engine.optimize();
-    backend_engine.resolve_phis();          // now coalesces phi -> back-def
-    backend_engine.propagate_constants();   // NEW
+    backend_engine.resolve_phis();
+    backend_engine.propagate_constants();
     backend_engine.simplify();
     backend_engine.allocate_registers();
 
@@ -78,7 +77,6 @@ fn main() {
                 I::GetTable { .. } => dg += 1,
                 I::HoistRawPtr { .. } => {
                     ho += 1;
-                    // Pre-header depth exactly matches hoist context!
                     ctx_list.push(block.depth.to_string());
                 }
                 _ => {}
@@ -97,7 +95,7 @@ fn main() {
     // Write the raw, unformatted code to the file
     let mut f = BufWriter::new(File::create(&dest_path).unwrap());
     f.write_all(final_code.as_bytes()).unwrap();
-    f.into_inner().unwrap(); // Ensure the file is completely flushed and closed before rustfmt reads it
+    f.into_inner().unwrap();
 
     // Run rustfmt directly on the generated file
     let status = Command::new("rustfmt")
@@ -111,6 +109,6 @@ fn main() {
         Err(_) => {
             println!("cargo:warning=rustfmt is not installed or not found in PATH. Code will remain unformatted.");
         }
-        _ => {} // Success!
+        _ => {}
     }
 }
