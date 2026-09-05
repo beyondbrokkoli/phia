@@ -100,16 +100,20 @@ impl IrBackend {
 
                     // Only proceed if the limit is safe
                     if limit_is_invariant {
-                        // THE SINGLE SOURCE OF TRUTH FOR REGISTER ALIASING
-                        let update_aliases = |instr: &Instruction, aliases: &mut Vec<u32>| {
-                            match instr {
-                                Instruction::Move { target, source, .. } => {
-                                    if aliases.contains(source) {
-                                        if !aliases.contains(target) { aliases.push(*target); }
-                                    } else {
-                                        aliases.retain(|&r| r != *target);
-                                    }
+                        // 0. Prepass: Compute def_sets for nested loops (Bug #15)
+                        let mut def_sets = std::collections::HashMap::new();
+                        let mut loop_stack = Vec::new();
+                        for p in i..self.ir.len() {
+                            match self.ir[p] {
+                                Instruction::BeginWhile => {
+                                    loop_stack.push(p);
+                                    def_sets.insert(p, std::collections::BTreeSet::new());
                                 }
+                                Instruction::EndWhile => {
+                                    loop_stack.pop().unwrap();
+                                    if loop_stack.is_empty() { break; } // exited the candidate loop
+                                }
+                                Instruction::Move { target, .. } |
                                 Instruction::LoadInt { target, .. } |
                                 Instruction::Add { target, .. } |
                                 Instruction::Sub { target, .. } |
@@ -117,20 +121,82 @@ impl IrBackend {
                                 Instruction::GetTable { target, .. } |
                                 Instruction::GetTableFast { target, .. } |
                                 Instruction::NewTable { target } => {
-                                    // Any other write to a register destroys its alias status
-                                    aliases.retain(|&r| r != *target);
+                                    // Record the mutation in all open loops EXCEPT the candidate itself (i)
+                                    for &lp in &loop_stack {
+                                        if lp != i {
+                                            def_sets.get_mut(&lp).unwrap().insert(target);
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
-                        };
+                        }
+
+                        // 1. Define the Scope-Aware Tracker
+                        struct AliasTracker<'a> {
+                            active: Vec<u32>,
+                            scopes: Vec<(Vec<u32>, std::collections::BTreeSet<u32>)>,
+                            def_sets: &'a std::collections::HashMap<usize, std::collections::BTreeSet<u32>>,
+                        }
+
+                        impl<'a> AliasTracker<'a> {
+                            fn new(idx_reg: u32, def_sets: &'a std::collections::HashMap<usize, std::collections::BTreeSet<u32>>) -> Self {
+                                Self { active: vec![idx_reg], scopes: Vec::new(), def_sets }
+                            }
+
+                            fn contains(&self, reg: &u32) -> bool {
+                                self.active.contains(reg)
+                            }
+
+                            fn update(&mut self, instr: &Instruction, pos: usize) {
+                                match instr {
+                                    Instruction::BeginWhile => {
+                                        // Snapshot entry state and prepare a new kill zone
+                                        self.scopes.push((self.active.clone(), std::collections::BTreeSet::new()));
+                                        // BUG #15: Kill aliases modified anywhere inside this nested region
+                                        if let Some(defs) = self.def_sets.get(&pos) {
+                                            self.active.retain(|r| !defs.contains(r));
+                                        }
+                                    }
+                                    Instruction::EndWhile => {
+                                        // Restore: entry_set - (everything defined anywhere inside this scope)
+                                        if let Some((entry, killed)) = self.scopes.pop() {
+                                            self.active = entry.into_iter().filter(|r| !killed.contains(r)).collect();
+                                            // Bubble the kills up to the parent scope
+                                            if let Some(parent) = self.scopes.last_mut() {
+                                                parent.1.extend(killed);
+                                            }
+                                        }
+                                    }
+                                    Instruction::Move { target, source, .. } => {
+                                        if self.active.contains(source) {
+                                            if !self.active.contains(target) { self.active.push(*target); }
+                                        } else {
+                                            self.active.retain(|r| r != target);
+                                        }
+                                        if let Some(scope) = self.scopes.last_mut() { scope.1.insert(*target); }
+                                    }
+                                    Instruction::LoadInt { target, .. } |
+                                    Instruction::Add { target, .. } |
+                                    Instruction::Sub { target, .. } |
+                                    Instruction::Less { target, .. } |
+                                    Instruction::GetTable { target, .. } |
+                                    Instruction::GetTableFast { target, .. } |
+                                    Instruction::NewTable { target } => {
+                                        self.active.retain(|r| r != target);
+                                        if let Some(scope) = self.scopes.last_mut() { scope.1.insert(*target); }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
 
                         // PASS 1: The Safety Scan
                         let mut clobbered_tables = std::collections::BTreeSet::new();
-                        let mut active_aliases_scan = vec![idx];
+                        let mut tracker1 = AliasTracker::new(idx, &def_sets);
                         let mut scan_depth = 1;
                         let mut abort_optimization = false;
 
-                        // Helper to safely clobber a root, or abort if ambiguous
                         let mut clobber_root = |reg: u32, clobbers: &mut std::collections::BTreeSet<u32>| {
                             if let Some(r) = get_table_root(reg) {
                                 clobbers.insert(r);
@@ -141,10 +207,8 @@ impl IrBackend {
 
                         for k in (i + 1)..self.ir.len() {
                             let instr = self.ir[k].clone();
-
-                            // Check usage BEFORE applying definitions
                             let is_alias = match instr {
-                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => active_aliases_scan.contains(&key),
+                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => tracker1.contains(&key),
                                 _ => false,
                             };
 
@@ -162,15 +226,12 @@ impl IrBackend {
                                     }
                                 }
                                 Instruction::SetTable { table, .. } | Instruction::GetTable { target: _, table, .. } => {
-                                    if !is_alias {
-                                        clobber_root(table, &mut clobbered_tables);
-                                    }
+                                    if !is_alias { clobber_root(table, &mut clobbered_tables); }
                                 }
                                 _ => {}
                             }
 
-                            // Update aliases AFTER usage checks
-                            update_aliases(&instr, &mut active_aliases_scan);
+                            tracker1.update(&instr, k);
                         }
 
                         if abort_optimization {
@@ -180,16 +241,14 @@ impl IrBackend {
 
                         // PASS 2: The Rewrite Pass
                         let mut hoists = Vec::new();
+                        let mut tracker2 = AliasTracker::new(idx, &def_sets);
                         let mut j = i + 1;
-                        let mut active_aliases = vec![idx];
                         let mut j_depth = 1;
 
                         while j < self.ir.len() {
                             let instr = self.ir[j].clone();
-
-                            // Check usage BEFORE applying definitions
                             let is_alias = match instr {
-                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => active_aliases.contains(&key),
+                                Instruction::SetTable { key, .. } | Instruction::GetTable { key, .. } => tracker2.contains(&key),
                                 _ => false,
                             };
 
@@ -222,8 +281,7 @@ impl IrBackend {
                                 _ => {}
                             }
 
-                            // Update aliases AFTER usage checks
-                            update_aliases(&instr, &mut active_aliases);
+                            tracker2.update(&instr, j);
                             j += 1;
                         }
 
@@ -244,6 +302,7 @@ impl IrBackend {
     pub fn generate_rust_code(&self) -> String {
         let mut out = String::new();
 
+        out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
         out.push_str("use crate::memory::Table;\n\n");
         out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
         out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
