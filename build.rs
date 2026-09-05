@@ -47,37 +47,43 @@ fn main() {
     let mut checker = type_checker::TypeChecker::new();
     checker.check_program(&ast);
 
-    // 3. IR Lowering
-    let mut lowerer = lowerer::IrLowerer::new();
-    lowerer.lower_program(&ast);
+    // 3. IR Lowering (Now returns an IrProgram)
+    let lowerer = lowerer::IrLowerer::new();
+    let ir_program = lowerer.lower_program(&ast);
 
-    // 4. Optimization
-    let mut backend_engine = backend::IrBackend::new();
-    backend_engine.ir = lowerer.ir;
+    // 4. Optimization & De-SSA
+    let mut backend_engine = backend::IrBackend::new(ir_program);
     backend_engine.optimize();
+    backend_engine.resolve_phis(); // <-- Run exactly here!
 
     // 5. Code Generation
     let mut final_code = backend_engine.generate_rust_code();
 
-    // Regression stats: computed from the FINAL IR, grep-able via the binary.
-    let (mut fs_, mut fg, mut ds, mut dg, mut ho, mut dep) = (0, 0, 0, 0, 0, 0i32);
-    let mut ctx = String::new();
-    for ins in &backend_engine.ir {
-        use ir::Instruction as I;
-        match ins {
-            I::SetTableFast { .. } => fs_ += 1,
-            I::GetTableFast { .. } => fg += 1,
-            I::SetTable { .. } => ds += 1,
-            I::GetTable { .. } => dg += 1,
-            I::HoistRawPtr { .. } => { ho += 1; ctx.push_str(&format!("{dep},")); }
-            I::BeginWhile => dep += 1,
-            I::EndWhile => dep -= 1,
-            _ => {}
+    // Regression stats: computed from the FINAL CFG
+    let (mut fs_, mut fg, mut ds, mut dg, mut ho) = (0, 0, 0, 0, 0);
+    let mut ctx_list = Vec::new();
+
+    for block in &backend_engine.program.blocks {
+        for ins in &block.instrs {
+            use ir::Instruction as I;
+            match ins {
+                I::SetTableFast { .. } => fs_ += 1,
+                I::GetTableFast { .. } => fg += 1,
+                I::SetTable { .. } => ds += 1,
+                I::GetTable { .. } => dg += 1,
+                I::HoistRawPtr { .. } => {
+                    ho += 1;
+                    // Pre-header depth exactly matches hoist context!
+                    ctx_list.push(block.depth.to_string());
+                }
+                _ => {}
+            }
         }
     }
+
+    let hoist_ctx = ctx_list.join(",");
     final_code.push_str(&format!(
-        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={}\";\n",
-        ctx.trim_end_matches(',')
+        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={hoist_ctx}\";\n"
     ));
 
     let out_dir = env::var("OUT_DIR").unwrap();

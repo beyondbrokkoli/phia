@@ -256,7 +256,7 @@ while i < n do
 end
 LUA
 check bug11 "$CASES/bug11.lua" \
-  "TABLE 0 LEN 10 NZ 10 CHECKSUM 55" "fast_sets=0" "hoists=0"
+  "TABLE 0 LEN 10 NZ 10 CHECKSUM 55" "fast_sets=1" "hoists=1"
 
 # --- bug 12: register Move-targeted twice
 cat > "$CASES/bug12.lua" <<'LUA'
@@ -307,6 +307,42 @@ LUA
 check optfast "$CASES/optfast.lua" \
   "TABLE 0 LEN 100000 NZ 99999 CHECKSUM 333333333300000" \
   "fast_sets=1" "hoists=1" "hoist_ctx=0"
+
+# --- bug 16a: phi Move typed Integer — boolean phi never lands in b_r
+#     (the flag loop never executes: want LEN 1, bug produces LEN 0)
+cat > "$CASES/bug16a.lua" <<'LUA'
+local t = {}
+local flag = 0 < 1
+local k = 0
+while flag do
+    t[k] = 100
+    flag = 0 < 0
+    k = k + 1
+end
+LUA
+check bug16a "$CASES/bug16a.lua" "TABLE 0 LEN 1 NZ 1 CHECKSUM 100"
+
+# --- bug 16b: table phi resolved as Integer Move — t_r{phi} stays null,
+#     the dynamic GetTable on it derefs null -> SIGSEGV
+cat > "$CASES/bug16b.lua" <<'LUA'
+local t = {}
+local n = 3
+local i = 0
+while i < n do
+    local x = t[0]
+    t = {}
+    t[i] = x + i + 5
+    i = i + 1
+end
+local w = {}
+w[0] = t[2]
+LUA
+check bug16b "$CASES/bug16b.lua" \
+  "TABLE 0 LEN 0 NZ 0 CHECKSUM 0" \
+  "TABLE 1 LEN 1 NZ 1 CHECKSUM 5" \
+  "TABLE 2 LEN 2 NZ 1 CHECKSUM 22" \
+  "TABLE 3 LEN 3 NZ 1 CHECKSUM 21" \
+  "TABLE 4 LEN 1 NZ 1 CHECKSUM 7"
 
 printf '\npassed: %d   failed: %d\n' "$PASS" "$FAIL"
 if (( FAIL > 0 )); then printf 'FAILED: %s\n' "${FAILED[*]}"; exit 1; fi
