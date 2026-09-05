@@ -54,7 +54,9 @@ fn main() {
     // 4. Optimization & De-SSA
     let mut backend_engine = backend::IrBackend::new(ir_program);
     backend_engine.optimize();
-    backend_engine.resolve_phis(); // <-- Run exactly here!
+    backend_engine.resolve_phis();
+    backend_engine.simplify();            // NEW: copy-prop + dead-code elimination
+    backend_engine.allocate_registers(); // NEW: linear-scan register allocation
 
     // 5. Code Generation
     let mut final_code = backend_engine.generate_rust_code();
