@@ -124,14 +124,37 @@ fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap
     iv
 }
 
+fn resolve_via(map: &HashMap<RegId, RegId>, mut r: RegId) -> RegId {
+    let mut guard = 0usize;
+    while let Some(&next) = map.get(&r) {
+        r = next;
+        guard += 1;
+        if guard > 1_000_000 { panic!("phi coalesce: rename cycle"); }
+    }
+    r
+}
+
+fn single_def(defs: &HashMap<RegId, usize>, r: RegId) -> bool {
+    defs.get(&r).copied() == Some(1)
+}
+
 pub struct IrBackend {
     pub program: IrProgram,
-    n_int: usize, n_bool: usize, n_table: usize, did_alloc: bool,
+    pub coalesce: bool,
+    n_int: usize, n_bool: usize, n_table: usize,
+    phys_base: RegId, did_alloc: bool,
+    consts_i: HashMap<RegId, i64>,
+    consts_b: HashMap<RegId, bool>,
 }
 
 impl IrBackend {
     pub fn new(program: IrProgram) -> Self {
-        Self { program, n_int: 0, n_bool: 0, n_table: 0, did_alloc: false }
+        Self {
+            program, coalesce: true,
+            n_int: 0, n_bool: 0, n_table: 0,
+            phys_base: 0, did_alloc: false,
+            consts_i: HashMap::new(), consts_b: HashMap::new(),
+        }
     }
 
     /// Copy propagation + DCE. Deliberately conservative: a Move is erased
@@ -167,6 +190,9 @@ impl IrBackend {
             };
             for b in &mut self.program.blocks {
                 for i in &mut b.instrs { remap_instr(i, &resolve); }
+                if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
+                    *cond = resolve(*cond);
+                }
             }
         }
 
@@ -190,16 +216,78 @@ impl IrBackend {
         }
     }
 
-    /// Linear-scan allocation: vregs with disjoint live intervals share one
-    /// physical slot. One pool per type, so i_/b_/t_ variables are independent.
+    pub fn propagate_constants(&mut self) {
+        let mut defs: HashMap<RegId, usize> = HashMap::new();
+        for b in &self.program.blocks {
+            for i in &b.instrs {
+                if let Some(d) = def_reg(i) { *defs.entry(d).or_insert(0) += 1; }
+            }
+        }
+
+        let mut ci: HashMap<RegId, i64> = HashMap::new();
+        let mut cb: HashMap<RegId, bool> = HashMap::new();
+
+        // Fixpoint: entries are only ever added (single-def regs are
+        // immutable), and block-id order matches dominance order here, so
+        // this converges in ~2 sweeps.
+        loop {
+            let before = ci.len() + cb.len();
+            for b in &self.program.blocks {
+                for i in &b.instrs {
+                    match i {
+                        Instruction::LoadInt { target, val }
+                            if single_def(&defs, *target) => { ci.insert(*target, *val); }
+                        Instruction::Add { target, left, right }
+                            if single_def(&defs, *target) => {
+                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                ci.insert(*target, l.wrapping_add(r));
+                            }
+                        }
+                        Instruction::Sub { target, left, right }
+                            if single_def(&defs, *target) => {
+                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                ci.insert(*target, l.wrapping_sub(r));
+                            }
+                        }
+                        Instruction::Less { target, left, right }
+                            if single_def(&defs, *target) => {
+                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                cb.insert(*target, l < r);
+                            }
+                        }
+                        Instruction::Move { target, source, ty }
+                            if single_def(&defs, *target) => match ty {
+                                StaticType::Integer =>
+                                    { if let Some(&v) = ci.get(source) { ci.insert(*target, v); } }
+                                StaticType::Boolean =>
+                                    { if let Some(&v) = cb.get(source) { cb.insert(*target, v); } }
+                                StaticType::Table => {}
+                            },
+                        _ => {}
+                    }
+                }
+            }
+            if ci.len() + cb.len() == before { break; }
+        }
+        self.consts_i = ci;
+        self.consts_b = cb;
+    }
+
     pub fn allocate_registers(&mut self) {
         let blocks = &self.program.blocks;
 
-        // 1. types: defs first, operand positions as defensive fallback
+        // Const vregs never get a physical slot: all their uses render as
+        // literals. Excluded so a vreg id can never be confused with a
+        // physical id at codegen time.
+        let skip: HashSet<RegId> = self.consts_i.keys().copied()
+            .chain(self.consts_b.keys().copied()).collect();
+
+        // 1. types
         let mut ty: HashMap<RegId, Pool> = HashMap::new();
         for b in blocks {
             for i in &b.instrs {
                 if let (Some(d), Some(t)) = (def_reg(i), def_type(i)) {
+                    if skip.contains(&d) { continue; }
                     let p = pool_of(&t);
                     match ty.insert(d, p) {
                         Some(old) if old != p => panic!("reg {} has conflicting types", d),
@@ -224,20 +312,36 @@ impl IrBackend {
                     Instruction::HoistRawPtr { table } => vec![(*table, StaticType::Table)],
                     _ => vec![],
                 };
-                for (r, t) in ops { ty.entry(r).or_insert(pool_of(&t)); }
+                for (r, t) in ops {
+                    if skip.contains(&r) { continue; }
+                    ty.entry(r).or_insert(pool_of(&t));
+                }
             }
             if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-                ty.entry(*cond).or_insert(Pool::Bool);
+                if !skip.contains(cond) { ty.entry(*cond).or_insert(Pool::Bool); }
             }
         }
 
-        // 2. liveness + intervals
+        // 2. liveness + intervals (unchanged)
         let (_, live_out) = compute_liveness(blocks);
         let iv = live_intervals(blocks, &live_out);
 
-        // 3. linear scan per pool
+        // 3. mint physical ids from ABOVE the whole vreg namespace —
+        //    a physical id must never equal a vreg id (const or not).
+        let mut max_reg: RegId = 0;
+        for b in blocks {
+            for i in &b.instrs {
+                if let Some(d) = def_reg(i) { if d > max_reg { max_reg = d; } }
+                for u in use_regs(i) { if u > max_reg { max_reg = u; } }
+            }
+            if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
+                if *cond > max_reg { max_reg = *cond; }
+            }
+        }
+        let base = max_reg + 1;
+
         let mut vregs: Vec<RegId> = ty.keys().copied().collect();
-        vregs.sort_by_key(|&r| (iv.get(&r).copied().unwrap_or((0, 0)), r)); // deterministic
+        vregs.sort_by_key(|&r| (iv.get(&r).copied().unwrap_or((0, 0)), r));
 
         let mut active: HashMap<Pool, Vec<(RegId, usize)>> = HashMap::new();
         let mut free: HashMap<Pool, Vec<RegId>> = HashMap::new();
@@ -258,13 +362,14 @@ impl IrBackend {
 
             let phys = free.entry(p).or_default().pop().unwrap_or_else(|| {
                 let c = count.entry(p).or_insert(0);
-                let n = *c; *c += 1; n as RegId
+                let n = *c; *c += 1; base + n as RegId
             });
             act.push((phys, end));
             map.insert(r, phys);
         }
 
-        // 4. rewrite every reference in place — codegen body needs NO changes
+        // 4. rewrite references (const vregs stay identity: codegen looks
+        //    them up in the const maps and never emits them)
         for b in &mut self.program.blocks {
             for i in &mut b.instrs { remap_instr(i, &|r| *map.get(&r).unwrap_or(&r)); }
             if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
@@ -272,14 +377,16 @@ impl IrBackend {
             }
         }
 
-        // 5. moves that became self-copies are no-ops
+        // 5. self-copies are no-ops
         for b in &mut self.program.blocks {
-            b.instrs.retain(|i| !matches!(i, Instruction::Move { target, source, .. } if target == source));
+            b.instrs.retain(|i|
+                !matches!(i, Instruction::Move { target, source, .. } if target == source));
         }
 
         self.n_int   = *count.entry(Pool::Int).or_insert(0);
         self.n_bool  = *count.entry(Pool::Bool).or_insert(0);
         self.n_table = *count.entry(Pool::Table).or_insert(0);
+        self.phys_base = base;
         self.did_alloc = true;
     }
 
@@ -443,32 +550,92 @@ impl IrBackend {
     }
 
     pub fn resolve_phis(&mut self) {
-        let mut injections = Vec::new();
+        // 0. def counts (a Phi counts as one def of its target)
+        let mut defs: HashMap<RegId, usize> = HashMap::new();
+        for b in &self.program.blocks {
+            for i in &b.instrs {
+                if let Some(d) = def_reg(i) { *defs.entry(d).or_insert(0) += 1; }
+            }
+        }
 
-        // 1. Gather all the incoming edges for every Phi node
-        for block in &self.program.blocks {
-            for instr in &block.instrs {
-                // FIX: Extract `ty`
-                if let Instruction::Phi { target, ty, args } = instr {
-                    for (pred_id, src_reg) in args {
-                        injections.push((*pred_id, *target, *src_reg, ty.clone()));
-                    }
+        // 1. gather phis; recognize the loop-header shape: one pred before
+        //    the header (preheader), one after (back edge)
+        let mut phis: Vec<(RegId, StaticType, Vec<(BlockId, RegId)>,
+                            Option<((BlockId, RegId), (BlockId, RegId))>)> = Vec::new();
+        for b in &self.program.blocks {
+            for i in &b.instrs {
+                if let Instruction::Phi { target, ty, args } = i {
+                    let shape = if args.len() == 2 && (args[0].0 < b.id) != (args[1].0 < b.id) {
+                        Some(if args[0].0 < b.id { (args[0], args[1]) } else { (args[1], args[0]) })
+                    } else { None };
+                    phis.push((*target, ty.clone(), args.clone(), shape));
                 }
             }
         }
 
-        // 2. Inject a Move instruction at the end of the predecessor blocks
-        for (pred_id, target, src, ty) in injections {
-            self.program.blocks[pred_id].instrs.push(Instruction::Move {
-                target,
-                source: src,
-                ty, // FIX: Use the extracted type instead of hardcoding Integer
-            });
+        // 2. coalesce phi target -> back arg (single-def only):
+        //    * the back arg's def is the ONLY write to that slot inside the
+        //      loop, so at the back edge the slot holds exactly what the phi
+        //      would have merged;
+        //    * every read of the phi precedes the back arg's def in program
+        //      order (the assignment that creates the back arg redirects all
+        //      later reads to newer regs), so those reads see the slot's
+        //      previous-iteration value — which IS the phi's value;
+        //    * one initializing Move in the preheader covers first entry and
+        //      zero-iteration paths.
+        //    Injected Move targets are always body-defined regs; sources are
+        //    always pre-loop regs — disjoint by construction (one def per
+        //    reg), so two injected Moves can never alias and the classic
+        //    phi-swap problem cannot arise.
+        let mut rename: HashMap<RegId, RegId> = HashMap::new();
+        let mut injects: Vec<(BlockId, RegId, RegId, StaticType)> = Vec::new();
+
+        for (target, ty, args, shape) in &phis {
+            let mut done = false;
+            if let Some((pre, back)) = shape {
+                let b_res = resolve_via(&rename, back.1);
+                if self.coalesce && single_def(&defs, back.1) && b_res != *target {
+                    rename.insert(*target, b_res);
+                    injects.push((pre.0, back.1, pre.1, ty.clone()));
+                    done = true;
+                }
+            }
+            if !done {
+                // plain phi: one Move per incoming edge (the classic lowering)
+                for (pred, src) in args {
+                    injects.push((*pred, *target, *src, ty.clone()));
+                }
+            }
         }
 
-        // 3. Delete the Phi nodes
-        for block in &mut self.program.blocks {
-            block.instrs.retain(|i| !matches!(i, Instruction::Phi { .. }));
+        // 3. inject raw (renames are applied afterwards, so chained phis —
+        //    same variable phi'd at nested loop levels — compose correctly)
+        for (blk, tgt, src, ty) in injects {
+            self.program.blocks[blk].instrs
+                .push(Instruction::Move { target: tgt, source: src, ty });
+        }
+        for b in &mut self.program.blocks {
+            b.instrs.retain(|i| !matches!(i, Instruction::Phi { .. }));
+        }
+        if !rename.is_empty() {
+            for b in &mut self.program.blocks {
+                for i in &mut b.instrs {
+                    remap_instr(i, &|r| resolve_via(&rename, r));
+                }
+                // A register id can appear in exactly two places: instruction
+                // operands and the Branch condition. `while flag do` lowers
+                // the condition to the phi itself — no Less in between — so
+                // the terminator MUST be renamed too, or it points at a reg
+                // that nothing ever writes.
+                if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
+                    *cond = resolve_via(&rename, *cond);
+                }
+            }
+        }
+        // chained coalesces can turn injected Moves into self-copies
+        for b in &mut self.program.blocks {
+            b.instrs.retain(|i|
+                !matches!(i, Instruction::Move { target, source, .. } if target == source));
         }
     }
 
@@ -479,7 +646,6 @@ impl IrBackend {
         out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
         out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
 
-        // tables touched by the fast path need hoisted ptr/len slots
         let mut fast_phys: HashSet<RegId> = HashSet::new();
         for b in &self.program.blocks {
             for i in &b.instrs {
@@ -492,20 +658,32 @@ impl IrBackend {
             }
         }
 
-        // pool sizes: from the allocator, or identity fallback if skipped
-        let (n_i, n_b, n_t) = if self.did_alloc {
-            (self.n_int, self.n_bool, self.n_table)
+        // constants render by value; everything else by register
+        let iop = |r: RegId| -> String {
+            self.consts_i.get(&r).map(|v| v.to_string())
+                .unwrap_or_else(|| format!("i_r{}", r))
+        };
+        let bop = |r: RegId| -> String {
+            self.consts_b.get(&r)
+                .map(|v| if *v { "true" } else { "false" }.to_string())
+                .unwrap_or_else(|| format!("b_r{}", r))
+        };
+
+        let (n_i, n_b, n_t, base) = if self.did_alloc {
+            (self.n_int, self.n_bool, self.n_table, self.phys_base as usize)
         } else {
             let mut max: RegId = 0;
             for b in &self.program.blocks {
-                for i in &b.instrs { if let Some(d) = def_reg(i) { if d > max { max = d; } } }
+                for i in &b.instrs {
+                    if let Some(d) = def_reg(i) { if d > max { max = d; } }
+                }
             }
-            (max as usize + 1, max as usize + 1, max as usize + 1)
+            (max as usize + 1, max as usize + 1, max as usize + 1, 0usize)
         };
 
-        for r in 0..n_i { out.push_str(&format!("    let mut i_r{} = 0i64;\n", r)); }
-        for r in 0..n_b { out.push_str(&format!("    let mut b_r{} = false;\n", r)); }
-        for r in 0..n_t {
+        for r in base..base + n_i { out.push_str(&format!("    let mut i_r{} = 0i64;\n", r)); }
+        for r in base..base + n_b { out.push_str(&format!("    let mut b_r{} = false;\n", r)); }
+        for r in base..base + n_t {
             out.push_str(&format!("    let mut t_r{}: *mut Table = std::ptr::null_mut();\n", r));
             if fast_phys.contains(&(r as RegId)) {
                 out.push_str(&format!("    let mut p_r{}: *mut i64 = std::ptr::null_mut();\n", r));
@@ -522,30 +700,43 @@ impl IrBackend {
             out.push_str(&format!("            {} => {{\n", block.id));
 
             for instr in &block.instrs {
+                // compile-time-computed defs emit nothing: their uses are
+                // literals. (Const targets are always pure defs.)
+                if let Some(t) = def_reg(instr) {
+                    if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
+                        continue;
+                    }
+                }
+
                 match instr {
-                    Instruction::LoadInt { target, val } => out.push_str(&format!("                i_r{} = {};\n", target, val)),
+                    Instruction::LoadInt { target, val } =>
+                        out.push_str(&format!("                i_r{} = {};\n", target, val)),
                     Instruction::NewTable { target } => {
                         out.push_str("                let mut new_table = Box::new(Table::new());\n");
                         out.push_str(&format!("                t_r{} = &mut *new_table as *mut Table;\n", target));
                         out.push_str("                tables.push(new_table);\n");
                     }
                     Instruction::Move { target, source, ty } => match ty {
-                        crate::ast::StaticType::Integer => out.push_str(&format!("                i_r{} = i_r{};\n", target, source)),
-                        crate::ast::StaticType::Boolean => out.push_str(&format!("                b_r{} = b_r{};\n", target, source)),
-                        crate::ast::StaticType::Table => out.push_str(&format!("                t_r{} = t_r{};\n", target, source)),
+                        StaticType::Integer => out.push_str(&format!("                i_r{} = {};\n", target, iop(*source))),
+                        StaticType::Boolean => out.push_str(&format!("                b_r{} = {};\n", target, bop(*source))),
+                        StaticType::Table => out.push_str(&format!("                t_r{} = t_r{};\n", target, source)),
                     },
-                    Instruction::Add { target, left, right } => out.push_str(&format!("                i_r{} = i_r{} + i_r{};\n", target, left, right)),
-                    Instruction::Sub { target, left, right } => out.push_str(&format!("                i_r{} = i_r{} - i_r{};\n", target, left, right)),
-                    Instruction::Less { target, left, right } => out.push_str(&format!("                b_r{} = i_r{} < i_r{};\n", target, left, right)),
+                    Instruction::Add { target, left, right } =>
+                        out.push_str(&format!("                i_r{} = {} + {};\n", target, iop(*left), iop(*right))),
+                    Instruction::Sub { target, left, right } =>
+                        out.push_str(&format!("                i_r{} = {} - {};\n", target, iop(*left), iop(*right))),
+                    Instruction::Less { target, left, right } =>
+                        out.push_str(&format!("                b_r{} = {} < {};\n", target, iop(*left), iop(*right))),
 
                     Instruction::EnsureCapacity { table, limit } => out.push_str(&format!(
-                        "                let lim = i_r{limit};\n\
+                        "                let lim = {lim};\n\
                                          if lim > 0 {{\n\
                                              let t = unsafe {{ &mut *t_r{table} }};\n\
                                              if (lim as usize) > t.array.len() {{\n\
                                                  t.array.resize(lim as usize, 0);\n\
                                              }}\n\
-                                         }}\n"
+                                         }}\n",
+                        lim = iop(*limit)
                     )),
                     Instruction::HoistRawPtr { table } => out.push_str(&format!(
                         "                len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
@@ -553,47 +744,52 @@ impl IrBackend {
                     )),
 
                     Instruction::SetTable { table, key, val } => out.push_str(&format!(
-                        "                let k = i_r{key};\n\
+                        "                let k = {key};\n\
                                          if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                                          let idx = k as usize;\n\
                                          let t = unsafe {{ &mut *t_r{table} }};\n\
                                          if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
-                                         unsafe {{ *t.array.get_unchecked_mut(idx) = i_r{val}; }}\n"
+                                         unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
+                        key = iop(*key), val = iop(*val)
                     )),
                     Instruction::GetTable { target, table, key } => out.push_str(&format!(
-                        "                let k = i_r{key};\n\
+                        "                let k = {key};\n\
                                          if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                                          let idx = k as usize;\n\
                                          let t = unsafe {{ &*t_r{table} }};\n\
-                                         i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n"
+                                         i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                        key = iop(*key)
                     )),
                     Instruction::SetTableFast { table, key, val } => out.push_str(&format!(
-                        "                let k = i_r{key};\n\
+                        "                let k = {key};\n\
                                          if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
                                          if (k as usize) < len_r{table} {{\n\
-                                             unsafe {{ *p_r{table}.add(k as usize) = i_r{val}; }}\n\
+                                             unsafe {{ *p_r{table}.add(k as usize) = {val}; }}\n\
                                          }} else {{\n\
                                              panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                                         }}\n"
+                                         }}\n",
+                        key = iop(*key), val = iop(*val)
                     )),
                     Instruction::GetTableFast { target, table, key } => out.push_str(&format!(
-                        "                let k = i_r{key};\n\
+                        "                let k = {key};\n\
                                          if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
                                          if (k as usize) < len_r{table} {{\n\
                                              i_r{target} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
                                          }} else {{\n\
                                              panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                                         }}\n"
+                                         }}\n",
+                        key = iop(*key)
                     )),
                     Instruction::Phi { .. } => {}
                 }
             }
 
             match &block.terminator {
-                Some(Terminator::Jump(target)) => out.push_str(&format!("                current_block = {};\n", target)),
-                Some(Terminator::Branch { cond, true_block, false_block }) => {
-                    out.push_str(&format!("                current_block = if b_r{} {{ {} }} else {{ {} }};\n", cond, true_block, false_block));
-                }
+                Some(Terminator::Jump(target)) =>
+                    out.push_str(&format!("                current_block = {};\n", target)),
+                Some(Terminator::Branch { cond, true_block, false_block }) =>
+                    out.push_str(&format!("                current_block = if {} {{ {} }} else {{ {} }};\n",
+                                         bop(*cond), true_block, false_block)),
                 Some(Terminator::Halt) | None => out.push_str("                break 'cfg;\n"),
             }
             out.push_str("            }\n");

@@ -344,9 +344,40 @@ check bug16b "$CASES/bug16b.lua" \
   "TABLE 3 LEN 3 NZ 1 CHECKSUM 21" \
   "TABLE 4 LEN 1 NZ 1 CHECKSUM 7"
 
+# --- bug 17: zero-iteration loop + post-loop read: value must come from the
+#     phi's pre-loop edge, not a never-written body register
+cat > "$CASES/bug17.lua" <<'LUA'
+local i = 5
+local n = 0
+while i < n do
+    i = i + 1
+end
+local w = {}
+w[0] = i
+LUA
+check bug17_zero_iter "$CASES/bug17.lua" "TABLE 0 LEN 1 NZ 1 CHECKSUM 5"
+
+# --- bug 18: coalesced phis must read each other's PRE-update values
+#     (y's new value is computed from x's old value, and vice versa)
+cat > "$CASES/bug18.lua" <<'LUA'
+local a = {}
+local x = 1
+local y = 2
+local i = 0
+while i < 4 do
+    local t = y
+    y = x + 10
+    x = t
+    i = i + 1
+end
+a[0] = x
+a[1] = y
+LUA
+check bug18_phi_rotate "$CASES/bug18.lua" "TABLE 0 LEN 2 NZ 2 CHECKSUM 65"
+
 printf '\npassed: %d   failed: %d\n' "$PASS" "$FAIL"
 if (( FAIL > 0 )); then printf 'FAILED: %s\n' "${FAILED[*]}"; exit 1; fi
-echo "ALL GREEN — 13 bugs, 18 cases, full pipeline"
+echo "ALL GREEN — 13 bugs, 20 cases, full pipeline"
 
 echo; echo "== showcase: main.lua (full torture workload) =="
 compile main.lua && execute && grep -E '^(TABLE|STATS|TIME)' "$OUT"

@@ -162,20 +162,29 @@ impl IrLowerer {
                 let end_of_body = self.current_block;
                 self.terminate(Terminator::Jump(header_block));
 
-                for (var, phi_reg) in phis {
-                    let back_edge_local = self.read_var(&var);
+                for (var, phi_reg) in &phis {
+                    let back_edge_local = self.read_var(var);
                     for instr in &mut self.blocks[header_block].instrs {
                         if let Instruction::Phi { target, args, .. } = instr {
-                            if *target == phi_reg {
+                            if *target == *phi_reg {
                                 args.push((end_of_body, back_edge_local.reg));
                                 break;
                             }
                         }
                     }
                 }
-                self.current_block = exit_block;
 
-                // FIX: Restore the loop depth for the outer scope!
+                // NEW: post-loop reads resolve to the phi, not the body's
+                // last def. The header dominates the exit and the phi merges
+                // the pre-loop value, so a zero-iteration loop still yields
+                // the pre-loop value instead of a never-written register.
+                // (Reads after an assignment but INSIDE the body were
+                // already emitted against the body's def — unaffected.)
+                for (var, phi_reg) in &phis {
+                    self.update_var(var, *phi_reg);
+                }
+
+                self.current_block = exit_block;
                 self.loop_depth -= 1;
             }
         }
