@@ -390,10 +390,12 @@ impl IrBackend {
                 Instruction::SetTableFast { table, key, val } => {
                     out.push_str(&format!(
                         "    let k = i_r{key};\n\
-                             if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                             if (k as usize) < len_r{table} {{\n\
-                                 unsafe {{ *p_r{table}.add(k as usize) = i_r{val}; }}\n\
-                             }}\n",
+                         if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                         if (k as usize) < len_r{table} {{\n\
+                             unsafe {{ *p_r{table}.add(k as usize) = i_r{val}; }}\n\
+                         }} else {{\n\
+                             panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                         }}\n",
                         table = table, key = key, val = val
                     ));
                 }
@@ -401,12 +403,12 @@ impl IrBackend {
                 Instruction::GetTableFast { target, table, key } => {
                     out.push_str(&format!(
                         "    let k = i_r{key};\n\
-                             if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                             i_r{target} = if (k as usize) < len_r{table} {{\n\
-                                 unsafe {{ *p_r{table}.add(k as usize) }}\n\
-                             }} else {{\n\
-                                 0\n\
-                             }};\n",
+                         if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                         i_r{target} = if (k as usize) < len_r{table} {{\n\
+                             unsafe {{ *p_r{table}.add(k as usize) }}\n\
+                         }} else {{\n\
+                             panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                         }};\n",
                         target = target, table = table, key = key
                     ));
                 }
