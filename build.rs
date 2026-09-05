@@ -53,6 +53,7 @@ fn main() {
 
     // 4. Optimization & De-SSA
     let mut backend_engine = backend::IrBackend::new(ir_program);
+    backend_engine.structured = std::env::var("PHIA_NO_STRUCT").is_err();
     backend_engine.coalesce = std::env::var("PHIA_NO_COALESCE").is_err();
     backend_engine.optimize();
     backend_engine.resolve_phis();          // now coalesces phi -> back-def

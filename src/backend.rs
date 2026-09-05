@@ -138,9 +138,12 @@ fn single_def(defs: &HashMap<RegId, usize>, r: RegId) -> bool {
     defs.get(&r).copied() == Some(1)
 }
 
+fn indent(d: usize) -> String { "    ".repeat(d) }
+
 pub struct IrBackend {
     pub program: IrProgram,
     pub coalesce: bool,
+    pub structured: bool,
     n_int: usize, n_bool: usize, n_table: usize,
     phys_base: RegId, did_alloc: bool,
     consts_i: HashMap<RegId, i64>,
@@ -150,11 +153,39 @@ pub struct IrBackend {
 impl IrBackend {
     pub fn new(program: IrProgram) -> Self {
         Self {
-            program, coalesce: true,
+            program, coalesce: true, structured:true,
             n_int: 0, n_bool: 0, n_table: 0,
             phys_base: 0, did_alloc: false,
             consts_i: HashMap::new(), consts_b: HashMap::new(),
         }
+    }
+
+    fn iop_str(&self, r: RegId) -> String {
+        self.consts_i.get(&r).map(|v| v.to_string())
+            .unwrap_or_else(|| format!("i_r{}", r))
+    }
+    fn bop_str(&self, r: RegId) -> String {
+        self.consts_b.get(&r)
+            .map(|v| if *v { "true" } else { "false" }.to_string())
+            .unwrap_or_else(|| format!("b_r{}", r))
+    }
+
+    fn reg_uses(&self, r: RegId) -> usize {
+        let mut n = 0;
+        for b in &self.program.blocks {
+            for i in &b.instrs { for u in use_regs(i) { if u == r { n += 1; } } }
+            if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
+                if *cond == r { n += 1; }
+            }
+        }
+        n
+    }
+
+    fn is_loop_header(&self, h: BlockId) -> bool {
+        // A loop header has a back edge: a LATER block jumping to it.
+        self.program.blocks[h + 1..].iter().any(|p| {
+            matches!(&p.terminator, Some(Terminator::Jump(t)) if *t == h)
+        })
     }
 
     /// Copy propagation + DCE. Deliberately conservative: a Move is erased
@@ -639,7 +670,230 @@ impl IrBackend {
         }
     }
 
+    fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize) {
+        // compile-time-computed defs emit nothing: their uses are literals
+        if let Some(t) = def_reg(instr) {
+            if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
+                return;
+            }
+        }
+        let ind = indent(d);
+        match instr {
+            Instruction::LoadInt { target, val } =>
+                out.push_str(&format!("{ind}i_r{target} = {val};\n")),
+            Instruction::NewTable { target } => out.push_str(&format!(
+                "{ind}let mut new_table = Box::new(Table::new());\n\
+                 {ind}t_r{target} = &mut *new_table as *mut Table;\n\
+                 {ind}tables.push(new_table);\n"
+            )),
+            Instruction::Move { target, source, ty } => match ty {
+                StaticType::Integer => out.push_str(&format!("{ind}i_r{target} = {};\n", self.iop_str(*source))),
+                StaticType::Boolean => out.push_str(&format!("{ind}b_r{target} = {};\n", self.bop_str(*source))),
+                StaticType::Table => out.push_str(&format!("{ind}t_r{target} = t_r{source};\n")),
+            },
+            Instruction::Add { target, left, right } =>
+                out.push_str(&format!("{ind}i_r{target} = {} + {};\n", self.iop_str(*left), self.iop_str(*right))),
+            Instruction::Sub { target, left, right } =>
+                out.push_str(&format!("{ind}i_r{target} = {} - {};\n", self.iop_str(*left), self.iop_str(*right))),
+            Instruction::Less { target, left, right } =>
+                out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right))),
+
+            Instruction::EnsureCapacity { table, limit } => out.push_str(&format!(
+                "{ind}let lim = {lim};\n\
+                 {ind}if lim > 0 {{\n\
+                 {ind}    let t = unsafe {{ &mut *t_r{table} }};\n\
+                 {ind}    if (lim as usize) > t.array.len() {{\n\
+                 {ind}        t.array.resize(lim as usize, 0);\n\
+                 {ind}    }}\n\
+                 {ind}}}\n",
+                lim = self.iop_str(*limit)
+            )),
+            Instruction::HoistRawPtr { table } => out.push_str(&format!(
+                "{ind}len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
+                 {ind}p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n"
+            )),
+
+            Instruction::SetTable { table, key, val } => out.push_str(&format!(
+                "{ind}let k = {key};\n\
+                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                 {ind}let idx = k as usize;\n\
+                 {ind}let t = unsafe {{ &mut *t_r{table} }};\n\
+                 {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
+                 {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
+                key = self.iop_str(*key), val = self.iop_str(*val)
+            )),
+            Instruction::GetTable { target, table, key } => out.push_str(&format!(
+                "{ind}let k = {key};\n\
+                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                 {ind}let idx = k as usize;\n\
+                 {ind}let t = unsafe {{ &*t_r{table} }};\n\
+                 {ind}i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                key = self.iop_str(*key)
+            )),
+            Instruction::SetTableFast { table, key, val } => out.push_str(&format!(
+                "{ind}let k = {key};\n\
+                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                 {ind}if (k as usize) < len_r{table} {{\n\
+                 {ind}    unsafe {{ *p_r{table}.add(k as usize) = {val}; }}\n\
+                 {ind}}} else {{\n\
+                 {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                 {ind}}}\n",
+                key = self.iop_str(*key), val = self.iop_str(*val)
+            )),
+            Instruction::GetTableFast { target, table, key } => out.push_str(&format!(
+                "{ind}let k = {key};\n\
+                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                 {ind}if (k as usize) < len_r{table} {{\n\
+                 {ind}    i_r{target} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
+                 {ind}}} else {{\n\
+                 {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                 {ind}}}\n",
+                key = self.iop_str(*key)
+            )),
+            Instruction::Phi { .. } => {} // deleted by resolve_phis
+        }
+    }
+
+    /// Emit block `b` and everything that follows it, staying inside the loop
+    /// whose header is `hdr` (a back edge to `hdr` closes the loop body).
+    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool]) {
+        if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
+        emitted[b] = true;
+        let block = &self.program.blocks[b];
+        for i in &block.instrs { self.emit_instr(out, i, d); }
+        match &block.terminator {
+            None | Some(Terminator::Halt) => {
+                // early return == the dispatcher's `break 'cfg`: there is no
+                // code after Halt, so jumping to the end is exactly a return
+                out.push_str(&format!("{}return tables;\n", indent(d)));
+            }
+            Some(Terminator::Jump(t)) => {
+                if Some(*t) == hdr {
+                    // back edge: this loop body is complete
+                } else if *t < b {
+                    panic!("structured codegen: stray backward jump {b} -> {t}");
+                } else if self.is_loop_header(*t) {
+                    // forward jump into a loop header = entering a loop
+                    let (cond, tb, fb) = match &self.program.blocks[*t].terminator {
+                        Some(Terminator::Branch { cond, true_block, false_block }) =>
+                            (*cond, *true_block, *false_block),
+                        _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
+                    };
+                    self.emit_loop(out, *t, cond, tb, d, emitted);
+                    self.emit_seq(out, fb, hdr, d, emitted);
+                } else {
+                    self.emit_seq(out, *t, hdr, d, emitted);
+                }
+            }
+            Some(Terminator::Branch { cond, true_block, false_block }) => {
+                // unreachable in practice (headers are entered via Jump), kept
+                // for totality — same handling as the Jump-into-header case
+                self.emit_loop(out, b, *cond, *true_block, d, emitted);
+                self.emit_seq(out, *false_block, hdr, d, emitted);
+            }
+        }
+    }
+
+    fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool]) {
+        if !self.is_loop_header(h) {
+            panic!("structured codegen: Branch in block {h} is not a loop header — `if` is not supported by this codegen");
+        }
+        if emitted[h] { panic!("structured codegen: header {h} reached twice"); }
+        emitted[h] = true;
+
+        let block = &self.program.blocks[h];
+        let ind = indent(d);
+
+        // Pretty form: the header holds nothing (identifier condition, e.g.
+        // phase I / bug16a) or exactly the Less computing the branch
+        // condition with no other readers of its result. The Less folds into
+        // the while-condition — still evaluated every iteration.
+        let pretty = if block.instrs.is_empty() {
+            Some(self.bop_str(cond))
+        } else if block.instrs.len() == 1 {
+            match &block.instrs[0] {
+                Instruction::Less { target, left, right }
+                    if *target == cond && self.reg_uses(cond) == 1 =>
+                    Some(format!("{} < {}", self.iop_str(*left), self.iop_str(*right))),
+                _ => None,
+            }
+        } else { None };
+
+        if let Some(c) = pretty {
+            out.push_str(&format!("{ind}while {c} {{\n"));
+            self.emit_seq(out, body, Some(h), d + 1, emitted);
+            out.push_str(&format!("{ind}}}\n"));
+        } else {
+            // General fallback: everything in the header runs every
+            // iteration. Never fires on the current corpus — it exists so a
+            // surprising CFG degrades to correct-but-ugly, not wrong.
+            out.push_str(&format!("{ind}loop {{\n"));
+            for i in &block.instrs { self.emit_instr(out, i, d + 1); }
+            out.push_str(&format!("{}if {} {{\n", indent(d + 1), self.bop_str(cond)));
+            self.emit_seq(out, body, Some(h), d + 2, emitted);
+            out.push_str(&format!("{}    }} else {{\n", indent(d + 1)));
+            out.push_str(&format!("{}        break;\n", indent(d + 1)));
+            out.push_str(&format!("{}    }}\n{ind}}}\n", indent(d + 1)));
+        }
+    }
+
+    fn generate_structured(&self) -> String {
+        let mut out = String::new();
+        out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
+        out.push_str("use crate::memory::Table;\n\n");
+        out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
+        out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
+
+        let mut fast_phys: HashSet<RegId> = HashSet::new();
+        for b in &self.program.blocks {
+            for i in &b.instrs {
+                match i {
+                    Instruction::HoistRawPtr { table }
+                    | Instruction::SetTableFast { table, .. }
+                    | Instruction::GetTableFast { table, .. } => { fast_phys.insert(*table); }
+                    _ => {}
+                }
+            }
+        }
+
+        let (n_i, n_b, n_t, base) = if self.did_alloc {
+            (self.n_int, self.n_bool, self.n_table, self.phys_base as usize)
+        } else {
+            let mut max: RegId = 0;
+            for b in &self.program.blocks {
+                for i in &b.instrs { if let Some(dd) = def_reg(i) { if dd > max { max = dd; } } }
+            }
+            (max as usize + 1, max as usize + 1, max as usize + 1, 0usize)
+        };
+
+        for r in base..base + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
+        for r in base..base + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }
+        for r in base..base + n_t {
+            out.push_str(&format!("    let mut t_r{r}: *mut Table = std::ptr::null_mut();\n"));
+            if fast_phys.contains(&(r as RegId)) {
+                out.push_str(&format!("    let mut p_r{r}: *mut i64 = std::ptr::null_mut();\n"));
+                out.push_str(&format!("    let mut len_r{r} = 0usize;\n"));
+            }
+        }
+        out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
+
+        let mut emitted = vec![false; self.program.blocks.len()];
+        self.emit_seq(&mut out, 0, None, 1, &mut emitted);
+        let orphans: Vec<usize> = emitted.iter().enumerate()
+            .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
+        if !orphans.is_empty() {
+            panic!("structured codegen: blocks never reached: {orphans:?}");
+        }
+
+        out.push_str("}\n");
+        out
+    }
+
     pub fn generate_rust_code(&self) -> String {
+        if self.structured { self.generate_structured() } else { self.generate_dispatched() }
+    }
+
+    pub fn generate_dispatched(&self) -> String {
         let mut out = String::new();
         out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
         out.push_str("use crate::memory::Table;\n\n");

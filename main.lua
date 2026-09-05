@@ -6,7 +6,7 @@
 
 -- PHASE A — The Stride (non-unit increment; EC zero-fills the odd slots)
 local pa_t = {}
-local pa_n = 400
+local pa_n = 4000000
 local pa_i = 0
 while pa_i < pa_n do
     pa_t[pa_i] = pa_i + 1
@@ -16,7 +16,7 @@ end
 -- PHASE B — The Staircase (inner limit = outer idx; EC+HR re-hoisted per
 -- outer iteration, INSIDE the outer body: hoist_ctx=1)
 local pb_t = {}
-local pb_n = 300
+local pb_n = 30000
 local pb_i = 0
 while pb_i < pb_n do
     local pb_j = 0
@@ -30,7 +30,7 @@ end
 -- PHASE C — The Polisher (sibling loops, read-modify-write, both fast;
 -- same table hoisted twice, second EC a no-op)
 local pc_t = {}
-local pc_n = 250
+local pc_n = 2500000
 local pc_i = 0
 while pc_i < pc_n do
     pc_t[pc_i] = 5
@@ -47,7 +47,7 @@ end
 -- search loop runs until it reads the sentinel)
 local pd_t = {}
 local pd_fill = 0
-while pd_fill < 30 do
+while pd_fill < 30000 do
     pd_t[pd_fill] = 1
     pd_fill = pd_fill + 1
 end
@@ -64,7 +64,7 @@ pd_w[0] = pd_i
 -- redefined in the nested region: survives the entry-kill — the SOUND
 -- half of #15; the hoist lands BEFORE the outer loop)
 local pe_t = {}
-local pe_n = 200
+local pe_n = 2000000
 local pe_m = 3
 local pe_i = 0
 while pe_i < pe_n do
@@ -81,7 +81,7 @@ end
 -- the nested region; the enclosing candidate abstains, the INNER one
 -- converts and hoists at ctx=1 with its own limit)
 local pf_t = {}
-local pf_n = 150
+local pf_n = 15000
 local pf_i = 0
 while pf_i < pf_n do
     local pf_d = pf_i
@@ -112,7 +112,7 @@ end
 -- PHASE H — The Abacus (fast reads accumulating into a scalar, exported
 -- through a witness table)
 local ph_t = {}
-local ph_n = 120
+local ph_n = 12000
 local ph_i = 0
 while ph_i < ph_n do
     ph_t[ph_i] = ph_i + 1
@@ -163,7 +163,7 @@ pj_w[3] = pj_t[99]
 -- PHASE K — The Cube (three-deep nesting; only the innermost candidate
 -- converts — the hoist sits at depth 2)
 local pk_t = {}
-local pk_n = 60
+local pk_n = 600
 local pk_i = 0
 while pk_i < pk_n do
     local pk_j = 0
@@ -182,7 +182,7 @@ end
 -- alias: the dynamic access retroactively poisons the table for the whole
 -- candidate — all three stay dynamic)
 local pl_t = {}
-local pl_n = 80
+local pl_n = 8000
 local pl_i = 0
 while pl_i < pl_n do
     local pl_a = pl_i
@@ -199,7 +199,7 @@ end
 -- with separate EC+HR pairs into the same allocation)
 local pm_a = {}
 local pm_b = pm_a
-local pm_n = 90
+local pm_n = 900000
 local pm_i = 0
 while pm_i < pm_n do
     pm_a[pm_i] = pm_i + 1
