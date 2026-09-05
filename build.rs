@@ -4,16 +4,19 @@ use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::process::Command;
 
-#[path = "src/lexer.rs"] pub mod lexer;
-#[path = "src/ast.rs"] pub mod ast;
-#[path = "src/parser.rs"] pub mod parser;
-#[path = "src/type_checker.rs"] pub mod type_checker;
-#[path = "src/lowerer.rs"] pub mod lowerer;
-#[path = "src/ir.rs"] pub mod ir;
+// LINEAR PIPELINE:
+#[path = "src/lexer.rs"] pub mod lexer;               // 1. Text to Tokens
+#[path = "src/ast.rs"] pub mod ast;                   // 2. AST Data Definitions
+#[path = "src/parser.rs"] pub mod parser;             // 3. Tokens to AST
+#[path = "src/type_checker.rs"] pub mod type_checker; // 4. AST Validation
+#[path = "src/ir.rs"] pub mod ir;                     // 5. IR Data Definitions
+#[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
+#[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust (Optimize & Codegen)
 
 fn main() {
-    // CRITICAL: without this, cargo won't re-run build.rs for different test files
+    // Cargo will re-run build.rs for different test files
     println!("cargo:rerun-if-env-changed=PHIA_SOURCE");
     let source_path = env::var("PHIA_SOURCE").unwrap_or_else(|_| "main.lua".to_string());
     println!("cargo:rerun-if-changed={}", source_path);
@@ -49,17 +52,17 @@ fn main() {
     lowerer.lower_program(&ast);
 
     // 4. Optimization
-    let mut backend = ir::IrBackend::new();
-    backend.ir = lowerer.ir; // Transfer the flat IR
-    backend.optimize();
+    let mut backend_engine = backend::IrBackend::new();
+    backend_engine.ir = lowerer.ir;
+    backend_engine.optimize();
 
     // 5. Code Generation
-    let mut final_code = backend.generate_rust_code();
+    let mut final_code = backend_engine.generate_rust_code();
 
     // Regression stats: computed from the FINAL IR, grep-able via the binary.
     let (mut fs_, mut fg, mut ds, mut dg, mut ho, mut dep) = (0, 0, 0, 0, 0, 0i32);
     let mut ctx = String::new();
-    for ins in &backend.ir {
+    for ins in &backend_engine.ir {
         use ir::Instruction as I;
         match ins {
             I::SetTableFast { .. } => fs_ += 1,
@@ -79,6 +82,24 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("baked_native.rs");
+
+    // Write the raw, unformatted code to the file
     let mut f = BufWriter::new(File::create(&dest_path).unwrap());
     f.write_all(final_code.as_bytes()).unwrap();
+    f.into_inner().unwrap(); // Ensure the file is completely flushed and closed before rustfmt reads it
+
+    // Run rustfmt directly on the generated file
+    let status = Command::new("rustfmt")
+        .arg(&dest_path)
+        .status();
+
+    match status {
+        Ok(stat) if !stat.success() => {
+            println!("cargo:warning=rustfmt ran but failed to format 'baked_native.rs'. Check for syntax errors in the generated code.");
+        }
+        Err(_) => {
+            println!("cargo:warning=rustfmt is not installed or not found in PATH. Code will remain unformatted.");
+        }
+        _ => {} // Success!
+    }
 }

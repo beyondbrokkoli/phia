@@ -308,12 +308,9 @@ check optfast "$CASES/optfast.lua" \
   "TABLE 0 LEN 100000 NZ 99999 CHECKSUM 333333333300000" \
   "fast_sets=1" "hoists=1" "hoist_ctx=0"
 
-# =============================================================================
 printf '\npassed: %d   failed: %d\n' "$PASS" "$FAIL"
 if (( FAIL > 0 )); then printf 'FAILED: %s\n' "${FAILED[*]}"; exit 1; fi
 echo "ALL GREEN — 13 bugs, 18 cases, full pipeline"
 
-if [ "${1:-}" = "--full" ]; then
-  echo; echo "== showcase: main.lua (full torture workload) =="
-  compile main.lua && execute && grep -E '^(TABLE|STATS|TIME)' "$OUT"
-fi
+echo; echo "== showcase: main.lua (full torture workload) =="
+compile main.lua && execute && grep -E '^(TABLE|STATS|TIME)' "$OUT"

@@ -3,7 +3,6 @@
 
 -- PHASE 1: The Autobahn (Massive Linear Allocation)
 -- Goal: Test pure `SetTableFast` throughput and basic loop hoisting.
--- Size: 50 Million iterations.
 local p1_table = {}
 local p1_size = 50000000
 local p1_i = 0
@@ -16,7 +15,6 @@ end
 -- PHASE 2: The Alias Trap (Safeguards #12 & #13)
 -- Goal: Force the optimizer to recognize aliases and safely disable
 -- fast-paths mid-loop without crashing or hanging.
--- Size: 10 Million iterations.
 local p2_table = {}
 local p2_alias = p2_table
 local p2_size = 10000000
@@ -36,7 +34,6 @@ end
 -- PHASE 3: The Dynamic Resize Minefield (Safeguard #8)
 -- Goal: Interleave sequential writes with out-of-bounds jumps to force
 -- the arena to dynamically grow, testing pointer invalidation.
--- Size: 20 Million iterations (40 Million total table writes).
 local p3_table = {}
 local p3_size = 20000000
 local p3_i = 0
@@ -54,7 +51,6 @@ end
 
 -- PHASE 4: The Matrix (Safeguards #4 & #9)
 -- Goal: Deep loop depth hoisting and register survival across massive iterations.
--- Size: 150,000 * 150,000 = 22.5 BILLION iterations.
 local p4_src = {}
 local p4_dst = {}
 local p4_size = 150000
