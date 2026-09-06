@@ -10,6 +10,10 @@
 -- EXPECT: TABLE 8 LEN 8 NZ 1 CHECKSUM 8
 -- EXPECT: TABLE 9 LEN 9 NZ 1 CHECKSUM 9
 -- EXPECT: TABLE 10 LEN 10 NZ 1 CHECKSUM 10
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=1
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=0
 local t = {}
 local n = 10
 local i = 0

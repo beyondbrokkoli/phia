@@ -1,7 +1,13 @@
+-- bug_06.lua — loop fast (literal 5); a[3] @ b0, b[10], b[4] @ b3 → dyn gets; out[0..2] @ b3 → dyn sets.
 -- EXPECT: NTABLES 3
 -- EXPECT: TABLE 0 LEN 0 NZ 0 CHECKSUM 0
 -- EXPECT: TABLE 1 LEN 5 NZ 5 CHECKSUM 1540
 -- EXPECT: TABLE 2 LEN 3 NZ 1 CHECKSUM 312
+-- EXPECT: fast_sets=1
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=3
+-- EXPECT: dyn_gets=3
+-- EXPECT: hoists=1
 local a = {}
 local x = a[3]
 local b = {}

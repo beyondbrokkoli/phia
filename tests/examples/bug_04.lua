@@ -1,5 +1,8 @@
 -- EXPECT: TABLE 0 LEN 1000 NZ 999 CHECKSUM 333333000
 -- EXPECT: fast_sets=0
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=2
+-- EXPECT: dyn_gets=0
 -- EXPECT: hoists=0
 local a = {}
 local b = a

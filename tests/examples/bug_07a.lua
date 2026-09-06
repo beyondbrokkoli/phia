@@ -1,5 +1,4 @@
 -- EXPECT: NTABLES 10
--- EXPECT: fast_sets=0
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 1
 -- EXPECT: TABLE 1 LEN 2 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 2 LEN 3 NZ 1 CHECKSUM 3
@@ -10,6 +9,11 @@
 -- EXPECT: TABLE 7 LEN 8 NZ 1 CHECKSUM 8
 -- EXPECT: TABLE 8 LEN 9 NZ 1 CHECKSUM 9
 -- EXPECT: TABLE 9 LEN 10 NZ 1 CHECKSUM 10
+-- EXPECT: fast_sets=0
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=1
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=0
 local i = 0
 while i < 10 do
     local t = {}
