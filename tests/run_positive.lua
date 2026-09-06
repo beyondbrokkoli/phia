@@ -38,6 +38,7 @@ local test_files = {
     "gauntlet_pK.lua",
     "gauntlet_pL.lua",
     "gauntlet_pM.lua",
+    "opt_literal_bound.lua",
 }
 
 print("== Running " .. #test_files .. " Positive Build tests ==")

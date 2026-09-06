@@ -91,6 +91,59 @@ impl IrLowerer {
         IrProgram { blocks: self.blocks }
     }
 
+    /// Materialize an integer literal into a register in the CURRENT block.
+    /// Call this while `current_block` is still the loop pre-header.
+    /// Returns `None` (and emits nothing) for any non-literal operand —
+    /// those must be lowered inside the header, where loop-carried phis
+    /// are visible.
+    fn materialize_bound(&mut self, operand: &Expr) -> Option<RegId> {
+        if let Expr::Integer(v) = operand {
+            let reg = self.next_reg();
+            self.emit(Instruction::LoadInt { target: reg, val: *v });
+            Some(reg)
+        } else {
+            None
+        }
+    }
+
+    /// Lower a `while` condition inside the header, splicing the
+    /// pre-materialized literal-bound registers (`bound_left` / `bound_right`)
+    /// in for the direct `Expr::Integer` operands that produced them.
+    ///
+    /// The splice is self-checking: a bound register is used only when the
+    /// operand it replaces is actually an integer literal; any other operand
+    /// lowers right here, exactly as `lower_expr` would. Operand order
+    /// (left, then right) and the target-register-first numbering of
+    /// `lower_expr`'s `BinaryOp` path are preserved.
+    fn lower_while_condition(
+        &mut self,
+        condition: &Expr,
+        bound_left: Option<RegId>,
+        bound_right: Option<RegId>,
+    ) -> (RegId, StaticType) {
+        match condition {
+            Expr::BinaryOp { op: BinOp::LessThan, left, right }
+                if bound_left.is_some() || bound_right.is_some() =>
+            {
+                let target = self.next_reg();
+
+                let l_reg = match (&**left, bound_left) {
+                    (Expr::Integer(_), Some(reg)) => reg,
+                    _ => self.lower_expr(left, None).0,
+                };
+                let r_reg = match (&**right, bound_right) {
+                    (Expr::Integer(_), Some(reg)) => reg,
+                    _ => self.lower_expr(right, None).0,
+                };
+
+                self.emit(Instruction::Less { target, left: l_reg, right: r_reg });
+                (target, StaticType::Boolean)
+            }
+            // No materialized bounds: byte-for-byte the original lowering.
+            _ => self.lower_expr(condition, None),
+        }
+    }
+
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::LocalDecl { name, expr } => {
@@ -116,6 +169,27 @@ impl IrLowerer {
             }
             Stmt::While { condition, body } => {
                 let pre_header = self.current_block;
+
+                // --- Literal bound materialization --------------------------------
+                // The backend's bounds-check hoisting only fires when the loop
+                // limit is defined BEFORE the header (`limit_def_block <
+                // header_id`). A literal bound (`while i < 10`) would otherwise get
+                // its `LoadInt` emitted inside the header. So, while
+                // `current_block` is still the pre-header, materialize any *direct*
+                // integer operand of a `LessThan` condition into a register NOW,
+                // and splice that register into the condition when it is lowered
+                // inside the header (see `lower_while_condition`).
+                //
+                // `LoadInt` is pure and cannot trap, so hoisting it across the
+                // pre-header/header edge is always sound. The AST is never touched:
+                // the "modified condition" is just two `Option<RegId>`s.
+                let mut bound_left: Option<RegId> = None;
+                let mut bound_right: Option<RegId> = None;
+                if let Expr::BinaryOp { op: BinOp::LessThan, left, right } = condition {
+                    // Left first, then right: preserves operand order.
+                    bound_left = self.materialize_bound(left);
+                    bound_right = self.materialize_bound(right);
+                }
 
                 self.loop_depth += 1;
                 let header_block = self.new_block();
@@ -147,7 +221,11 @@ impl IrLowerer {
                     }
                 }
 
-                let (cond_reg, _) = self.lower_expr(condition, None);
+                // The condition still lowers INSIDE the header (phi'd variables are
+                // read here), but a materialized literal bound now consumes its
+                // pre-header register instead of re-emitting `LoadInt` in the loop.
+                let (cond_reg, _) =
+                    self.lower_while_condition(condition, bound_left, bound_right);
                 self.terminate(Terminator::Branch {
                     cond: cond_reg,
                     true_block: body_block,
