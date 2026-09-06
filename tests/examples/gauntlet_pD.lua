@@ -1,7 +1,6 @@
--- gauntlet_pD.lua — L1 (literal 30): fast, HR @ b0. pd_t[30] = 60 sits in b3 (a pre-header — never scanned) → dyn.
--- L2's gate passes (pd_lim @ b3 < header), but its only table op is the GetTable inside the condition,
--- which lives in the header — headers are never scanned → dyn_get.
--- Body has no table ops → no HR. pd_w[0] after the loop → dyn.
+-- gauntlet_pD.lua
+-- The header GetTable's key (φi) can never equal the Less's left operand — which is the GetTable's result.
+-- Even with region/header scanning, the key is structurally unsafe → pD-L2 stays dyn_get under every extension above.
 -- EXPECT: TABLE 0 LEN 31 NZ 31 CHECKSUM 2325
 -- EXPECT: TABLE 1 LEN 1 NZ 1 CHECKSUM 30
 -- EXPECT: fast_sets=1

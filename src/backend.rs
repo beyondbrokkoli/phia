@@ -138,6 +138,28 @@ fn single_def(defs: &HashMap<RegId, usize>, r: RegId) -> bool {
     defs.get(&r).copied() == Some(1)
 }
 
+fn loop_region(blocks: &[BasicBlock], header: BlockId, body: BlockId) -> Vec<BlockId> {
+    // Every block an iteration can execute: reachable from the body
+    // without passing back through the header. Headers themselves are
+    // excluded (they hold only phis + condition reads — never a SetTable).
+    let mut region = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![body];
+    while let Some(b) = stack.pop() {
+        if b == header || !seen.insert(b) { continue; }
+        region.push(b);
+        match &blocks[b].terminator {
+            Some(Terminator::Jump(t)) => stack.push(*t),
+            Some(Terminator::Branch { true_block, false_block, .. }) => {
+                stack.push(*true_block);
+                stack.push(*false_block);
+            }
+            _ => {}
+        }
+    }
+    region
+}
+
 fn indent(d: usize) -> String { "    ".repeat(d) }
 
 pub struct IrBackend {
@@ -502,24 +524,24 @@ impl IrBackend {
                             let mut hoists = BTreeSet::new(); // <-- Changed to BTreeSet
                             let mut upgrades = Vec::new();
 
-                            // PASS 1: Read-Only. Find Poisoned Chalices!
+                            // PASS 1: Read-Only, REGION-WIDE. A dynamic SetTable anywhere in the
+                            // loop's region (nested loop body, post-nested tail) can resize the
+                            // table and invalidate a pre-header HoistRawPtr.
+                            let region = loop_region(&self.program.blocks, header_id, body_id);
                             let mut abort_all = false;
-                            for instr in &self.program.blocks[body_id].instrs {
-                                if let Instruction::SetTable { table, key, .. } = instr {
-                                    // NO DOMINANCE CHECK HERE! All dynamic writes matter.
-                                    if !is_safe_key(&self.program.blocks, *key, idx_reg) {
-                                        if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                            clobbered_roots.insert(root);
-                                        } else {
-                                            // If we can't trace the root of an unsafe write (e.g. it's a Phi),
-                                            // it might be reallocating ONE OF OUR HOISTED TABLES!
-                                            // We must abort hoisting for this entire loop.
-                                            abort_all = true;
-                                            break;
+                            'poison: for &blk in &region {
+                                for instr in &self.program.blocks[blk].instrs {
+                                    if let Instruction::SetTable { table, key, .. } = instr {
+                                        if !is_safe_key(&self.program.blocks, *key, idx_reg) {
+                                            match get_table_root(&self.program.blocks, *table) {
+                                                Some(root) => { clobbered_roots.insert(root); }
+                                                None => { abort_all = true; break 'poison; }
+                                            }
                                         }
                                     }
                                 }
                             }
+
 
                             if abort_all { continue; } // Safety valve: bail out!
 

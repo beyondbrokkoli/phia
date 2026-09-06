@@ -39,6 +39,7 @@ local test_files = {
     "gauntlet_pL.lua",
     "gauntlet_pM.lua",
     "opt_literal_bound.lua",
+    "region_table_resize.lua",
 }
 
 print("== Running " .. #test_files .. " Positive Build tests ==")
