@@ -57,7 +57,8 @@ for _, filename in ipairs(test_files) do
         local build_res = os.execute(build_cmd)
 
         if build_res ~= 0 and build_res ~= true then
-            print("\27[31m✗\27[0m " .. filename .. " — build failed: " .. read_file(BERR):match("([^\n]+)$"))
+            local err_line = read_file(BERR):match("([^\n]+)$") or "No error output found"
+            print("\27[31m✗\27[0m " .. filename .. " — build failed: " .. err_line)
             test_failed = true
         end
 
@@ -67,7 +68,8 @@ for _, filename in ipairs(test_files) do
             local run_res = os.execute(run_cmd)
 
             if run_res ~= 0 and run_res ~= true then
-                print("\27[31m✗\27[0m " .. filename .. " — run failed: " .. read_file(ERR):match("([^\n]+)$"))
+                local err_line = read_file(ERR):match("([^\n]+)$") or "No error output found"
+                print("\27[31m✗\27[0m " .. filename .. " — run failed: " .. err_line)
                 test_failed = true
             end
         end
@@ -95,10 +97,23 @@ for _, filename in ipairs(test_files) do
                         break
                     end
                 else
-                    if not out_content:find(exp, 1, true) then
-                        print("\27[31m✗\27[0m " .. filename .. " — stat mismatch, expected: " .. exp)
-                        test_failed = true
-                        break
+                    -- Check if this expectation is a stat (e.g., "fast_sets=0")
+                    local k, v = exp:match("^([^=]+)=(.*)$")
+                    if k and v then
+                        -- Find this exact key in the output and capture its value (up to ';' or newline)
+                        local actual_v = out_content:match(k .. "=([^;\r\n]+)")
+                        if actual_v ~= v then
+                            print(string.format("\27[31m✗\27[0m %s — %s: want %s, got %s", filename, k, v, tostring(actual_v)))
+                            test_failed = true
+                            break
+                        end
+                    else
+                        -- Fallback for random expected text (strict substring)
+                        if not out_content:find(exp, 1, true) then
+                            print("\27[31m✗\27[0m " .. filename .. " — stat mismatch, expected: " .. exp)
+                            test_failed = true
+                            break
+                        end
                     end
                 end
             end
@@ -107,7 +122,7 @@ for _, filename in ipairs(test_files) do
         -- 4. Final Tally for this test
         if test_failed then
             print("      \27[33m[Diagnostic Backtrace]:\27[0m")
-            os.execute(string.format("gdb -batch -ex run -ex bt %s 2>/dev/null | grep -E '^\\#' | head -15", BIN))
+            os.execute(string.format("gdb -batch -ex run -ex bt %s 2>/dev/null | grep -E '^#' | head -15", BIN))
             fail_count = fail_count + 1
             table.insert(failed_names, filename)
         else

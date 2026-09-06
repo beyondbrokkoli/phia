@@ -10,6 +10,9 @@ ERR = "target/run_err.txt"
 BERR = "target/build_err.txt"
 EXAMPLES_DIR = "tests/examples"
 
+-- The target folder needs to exist
+os.execute("mkdir -p target")
+
 -- Reads an entire file into a single string.
 -- "*a" instructs io.read to read everything from the current position to EOF.
 function read_file(path)
