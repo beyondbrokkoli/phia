@@ -1,4 +1,11 @@
+-- gauntlet_pK.lua — triple nesting: outer/middle body blocks hold only index inits;
+-- only the innermost body (b8) has the table op → one upgrade, EC+HR @ b5 (depth 2).
 -- EXPECT: TABLE 0 LEN 60 NZ 60 CHECKSUM 179950
+-- EXPECT: fast_sets=1
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=0
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=1
 local pk_t = {}
 local pk_n = 60
 local pk_i = 0

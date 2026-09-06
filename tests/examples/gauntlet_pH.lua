@@ -1,5 +1,11 @@
+-- gauntlet_pH.lua — L1: fast set. L2: ph_t[φj] get, safe key, unpoisoned root → fast. ph_w[0] = ph_sum after the loop → dyn.
 -- EXPECT: TABLE 0 LEN 120 NZ 120 CHECKSUM 583220
 -- EXPECT: TABLE 1 LEN 1 NZ 1 CHECKSUM 7260
+-- EXPECT: fast_sets=1
+-- EXPECT: fast_gets=1
+-- EXPECT: dyn_sets=1
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=2
 local ph_t = {}
 local ph_n = 120
 local ph_i = 0

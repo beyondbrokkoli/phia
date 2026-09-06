@@ -1,4 +1,12 @@
+-- gauntlet_pC.lua — two sequential loops, same pc_t. L1: safe set → fast.
+-- L2: safe set and safe get → both fast;
+-- second HR in b3 (L1's exit = L2's pre-header).
 -- EXPECT: TABLE 0 LEN 250 NZ 250 CHECKSUM 188250
+-- EXPECT: fast_sets=2
+-- EXPECT: fast_gets=1
+-- EXPECT: dyn_sets=0
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=2
 local pc_t = {}
 local pc_n = 250
 local pc_i = 0

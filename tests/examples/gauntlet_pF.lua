@@ -1,4 +1,11 @@
+-- gauntlet_pF.lua — inner limit pf_n @ b0 ✓;
+-- key is the inner φpf_d (pf_d is the inner induction var, unlike pE) → safe → fast. EC+HR @ b2.
 -- EXPECT: TABLE 0 LEN 150 NZ 150 CHECKSUM 1136275
+-- EXPECT: fast_sets=1
+-- EXPECT: fast_gets=0
+-- EXPECT: dyn_sets=0
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=1
 local pf_t = {}
 local pf_n = 150
 local pf_i = 0
