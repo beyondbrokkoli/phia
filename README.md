@@ -1,13 +1,13 @@
 # Phia 🌙
 
 > 🌟 **Huge Shoutout to [logos](https://github.com/maciejhirsz/logos)!** 🌟
-> This project would simply not be possible without the `logos` crate. Its blazing-fast, zero-allocation, slice-borrowing lexing is the absolute foundation of Phia's performance. If you are building a compiler or interpreter in Rust, start here. Thank you, Maciej Hirsz and contributors!
+> This project would simply not be possible without the `logos` crate.
 
 ## ✨ Supported Features
 
 **Data Types**
 - ✅ Integers
-- ✅ "Tables"
+- ✅ "Tables" (keys and values must be integers)
 
 **Control Flow**
 - ✅ `while`
