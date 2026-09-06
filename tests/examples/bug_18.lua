@@ -1,8 +1,4 @@
 -- EXPECT: TABLE 0 LEN 2 NZ 2 CHECKSUM 65
---
--- Bug 18: Coalesced phis must read each other's PRE-update values.
--- (y's new value is computed from x's old value, and vice versa)
-
 local a = {}
 local x = 1
 local y = 2
