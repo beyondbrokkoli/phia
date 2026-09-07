@@ -540,7 +540,7 @@ impl IrBackend {
 
                         if limit_is_invariant {
                             let mut clobbered_roots = HashSet::new();
-                            let mut hoists = BTreeSet::new();
+                            let mut hoists = BTreeSet::new(); // PATCH C: ROOT regs — one EC+HR pair per unique TABLE
                             // PATCH D: upgrades are now (block, index, instr) — they can land in any
                             // block of the loop region, not just the direct body.
                             let mut upgrades: Vec<(BlockId, usize, Instruction)> = Vec::new();
@@ -548,7 +548,9 @@ impl IrBackend {
                             // PASS 1: Read-Only, REGION-WIDE. A dynamic SetTable anywhere in the
                             // loop's region (nested loop body, post-nested tail) can resize the
                             // table and invalidate a pre-header HoistRawPtr.
-                            let region = loop_region(&self.program.blocks, header_id, body_id);
+                            let mut region = loop_region(&self.program.blocks, header_id, body_id);
+                            region.sort_unstable(); // PATCH D tidiness: region scanned in block-id order
+
                             let mut abort_all = false;
                             'poison: for &blk in &region {
                                 for instr in &self.program.blocks[blk].instrs {
@@ -600,10 +602,14 @@ impl IrBackend {
                                             if *def_b >= header_id { continue; }
 
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                                // PATCH B predicate, carried into the region scan.
                                                 if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
-                                                    upgrades.push((blk, i, Instruction::SetTableFast { table: *table, key: *key, val: *val }));
-                                                    hoists.insert(*table);
+                                                    // PATCH C: emit the fast op against the ROOT reg and key
+                                                    // the hoist set by root. Aliased regs (b = a) share one
+                                                    // table, so they share one EC + one HR; every upgraded
+                                                    // access points at the root, and the now-unused alias
+                                                    // Moves die in simplify().
+                                                    upgrades.push((blk, i, Instruction::SetTableFast { table: root, key: *key, val: *val }));
+                                                    hoists.insert(root);
                                                 }
                                             }
                                         }
@@ -613,10 +619,9 @@ impl IrBackend {
                                             if *def_b >= header_id { continue; }
 
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                                // PATCH B predicate, carried into the region scan.
                                                 if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
-                                                    upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: *table, key: *key }));
-                                                    hoists.insert(*table);
+                                                    upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: root, key: *key }));
+                                                    hoists.insert(root);
                                                 }
                                             }
                                         }
