@@ -200,25 +200,37 @@ impl IrLowerer {
                 self.loop_depth += 1; // Restore for body generation
 
                 let mutated_vars = find_mutated_vars(body);
+
+                // CANONICAL PHI ORDER — the rename-invariance fix.
+                // find_mutated_vars returns a BTreeSet<String>, so phi
+                // minting order was ALPHABETICAL BY NAME. A pure rename
+                // can flip that order → the two phi vreg ids swap →
+                // header slots swap → interval starts swap → the
+                // (start, end, r) total order flips their allocation
+                // order → physical registers swap. Semantics were never
+                // at risk (allocation is order-correct); codegen simply
+                // wasn't canonical: same logic, different spelling.
+                let mut phi_order: Vec<(String, Local)> = mutated_vars.into_iter()
+                    .filter(|name| self.has_var(name))
+                    .map(|name| { let local = self.read_var(&name); (name, local) })
+                    .collect();
+                phi_order.sort_by(|(name_a, a), (name_b, b)|
+                    (a.reg, name_a).cmp(&(b.reg, name_b)));
+
                 let mut phis = Vec::new();
 
                 self.terminate(Terminator::Jump(header_block));
                 self.current_block = header_block;
 
-                // FIX: Pass the type into the Phi node
-                for var in mutated_vars {
-                    if self.has_var(&var) {
-                        let pre_loop_local = self.read_var(&var);
-                        let phi_reg = self.next_reg();
-
-                        self.emit(Instruction::Phi {
-                            target: phi_reg,
-                            ty: pre_loop_local.ty.clone(), // <-- ADDED
-                            args: vec![(pre_header, pre_loop_local.reg)],
-                        });
-                        self.update_var(&var, phi_reg);
-                        phis.push((var, phi_reg));
-                    }
+                for (var, pre_loop_local) in phi_order {
+                    let phi_reg = self.next_reg();
+                    self.emit(Instruction::Phi {
+                        target: phi_reg,
+                        ty: pre_loop_local.ty.clone(),
+                        args: vec![(pre_header, pre_loop_local.reg)],
+                    });
+                    self.update_var(&var, phi_reg);
+                    phis.push((var, phi_reg));
                 }
 
                 // The condition still lowers INSIDE the header (phi'd variables are
