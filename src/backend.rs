@@ -462,13 +462,29 @@ impl IrBackend {
             }
         }
 
-        // Helper: Trace a table back to its original NewTable allocation.
-        // Uses `blocks` argument explicitly so `self` is NOT locked.
+        // TIER 2: fresh vreg ids for EC-limit materialization, minted from
+        // above the entire existing namespace so a minted vreg can never
+        // alias an original one. allocate_registers() re-scans the program.
+        let mut next_vreg: RegId = self.program.blocks.iter()
+            .flat_map(|b| b.instrs.iter())
+            .flat_map(|i| {
+                let mut regs = use_regs(i);
+                if let Some(d) = def_reg(i) { regs.push(d); }
+                regs
+            })
+            .chain(self.program.blocks.iter().filter_map(|b| match &b.terminator {
+                Some(Terminator::Branch { cond, .. }) => Some(*cond),
+                _ => None,
+            }))
+            .max()
+            .unwrap_or(0)
+            + 1;
+
         let get_table_root = |blocks: &[BasicBlock], table_reg: RegId| -> Option<RegId> {
             let mut curr = table_reg;
             let mut seen = HashSet::new();
             loop {
-                if !seen.insert(curr) { return None; } // cycle
+                if !seen.insert(curr) { return None; }
                 if let Some(&(b, i)) = def_map.get(&curr) {
                     match &blocks[b].instrs[i] {
                         Instruction::NewTable { target } => return Some(target.clone()),
@@ -476,7 +492,7 @@ impl IrBackend {
                             curr = source.clone();
                             continue;
                         }
-                        _ => return None, // Phi or ambiguous
+                        _ => return None,
                     }
                 } else {
                     return None;
@@ -484,15 +500,7 @@ impl IrBackend {
             }
         };
 
-        // Follows Integer Moves and Add/Sub-with-a-constant, folding the constant
-        // offsets. SSA makes the chain acyclic: every operand is defined strictly
-        // earlier, so the loop terminates. LoadInt keys, GetTable results, Phis,
-        // and non-const arithmetic all return None. Uses `blocks` explicitly so
-        // `self` is NOT locked (same pattern as get_table_root).
         let key_offset = |blocks: &[BasicBlock], key_reg: RegId, idx_reg: RegId| -> Option<i64> {
-            // A register is a compile-time constant if it is a single LoadInt.
-            // (def_map is all we have at optimize() time — consts_i doesn't
-            // exist until propagate_constants, three passes later.)
             let const_of = |blocks: &[BasicBlock], r: RegId| -> Option<i64> {
                 match def_map.get(&r) {
                     Some(&(b, i)) => match &blocks[b].instrs[i] {
@@ -529,7 +537,6 @@ impl IrBackend {
 
             if let Some(Terminator::Branch { cond, true_block: body_id, .. }) = terminator {
                 if let Some(&(cond_block, cond_idx)) = def_map.get(&cond) {
-
                     let is_less = if let Instruction::Less { left, right, .. } = &self.program.blocks[cond_block].instrs[cond_idx] {
                         Some((left.clone(), right.clone()))
                     } else { None };
@@ -540,86 +547,78 @@ impl IrBackend {
 
                         if limit_is_invariant {
                             let mut clobbered_roots = HashSet::new();
-                            let mut hoists = BTreeSet::new(); // PATCH C: ROOT regs — one EC+HR pair per unique TABLE
-                            // PATCH D: upgrades are now (block, index, instr) — they can land in any
-                            // block of the loop region, not just the direct body.
+                            let mut hoists = BTreeSet::new();
                             let mut upgrades: Vec<(BlockId, usize, Instruction)> = Vec::new();
 
-                            // PASS 1: Read-Only, REGION-WIDE. A dynamic SetTable anywhere in the
-                            // loop's region (nested loop body, post-nested tail) can resize the
-                            // table and invalidate a pre-header HoistRawPtr.
                             let mut region = loop_region(&self.program.blocks, header_id, body_id);
-                            region.sort_unstable(); // PATCH D tidiness: region scanned in block-id order
+                            region.sort_unstable();
 
+                            let mut root_max_off: HashMap<RegId, i64> = HashMap::new();
+                            let mut global_max_off: i64 = 0;
                             let mut abort_all = false;
+
+                            // PASS 1: Read-Only, REGION-WIDE. (Tier 2 poison check)
                             'poison: for &blk in &region {
                                 for instr in &self.program.blocks[blk].instrs {
-                                    if let Instruction::SetTable { table, key, .. } = instr {
-                                        // PATCH B: unsafe == "not provably equal to the induction
-                                        // value" — that is BOTH None (untraceable) AND Some(off != 0)
-                                        // (provably different). `.is_none()` here would let `i + 300`
-                                        // writes escape the poison scan: the single most dangerous
-                                        // way to write this line. PASS 1 must stay the exact
-                                        // negation of PASS 2's predicate.
-                                        if key_offset(&self.program.blocks, *key, idx_reg) != Some(0) {
-                                            match get_table_root(&self.program.blocks, *table) {
-                                                Some(root) => { clobbered_roots.insert(root); }
-                                                None => { abort_all = true; break 'poison; }
+                                    match instr {
+                                        Instruction::SetTable { table, key, .. } => {
+                                            match key_offset(&self.program.blocks, *key, idx_reg) {
+                                                None => match get_table_root(&self.program.blocks, *table) {
+                                                    Some(root) => { clobbered_roots.insert(root); }
+                                                    None => { abort_all = true; break 'poison; }
+                                                },
+                                                Some(off) if off < 0 => {} // Cannot resize
+                                                Some(off) => match get_table_root(&self.program.blocks, *table) {
+                                                    Some(root) => {
+                                                        root_max_off.entry(root)
+                                                            .and_modify(|m| *m = (*m).max(off))
+                                                            .or_insert(off);
+                                                    }
+                                                    None => { global_max_off = global_max_off.max(off); }
+                                                },
                                             }
                                         }
+                                        Instruction::GetTable { table, key, .. } => {
+                                            if let Some(off) = key_offset(&self.program.blocks, *key, idx_reg) {
+                                                if off >= 0 {
+                                                    if let Some(root) = get_table_root(&self.program.blocks, *table) {
+                                                        root_max_off.entry(root)
+                                                            .and_modify(|m| *m = (*m).max(off))
+                                                            .or_insert(off);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
 
+                            if abort_all { continue; }
 
-                            if abort_all { continue; } // Safety valve: bail out!
-
-                            // PASS 2: Read-Only. Determine which instructions to upgrade.
-                            // PATCH D: scan the WHOLE loop region (from Patch A's loop_region), not
-                            // just the direct body block. Soundness, per access:
-                            //   * KEY:   key_offset folding to Some(0) proves the operand holds the
-                            //     iteration-ENTRY induction value — the exact register the header's
-                            //     Less proved < limit. SSA fixes that value for the entire iteration:
-                            //     it cannot change anywhere in the region without minting a new vreg,
-                            //     which breaks the trace and auto-declines. The register IS the proof;
-                            //     the access's position in the region is irrelevant. (Patch B's +0
-                            //     keys are covered: `φi + 0` folds to Some(0) and holds that value.)
-                            //   * TABLE: def block < header (unchanged S2 check).
-                            //   * POINTER: PASS 1 already poisoned any root with an unsafe-key write
-                            //     (key_offset != Some(0)) anywhere in the region — which is why Patch A
-                            //     had to land first, and why PASS 1 must NEVER be weakened to .is_none().
-                            // Headers are excluded by loop_region: they hold only phis + condition
-                            // lowering, never a SetTable, and a condition GetTable's key structurally
-                            // cannot trace to idx_reg (idx_reg IS its result — see gauntlet_pD).
-                            // Instructions already upgraded to *Fast by an earlier (outer) pass match
-                            // neither arm here, so no double-upgrade is possible.
+                            // PASS 2: Read-Only. Determine upgrades. (Tier 2 + Tier 2b S2 check)
                             for &blk in &region {
                                 for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
                                     match instr {
                                         Instruction::SetTable { table, key, val } => {
-                                            // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
-                                            let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
-                                            if *def_b >= header_id { continue; }
-
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                                if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
-                                                    // PATCH C: emit the fast op against the ROOT reg and key
-                                                    // the hoist set by root. Aliased regs (b = a) share one
-                                                    // table, so they share one EC + one HR; every upgraded
-                                                    // access points at the root, and the now-unused alias
-                                                    // Moves die in simplify().
+                                                // TIER 2b: ROOT-based S2 Dominance.
+                                                let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
+                                                if *root_def_b >= header_id { continue; }
+
+                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
                                                     upgrades.push((blk, i, Instruction::SetTableFast { table: root, key: *key, val: *val }));
                                                     hoists.insert(root);
                                                 }
                                             }
                                         }
                                         Instruction::GetTable { target, table, key } => {
-                                            // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
-                                            let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
-                                            if *def_b >= header_id { continue; }
-
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                                if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
+                                                // TIER 2b: ROOT-based S2 Dominance.
+                                                let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
+                                                if *root_def_b >= header_id { continue; }
+
+                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
                                                     upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: root, key: *key }));
                                                     hoists.insert(root);
                                                 }
@@ -635,7 +634,6 @@ impl IrBackend {
                                 self.program.blocks[blk].instrs[i] = new_instr;
                             }
 
-                            // FIX: Structurally locate the true pre-header block
                             let mut pre_header_id = 0;
                             for b in 0..header_id {
                                 if let Some(Terminator::Jump(tgt)) = &self.program.blocks[b].terminator {
@@ -646,10 +644,41 @@ impl IrBackend {
                                 }
                             }
 
-                            // S5: EC before HR in Pre-Header
+                            // S5: EC before HR in Pre-Header (Tier 2 Sizing)
+                            let limit_lit: Option<i64> = def_map.get(&limit_reg).and_then(|&(b, i)| {
+                                if let Instruction::LoadInt { val, .. } = &self.program.blocks[b].instrs[i] {
+                                    Some(*val)
+                                } else {
+                                    None
+                                }
+                            });
                             for table in hoists {
-                                self.program.blocks[pre_header_id].instrs.push(Instruction::EnsureCapacity { table, limit: limit_reg });
-                                self.program.blocks[pre_header_id].instrs.push(Instruction::HoistRawPtr { table });
+                                let m = root_max_off.get(&table).copied().unwrap_or(0).max(global_max_off);
+                                let ec_limit = if m <= 0 {
+                                    limit_reg
+                                } else if let Some(v) = limit_lit {
+                                    let r = next_vreg; next_vreg += 1;
+                                    self.program.blocks[pre_header_id].instrs.push(
+                                        Instruction::LoadInt { target: r, val: v.wrapping_add(m) }
+                                    );
+                                    r
+                                } else {
+                                    let c = next_vreg; next_vreg += 1;
+                                    self.program.blocks[pre_header_id].instrs.push(
+                                        Instruction::LoadInt { target: c, val: m }
+                                    );
+                                    let a = next_vreg; next_vreg += 1;
+                                    self.program.blocks[pre_header_id].instrs.push(
+                                        Instruction::Add { target: a, left: limit_reg, right: c }
+                                    );
+                                    a
+                                };
+                                self.program.blocks[pre_header_id].instrs.push(
+                                    Instruction::EnsureCapacity { table, limit: ec_limit }
+                                );
+                                self.program.blocks[pre_header_id].instrs.push(
+                                    Instruction::HoistRawPtr { table }
+                                );
                             }
                         }
                     }
