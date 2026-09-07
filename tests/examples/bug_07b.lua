@@ -1,3 +1,7 @@
+-- bug_07b.lua — same loop, different disease: t is REASSIGNED in-loop, so the write
+-- goes through φt (def = header) → S2 dominance fails, and get_table_root stops at a
+-- Phi → untraceable. Loop-carried table = no hoist, by design. NTABLES 11 = one
+-- pre-loop + ten in-loop allocations, all leaked into `tables` intentionally.
 -- EXPECT: NTABLES 11
 -- EXPECT: TABLE 0 LEN 0 NZ 0 CHECKSUM 0
 -- EXPECT: TABLE 1 LEN 1 NZ 1 CHECKSUM 1

@@ -1,3 +1,11 @@
+-- bug_09.lua — the nested-loop showpiece. L1 (depth 0): data_a[φi] fast, HR @ b0.
+-- Outer (iter < 500) direct body holds only idx/crazy_math init → no table ops →
+-- outer pass upgrades nothing (only the DIRECT body block is scanned). Inner
+-- (idx < size, limit @ b0): data_a[φidx] read → fast; data_b[offset_idx] key =
+-- φidx + 2 → unsafe write → data_b poisoned → dyn. Hoists: data_a @ b0 (L1) and
+-- again @ the inner pre-header = outer body (depth 1) → hoist_ctx=0,1. Same table,
+-- two loops, two hoists: sequential re-hoisting is sound (EC idempotent, nothing
+-- resizes data_a in between).
 -- EXPECT: TABLE 0 LEN 2000 NZ 1999 CHECKSUM 2666666000
 -- EXPECT: TABLE 1 LEN 2002 NZ 1999 CHECKSUM 2670664000
 -- EXPECT: fast_sets=1

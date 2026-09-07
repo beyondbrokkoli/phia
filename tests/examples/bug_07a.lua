@@ -1,3 +1,9 @@
+-- bug_07a.lua — gate ✓ (literal 10), key φi safe, but the TABLE is born inside the
+-- loop: NewTable's def block is the body, not < header. A table re-created every
+-- iteration is loop-carried — no invariant pointer to cache, and EC in the pre-header
+-- would size a table that doesn't exist yet. Even per-iteration hoisting gains nothing
+-- (1 access/iteration ⇒ EC+HR cost == dynamic bounds cost). This shape's floor IS
+-- dyn_sets=1; the fix would be allocation strategy, not bounds hoisting.
 -- EXPECT: NTABLES 10
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 1
 -- EXPECT: TABLE 1 LEN 2 NZ 1 CHECKSUM 2

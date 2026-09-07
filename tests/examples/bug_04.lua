@@ -1,3 +1,7 @@
+-- bug_04.lua — inner pass: limit n @ b0 ✓; a[φj] safe key, but b[i]'s key is the
+-- OUTER φ ≠ inner idx → unsafe write. b = a shares root a via a Table Move, so one
+-- poisoned chalice kills both aliases: 2 dyn sets, 0 hoists. The outer pass sees an
+-- empty direct body block (just j = 0) — nothing to upgrade.
 -- EXPECT: TABLE 0 LEN 1000 NZ 999 CHECKSUM 333333000
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0

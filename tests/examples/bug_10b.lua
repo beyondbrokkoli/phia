@@ -1,4 +1,6 @@
--- bug_10b.lua — identical shape to bug_01.
+-- bug_10b.lua — byte-identical shape to bug_01: literal 1000 @ b0, safe key, fast,
+-- HR @ b0. Control twin of bug_10a (lexer fail): same body, different failure mode —
+-- the pair pins that panic isolation doesn't leak into codegen behavior.
 -- EXPECT: TABLE 0 LEN 1000 NZ 1000 CHECKSUM 3503500
 -- EXPECT: fast_sets=1
 -- EXPECT: fast_gets=0

@@ -1,3 +1,7 @@
+-- bug_02.lua — gate ✓ (literal 10) but the write's key is j = φi + 300: an Add
+-- breaks the Move-only trace (offset 300 ≠ 0) → unsafe write → poisons a. Correct
+-- decline: j ∈ [300, 309] vs capacity 10 — the fast path's invariant panic would
+-- fire where the dynamic path happily resizes.
 -- EXPECT: TABLE 0 LEN 310 NZ 10 CHECKSUM 3055
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0

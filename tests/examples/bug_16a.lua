@@ -1,4 +1,6 @@
--- bug_16a.lua — identifier condition → gate closed.
+-- bug_16a.lua — identifier condition: the Branch cond traces to φflag (a Phi, not a
+-- Less) → the gate never opens. Boolean conditions give the analysis no induction
+-- variable and no limit to hang invariance on. dyn by shape.
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 100
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0

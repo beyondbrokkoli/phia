@@ -1,3 +1,6 @@
+-- bug_12.lua — the alias-poison showcase. b = a shares root a; b[k] with k = φi + 300
+-- → unsafe write → poisons root a → a[i] (safe key, same root) stays dyn too.
+-- Reassigning b = c mid-loop can't launder it: roots, not regs, hold the grudge.
 -- EXPECT: NTABLES 2
 -- EXPECT: TABLE 0 LEN 310 NZ 20 CHECKSUM 3110
 -- EXPECT: TABLE 1 LEN 0 NZ 0 CHECKSUM 0

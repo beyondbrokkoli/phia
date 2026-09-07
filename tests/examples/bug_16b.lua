@@ -1,5 +1,7 @@
--- bug_16b.lua — gate ✓ but t is reassigned in-loop: both loop ops use φt (def = header ≥ header) → dyn.
--- Tail w[0] = t[2] → dyn set + dyn get.
+-- bug_16b.lua — gate ✓ (n @ b0) but t is reassigned in-loop: both loop ops go through
+-- φt (def = header) → S2 declines; the root is untraceable through the Phi. The tail
+-- w[0] = t[2] is post-loop → +1 dyn set, +1 dyn get. Five tables: empty original +
+-- one per reassignment + w — NTABLES pins the allocation count.
 -- EXPECT: TABLE 0 LEN 0 NZ 0 CHECKSUM 0
 -- EXPECT: TABLE 1 LEN 1 NZ 1 CHECKSUM 5
 -- EXPECT: TABLE 2 LEN 2 NZ 1 CHECKSUM 22

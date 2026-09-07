@@ -1,4 +1,6 @@
--- bug_18.lua — gate ✓, no table ops in body; a[0], a[1] after → dyn ×2.
+-- bug_18.lua — gate ✓ (literal 4), no table ops in the body: the x/y swap is pure
+-- register ping-pong (the coalesced Moves survive simplify). a[0]/a[1] land after the
+-- loop → 2 dyn sets. The stats twin of bug_17 with an allocator torture loop bolted on.
 -- EXPECT: TABLE 0 LEN 2 NZ 2 CHECKSUM 65
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0
