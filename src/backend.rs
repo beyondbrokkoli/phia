@@ -540,8 +540,10 @@ impl IrBackend {
 
                         if limit_is_invariant {
                             let mut clobbered_roots = HashSet::new();
-                            let mut hoists = BTreeSet::new(); // <-- Changed to BTreeSet
-                            let mut upgrades = Vec::new();
+                            let mut hoists = BTreeSet::new();
+                            // PATCH D: upgrades are now (block, index, instr) — they can land in any
+                            // block of the loop region, not just the direct body.
+                            let mut upgrades: Vec<(BlockId, usize, Instruction)> = Vec::new();
 
                             // PASS 1: Read-Only, REGION-WIDE. A dynamic SetTable anywhere in the
                             // loop's region (nested loop body, post-nested tail) can resize the
@@ -571,39 +573,61 @@ impl IrBackend {
                             if abort_all { continue; } // Safety valve: bail out!
 
                             // PASS 2: Read-Only. Determine which instructions to upgrade.
-                            for (i, instr) in self.program.blocks[body_id].instrs.iter().enumerate() {
-                                match instr {
-                                    Instruction::SetTable { table, key, val } => {
-                                        // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
-                                        let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
-                                        if *def_b >= header_id { continue; }
+                            // PATCH D: scan the WHOLE loop region (from Patch A's loop_region), not
+                            // just the direct body block. Soundness, per access:
+                            //   * KEY:   key_offset folding to Some(0) proves the operand holds the
+                            //     iteration-ENTRY induction value — the exact register the header's
+                            //     Less proved < limit. SSA fixes that value for the entire iteration:
+                            //     it cannot change anywhere in the region without minting a new vreg,
+                            //     which breaks the trace and auto-declines. The register IS the proof;
+                            //     the access's position in the region is irrelevant. (Patch B's +0
+                            //     keys are covered: `φi + 0` folds to Some(0) and holds that value.)
+                            //   * TABLE: def block < header (unchanged S2 check).
+                            //   * POINTER: PASS 1 already poisoned any root with an unsafe-key write
+                            //     (key_offset != Some(0)) anywhere in the region — which is why Patch A
+                            //     had to land first, and why PASS 1 must NEVER be weakened to .is_none().
+                            // Headers are excluded by loop_region: they hold only phis + condition
+                            // lowering, never a SetTable, and a condition GetTable's key structurally
+                            // cannot trace to idx_reg (idx_reg IS its result — see gauntlet_pD).
+                            // Instructions already upgraded to *Fast by an earlier (outer) pass match
+                            // neither arm here, so no double-upgrade is possible.
+                            for &blk in &region {
+                                for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
+                                    match instr {
+                                        Instruction::SetTable { table, key, val } => {
+                                            // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
+                                            let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
+                                            if *def_b >= header_id { continue; }
 
-                                        if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                            if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
-                                                upgrades.push((i, Instruction::SetTableFast { table: *table, key: *key, val: *val }));
-                                                hoists.insert(*table);
+                                            if let Some(root) = get_table_root(&self.program.blocks, *table) {
+                                                // PATCH B predicate, carried into the region scan.
+                                                if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
+                                                    upgrades.push((blk, i, Instruction::SetTableFast { table: *table, key: *key, val: *val }));
+                                                    hoists.insert(*table);
+                                                }
                                             }
                                         }
-                                    }
-                                    Instruction::GetTable { target, table, key } => {
-                                        // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
-                                        let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
-                                        if *def_b >= header_id { continue; }
+                                        Instruction::GetTable { target, table, key } => {
+                                            // S2 DOMINANCE CHECK: Only hoist pointers defined BEFORE the loop.
+                                            let (def_b, _) = def_map.get(table).unwrap_or(&(0,0));
+                                            if *def_b >= header_id { continue; }
 
-                                        if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                            if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
-                                                upgrades.push((i, Instruction::GetTableFast { target: *target, table: *table, key: *key }));
-                                                hoists.insert(*table);
+                                            if let Some(root) = get_table_root(&self.program.blocks, *table) {
+                                                // PATCH B predicate, carried into the region scan.
+                                                if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
+                                                    upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: *table, key: *key }));
+                                                    hoists.insert(*table);
+                                                }
                                             }
                                         }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
                             }
 
                             // PASS 3: Mutate!
-                            for (i, new_instr) in upgrades {
-                                self.program.blocks[body_id].instrs[i] = new_instr;
+                            for (blk, i, new_instr) in upgrades {
+                                self.program.blocks[blk].instrs[i] = new_instr;
                             }
 
                             // FIX: Structurally locate the true pre-header block
