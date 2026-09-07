@@ -484,22 +484,41 @@ impl IrBackend {
             }
         };
 
-        // Helper: Check if a key traces directly back to idx_reg via only Moves.
-        // Uses `blocks` argument explicitly so `self` is NOT locked.
-        let is_safe_key = |blocks: &[BasicBlock], key_reg: RegId, idx_reg: RegId| -> bool {
+        // Follows Integer Moves and Add/Sub-with-a-constant, folding the constant
+        // offsets. SSA makes the chain acyclic: every operand is defined strictly
+        // earlier, so the loop terminates. LoadInt keys, GetTable results, Phis,
+        // and non-const arithmetic all return None. Uses `blocks` explicitly so
+        // `self` is NOT locked (same pattern as get_table_root).
+        let key_offset = |blocks: &[BasicBlock], key_reg: RegId, idx_reg: RegId| -> Option<i64> {
+            // A register is a compile-time constant if it is a single LoadInt.
+            // (def_map is all we have at optimize() time — consts_i doesn't
+            // exist until propagate_constants, three passes later.)
+            let const_of = |blocks: &[BasicBlock], r: RegId| -> Option<i64> {
+                match def_map.get(&r) {
+                    Some(&(b, i)) => match &blocks[b].instrs[i] {
+                        Instruction::LoadInt { val, .. } => Some(*val),
+                        _ => None,
+                    },
+                    None => None,
+                }
+            };
             let mut curr = key_reg;
+            let mut off: i64 = 0;
             loop {
-                if curr == idx_reg { return true; }
-                if let Some(&(b, i)) = def_map.get(&curr) {
-                    match &blocks[b].instrs[i] {
-                        Instruction::Move { source, ty, .. } if *ty == crate::ast::StaticType::Integer => {
-                            curr = source.clone();
-                            continue;
-                        }
-                        _ => return false,
+                if curr == idx_reg { return Some(off); }
+                let &(b, i) = def_map.get(&curr)?;
+                match &blocks[b].instrs[i] {
+                    Instruction::Move { source, ty, .. } if *ty == StaticType::Integer => { curr = *source; }
+                    Instruction::Add { left, right, .. } => {
+                        if let Some(c) = const_of(blocks, *right) { off = off.wrapping_add(c); curr = *left; }
+                        else if let Some(c) = const_of(blocks, *left) { off = off.wrapping_add(c); curr = *right; }
+                        else { return None; }
                     }
-                } else {
-                    return false;
+                    Instruction::Sub { left, right, .. } => {
+                        off = off.wrapping_sub(const_of(blocks, *right)?);
+                        curr = *left;
+                    }
+                    _ => return None,
                 }
             }
         };
@@ -532,7 +551,13 @@ impl IrBackend {
                             'poison: for &blk in &region {
                                 for instr in &self.program.blocks[blk].instrs {
                                     if let Instruction::SetTable { table, key, .. } = instr {
-                                        if !is_safe_key(&self.program.blocks, *key, idx_reg) {
+                                        // PATCH B: unsafe == "not provably equal to the induction
+                                        // value" — that is BOTH None (untraceable) AND Some(off != 0)
+                                        // (provably different). `.is_none()` here would let `i + 300`
+                                        // writes escape the poison scan: the single most dangerous
+                                        // way to write this line. PASS 1 must stay the exact
+                                        // negation of PASS 2's predicate.
+                                        if key_offset(&self.program.blocks, *key, idx_reg) != Some(0) {
                                             match get_table_root(&self.program.blocks, *table) {
                                                 Some(root) => { clobbered_roots.insert(root); }
                                                 None => { abort_all = true; break 'poison; }
@@ -554,7 +579,7 @@ impl IrBackend {
                                         if *def_b >= header_id { continue; }
 
                                         if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                            if is_safe_key(&self.program.blocks, *key, idx_reg) && !clobbered_roots.contains(&root) {
+                                            if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
                                                 upgrades.push((i, Instruction::SetTableFast { table: *table, key: *key, val: *val }));
                                                 hoists.insert(*table);
                                             }
@@ -566,7 +591,7 @@ impl IrBackend {
                                         if *def_b >= header_id { continue; }
 
                                         if let Some(root) = get_table_root(&self.program.blocks, *table) {
-                                            if is_safe_key(&self.program.blocks, *key, idx_reg) && !clobbered_roots.contains(&root) {
+                                            if key_offset(&self.program.blocks, *key, idx_reg) == Some(0) && !clobbered_roots.contains(&root) {
                                                 upgrades.push((i, Instruction::GetTableFast { target: *target, table: *table, key: *key }));
                                                 hoists.insert(*table);
                                             }
