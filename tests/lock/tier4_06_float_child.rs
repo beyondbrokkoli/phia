@@ -6,16 +6,18 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r21 = 0i64;
     let mut b_r21 = false;
+    let mut f_r24 = 0f64;
     let mut t_r21 = 0i64;
     let mut t_r22 = 0i64;
-    let mut p_r22: *mut i64 = std::ptr::null_mut();
+    let mut p_r22: *mut f64 = std::ptr::null_mut();
     let mut len_r22 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     tables.push(Box::new(Table::new()));
     t_r21 = tables.len() as i64;
-    tables.push(Box::new(Table::new()));
+    tables.push(Box::new(Table::new_float()));
     t_r22 = tables.len() as i64;
+    f_r24 = 0.5;
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
@@ -28,11 +30,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.farray.len() {
+        t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = 0;
+        *t.farray.get_unchecked_mut(idx) = f_r24;
     }
     let k = 0;
     if k < 0 {
@@ -69,7 +71,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     } else {
         0
     };
-    let lim = 10;
+    let lim = 8;
     if lim > 0 {
         if t_r22 == 0 {
             panic!("Runtime Error: table is nil");
@@ -78,8 +80,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.farray.len() {
+            t.farray.resize(lim as usize, 0.0);
         }
     }
     if t_r22 == 0 {
@@ -89,19 +91,20 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r22 = t.array.len();
-    p_r22 = t.array.as_mut_ptr();
+    len_r22 = t.farray.len();
+    p_r22 = t.farray.as_mut_ptr();
     i_r21 = 0;
     loop {
-        b_r21 = i_r21 < 10;
+        b_r21 = i_r21 < 8;
         if b_r21 {
+            f_r24 = 0.25;
             let k = i_r21;
             if k < 0 {
                 panic!("Runtime Error: Negative index in fast path");
             }
             if (k as usize) < len_r22 {
                 unsafe {
-                    *p_r22.add(k as usize) = 1;
+                    *p_r22.add(k as usize) = f_r24;
                 }
             } else {
                 panic!("optimizer invariant violated: fast-path bounds check failed");

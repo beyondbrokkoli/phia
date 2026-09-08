@@ -71,6 +71,12 @@ local LOCKED_TESTS = {
     "float_06_lazy_read.lua",
     "float_09_fast_rw.lua",
     "float_10_handle_mode.lua",
+    "tier4_01_flat_plus_nested.lua",
+    "tier4_02_nested_read.lua",
+    "tier4_03_rebind_decline.lua",
+    "tier4_04_zero_iter.lua",
+    "tier4_06_float_child.lua",
+    "tier4_07_reg_limit_decline.lua",
 }
 
 local LOCK_DIR = "tests/lock"

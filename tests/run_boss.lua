@@ -80,6 +80,12 @@ local POSITIVE = {
     "float_06_lazy_read.lua",
     "float_09_fast_rw.lua",
     "float_10_handle_mode.lua",
+    "tier4_01_flat_plus_nested.lua",
+    "tier4_02_nested_read.lua",
+    "tier4_03_rebind_decline.lua",
+    "tier4_04_zero_iter.lua",
+    "tier4_06_float_child.lua",
+    "tier4_07_reg_limit_decline.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -106,6 +112,7 @@ local PANIC = {
     "float_12_neg_init_fast_panic.lua",
     "nested_02_lvalue_type.lua",
     "nested_09_nil_panic.lua",
+    "tier4_05_nil_child_panic.lua",
 }
 
 -- ---------------------------------------------------------------- reporting
