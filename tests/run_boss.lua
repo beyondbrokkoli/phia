@@ -75,6 +75,11 @@ local POSITIVE = {
     "nested_08_fresh_store.lua",
     "nested_10_alias_shared.lua",
     "nested_15_read_then_fresh.lua",
+    "float_01_store_read.lua",
+    "float_02_loop_gate.lua",
+    "float_06_lazy_read.lua",
+    "float_09_fast_rw.lua",
+    "float_10_handle_mode.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -85,12 +90,19 @@ local NEGATIVE = {
     "nested_12_index_non_table.lua",
     "nested_13_recursive_type.lua",
     "nested_14_bool_element.lua",
+    "float_03_mixed_arith.lua",
+    "float_04_mixed_store.lua",
+    "float_05_float_index.lua",
+    "float_07_while_cond.lua",
+    "float_08_assign_mismatch.lua",
 }
 local PANIC = {
     "bug_05a.lua",
     "bug_05b.lua",
     "firewall_neg_read_panic.lua",
     "firewall_neg_init_panic.lua",
+    "float_11_neg_index_panic.lua",
+    "float_12_neg_init_fast_panic.lua",
     "nested_02_lvalue_type.lua",
     "nested_09_nil_panic.lua",
 }
@@ -114,6 +126,11 @@ end
 
 -- ---------------------------------------------------------------- machinery
 local function build_ok(src)
+    -- Bump the source mtime first: cargo's rerun triggers are mtime-based,
+    -- and a same-path content swap with an older mtime would silently skip
+    -- build.rs. The stamp in main.rs catches any survivor loudly; this
+    -- touch makes sure the rebuild actually happens in the first place.
+    os.execute("touch '" .. src .. "'")
     local cmd = string.format("PHIA_SOURCE='%s' timeout 120 cargo build --release --quiet 2> %s", src, BERR)
     local res = os.execute(cmd)
     return res == 0 or res == true
@@ -294,6 +311,7 @@ for _, name in ipairs(NEGATIVE) do
     elseif parse_expects(src, "EXPECT")[1] or parse_expects(src, "EXPECT_PANIC")[1] then
         report_fail("negative", name, "carries EXPECT/EXPECT_PANIC pins — classification conflict")
     else
+        os.execute("touch '" .. src .. "'") -- same mtime defense as build_ok
         local cmd = string.format("RUST_BACKTRACE=1 PHIA_SOURCE='%s' timeout 120 cargo build --release --quiet 2> %s", src, BERR)
         local res = os.execute(cmd)
         if res == 0 or res == true then

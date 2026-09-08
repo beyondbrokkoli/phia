@@ -27,6 +27,7 @@ use crate::ast::{Expr, Stmt, StaticType, BinOp};
 #[derive(Debug, Clone, PartialEq)]
 enum Ty {
     Integer,
+    Float,
     Boolean,
     Table(Box<Ty>),
     Var(usize),
@@ -176,6 +177,7 @@ impl TypeChecker {
     fn display(&self, ty: &Ty) -> String {
         match self.deref(ty) {
             Ty::Integer => "Integer".to_string(),
+            Ty::Float => "Float".to_string(),
             Ty::Boolean => "Boolean".to_string(),
             Ty::Var(_) => "?".to_string(),
             Ty::Table(inner) => format!("Table({})", self.display(&inner)),
@@ -188,6 +190,7 @@ impl TypeChecker {
     fn resolve_static(&self, ty: &Ty) -> StaticType {
         match self.deref(ty) {
             Ty::Integer => StaticType::Integer,
+            Ty::Float => StaticType::Float,
             // bind() rejects Boolean bindings, so this is a checker bug,
             // not a program error — fail loudly instead of mis-lowering.
             Ty::Boolean => panic!("checker bug: Boolean leaked into a table type"),
@@ -245,7 +248,9 @@ impl TypeChecker {
                         let (e, a) = (expected_type.clone(), actual_type.clone());
                         self.unify(&e, &a);
                     }
-                    (Ty::Integer, Ty::Integer) | (Ty::Boolean, Ty::Boolean) => {}
+                    (Ty::Integer, Ty::Integer)
+                    | (Ty::Float, Ty::Float)
+                    | (Ty::Boolean, Ty::Boolean) => {}
                     _ => panic!(
                         "Type Error (Rule #2 Violation): Cannot assign {} to variable '{}' of type {}",
                         self.display(&actual_type), name, self.display(&expected_type)
@@ -304,6 +309,7 @@ impl TypeChecker {
     fn check_expr(&mut self, expr: &Expr) -> Ty {
         match expr {
             Expr::Integer(_) => Ty::Integer,
+            Expr::Float(_) => Ty::Float,
             Expr::NewTable(id) => {
                 self.mint_table_var(*id);
                 Ty::Table(Box::new(Ty::Var(*id)))
@@ -340,18 +346,37 @@ impl TypeChecker {
                 let left_type = self.deref(&left_type);
                 let right_type = self.check_expr(right);
                 let right_type = self.deref(&right_type);
-                for operand in [&left_type, &right_type] {
-                    match operand {
-                        Ty::Integer => {}
-                        // A deferred operand used as an Integer constrains
-                        // its variable to Integer — this, not the read, is
-                        // what the old read-before-write lock approximated.
-                        Ty::Var(v) => { let v = *v; self.bind(v, &Ty::Integer); }
-                        _ => panic!("Type Error: Binary operations currently only support Integers"),
+                // Arithmetic is strictly same-type numeric: Integer with
+                // Integer, Float with Float. No coercion — a mixed operand
+                // pair is a build error, not a silent promotion (a pinned,
+                // deliberate divergence from Lua's all-numbers-are-numbers).
+                // A deferred operand takes its type from the concrete
+                // sibling — this, not the read, is what the old
+                // read-before-write lock approximated.
+                let operand_ty = match (&left_type, &right_type) {
+                    (Ty::Integer, Ty::Integer) => Ty::Integer,
+                    (Ty::Float, Ty::Float) => Ty::Float,
+                    (Ty::Integer, Ty::Float) | (Ty::Float, Ty::Integer) =>
+                        panic!("Type Error: Binary operations do not support mixed Integer and Float"),
+                    (Ty::Var(_), Ty::Integer | Ty::Float) => {
+                        let t = right_type.clone();
+                        if let Ty::Var(v) = left_type { self.bind(v, &t); }
+                        t
                     }
-                }
+                    (Ty::Integer | Ty::Float, Ty::Var(_)) => {
+                        let t = left_type.clone();
+                        if let Ty::Var(v) = right_type { self.bind(v, &t); }
+                        t
+                    }
+                    (Ty::Var(_), Ty::Var(_)) => {
+                        let (l, r) = (left_type.clone(), right_type.clone());
+                        self.unify(&l, &r);
+                        l
+                    }
+                    _ => panic!("Type Error: Binary operations currently only support Integers"),
+                };
                 match op {
-                    BinOp::Add | BinOp::Sub => Ty::Integer,
+                    BinOp::Add | BinOp::Sub => operand_ty,
                     BinOp::LessThan => Ty::Boolean,
                 }
             }

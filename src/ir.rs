@@ -19,6 +19,7 @@ pub enum Terminator {
 #[derive(Debug, Clone)]
 pub enum Instruction {
     LoadInt { target: RegId, val: i64 },
+    LoadFloat { target: RegId, val: f64 },
     NewTable { target: RegId, ty: StaticType },
     SetTable { table: RegId, key: RegId, val: RegId, ty: StaticType },
     GetTable { target: RegId, table: RegId, key: RegId, ty: StaticType },

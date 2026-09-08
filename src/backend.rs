@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet, BTreeSet};
 use crate::ast::StaticType;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Pool { Int, Bool, Table }
+enum Pool { Int, Float, Bool, Table }
 
 fn pool_of(t: &StaticType) -> Pool {
     match t {
         StaticType::Integer => Pool::Int,
+        StaticType::Float => Pool::Float,
         StaticType::Boolean => Pool::Bool,
         StaticType::Table(_) | StaticType::UnknownTable(_) => Pool::Table,
     }
@@ -16,7 +17,8 @@ fn pool_of(t: &StaticType) -> Pool {
 
 fn def_reg(i: &Instruction) -> Option<RegId> {
     match i {
-        Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. }
+        Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+        | Instruction::NewTable { target, .. }
         | Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
         | Instruction::Move { target, .. } | Instruction::Add { target, .. }
         | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
@@ -28,6 +30,7 @@ fn def_reg(i: &Instruction) -> Option<RegId> {
 fn def_type(i: &Instruction) -> Option<StaticType> {
     match i {
         Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. } => Some(StaticType::Integer),
+        Instruction::LoadFloat { .. } => Some(StaticType::Float),
         Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
         Instruction::Less { .. } => Some(StaticType::Boolean),
         Instruction::NewTable { ty, .. } => Some(ty.clone()),
@@ -38,7 +41,7 @@ fn def_type(i: &Instruction) -> Option<StaticType> {
 
 fn use_regs(i: &Instruction) -> Vec<RegId> {
     match i {
-        Instruction::LoadInt { .. } | Instruction::NewTable { .. } => vec![],
+        Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::NewTable { .. } => vec![],
         Instruction::Move { source, .. } => vec![*source],
         Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
         | Instruction::Less { left, right, .. } => vec![*left, *right],
@@ -53,7 +56,8 @@ fn use_regs(i: &Instruction) -> Vec<RegId> {
 fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
     let g = |r: &mut RegId| *r = f(*r);
     match i {
-        Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. } => g(target),
+        Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+        | Instruction::NewTable { target, .. } => g(target),
         Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => { g(table); g(key); g(val); }
         Instruction::GetTable { target, table, key, .. } | Instruction::GetTableFast { target, table, key, .. } => { g(target); g(table); g(key); }
         Instruction::Move { target, source, .. } => { g(target); g(source); }
@@ -168,30 +172,42 @@ fn indent(d: usize) -> String { "    ".repeat(d) }
 
 pub struct IrBackend {
     pub program: IrProgram,
-    n_int: usize, n_bool: usize, n_table: usize,
-    phys_base: RegId, did_alloc: bool,
+    n_int: usize, n_bool: usize, n_float: usize, n_table: usize,
+    phys_base: RegId, float_base: RegId, did_alloc: bool,
     consts_i: HashMap<RegId, i64>,
     consts_b: HashMap<RegId, bool>,
+    // physical reg -> pool, captured by allocate_registers: emission needs
+    // it to pick i_r/f_r renderings for the untyped arith instructions.
+    // Float physicals live in a disjoint id range, so the bare-id lookup
+    // is unambiguous.
+    phys_pools: HashMap<RegId, Pool>,
 }
 
 impl IrBackend {
     pub fn new(program: IrProgram) -> Self {
         Self {
             program,
-            n_int: 0, n_bool: 0, n_table: 0,
-            phys_base: 0, did_alloc: false,
+            n_int: 0, n_bool: 0, n_float: 0, n_table: 0,
+            phys_base: 0, float_base: 0, did_alloc: false,
             consts_i: HashMap::new(), consts_b: HashMap::new(),
+            phys_pools: HashMap::new(),
         }
     }
 
     fn iop_str(&self, r: RegId) -> String {
         self.consts_i.get(&r).map(|v| v.to_string())
-            .unwrap_or_else(|| format!("i_r{}", r))
+            .unwrap_or_else(|| format!("i_r{r}"))
     }
     fn bop_str(&self, r: RegId) -> String {
         self.consts_b.get(&r)
             .map(|v| if *v { "true" } else { "false" }.to_string())
-            .unwrap_or_else(|| format!("b_r{}", r))
+            .unwrap_or_else(|| format!("b_r{r}"))
+    }
+    // Floats are never compile-time folded (no consts_f), so a float
+    // operand is always a physical register.
+    fn fop_str(&self, r: RegId) -> String { format!("f_r{r}") }
+    fn is_float_reg(&self, r: RegId) -> bool {
+        self.phys_pools.get(&r) == Some(&Pool::Float)
     }
 
     fn reg_uses(&self, r: RegId) -> usize {
@@ -316,6 +332,9 @@ impl IrBackend {
                                     { if let Some(&v) = ci.get(source) { ci.insert(*target, v); } }
                                 StaticType::Boolean =>
                                     { if let Some(&v) = cb.get(source) { cb.insert(*target, v); } }
+                                // float constant folding is not implemented —
+                                // float operands always render as registers
+                                StaticType::Float => {}
                                 StaticType::Table(_) | StaticType::UnknownTable(_) => {}
                             },
                         _ => {}
@@ -338,18 +357,36 @@ impl IrBackend {
             .chain(self.consts_b.keys().copied()).collect();
 
         // 1. types
+        // Add/Sub are untyped in the IR: their targets inherit the operand
+        // pool (Integer or Float) — pass 2 fixpoints that through chains
+        // (`y = x + 1` needs x's pool first).
         let mut ty: HashMap<RegId, Pool> = HashMap::new();
         for b in blocks {
             for i in &b.instrs {
-                if let (Some(d), Some(t)) = (def_reg(i), def_type(i)) {
-                    if skip.contains(&d) { continue; }
-                    let p = pool_of(&t);
-                    match ty.insert(d, p) {
-                        Some(old) if old != p => panic!("reg {} has conflicting types", d),
-                        _ => {}
+                let (Some(d), Some(t)) = (def_reg(i), def_type(i)) else { continue };
+                if skip.contains(&d) { continue; }
+                if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }) { continue; }
+                let p = pool_of(&t);
+                match ty.insert(d, p) {
+                    Some(old) if old != p => panic!("reg {d} has conflicting types"),
+                    _ => {}
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for b in blocks {
+                for i in &b.instrs {
+                    let (Instruction::Add { target, left, right, .. }
+                    | Instruction::Sub { target, left, right, .. }) = i else { continue };
+                    if skip.contains(target) || ty.contains_key(target) { continue; }
+                    if let Some(&p) = ty.get(left).or_else(|| ty.get(right)) {
+                        ty.insert(*target, p);
+                        changed = true;
                     }
                 }
             }
+            if !changed { break; }
         }
         for b in blocks {
             for i in &b.instrs {
@@ -398,6 +435,19 @@ impl IrBackend {
 
         let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
+        // Int/Bool/Table deliberately SHARE the physical id space (i_r12,
+        // b_r12, t_r12 coexist — the prefix disambiguates, and that frozen
+        // layout is what the lock baselines encode). Float is different:
+        // emission must ask "is reg N float?" from N alone, so float
+        // physicals are minted from a disjoint range above every other
+        // pool's count. Integer programs have no float vregs — their ids,
+        // and therefore their locked bytes, are untouched.
+        let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
+        let max_other = pool_count(Pool::Int)
+            .max(pool_count(Pool::Bool))
+            .max(pool_count(Pool::Table));
+        let float_base = base + max_other as RegId;
+
         // LOAD-BEARING: the `r` tiebreak makes this a total order. Without it,
         // equal-interval regs fall back to HashMap iteration order (random per
         // process) and allocation becomes non-deterministic.
@@ -407,6 +457,7 @@ impl IrBackend {
         let mut free: HashMap<Pool, Vec<RegId>> = HashMap::new();
         let mut count: HashMap<Pool, usize> = HashMap::new();
         let mut map: HashMap<RegId, RegId> = HashMap::new();
+        let mut phys_pools: HashMap<RegId, Pool> = HashMap::new();
 
         for r in vregs {
             let p = ty[&r];
@@ -422,10 +473,12 @@ impl IrBackend {
 
             let phys = free.entry(p).or_default().pop().unwrap_or_else(|| {
                 let c = count.entry(p).or_insert(0);
-                let n = *c; *c += 1; base + n as RegId
+                let n = *c; *c += 1;
+                if p == Pool::Float { float_base + n as RegId } else { base + n as RegId }
             });
             act.push((phys, end));
             map.insert(r, phys);
+            phys_pools.insert(phys, p);
         }
 
         // 4. rewrite references (const vregs stay identity: codegen looks
@@ -445,8 +498,11 @@ impl IrBackend {
 
         self.n_int   = *count.entry(Pool::Int).or_insert(0);
         self.n_bool  = *count.entry(Pool::Bool).or_insert(0);
+        self.n_float = *count.entry(Pool::Float).or_insert(0);
         self.n_table = *count.entry(Pool::Table).or_insert(0);
         self.phys_base = base;
+        self.float_base = float_base;
+        self.phys_pools = phys_pools;
         self.did_alloc = true;
     }
 
@@ -455,7 +511,8 @@ impl IrBackend {
         for block in &self.program.blocks {
             for (i, instr) in block.instrs.iter().enumerate() {
                 match instr {
-                    Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. } |
+                    Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+                    | Instruction::NewTable { target, .. } |
                     Instruction::GetTable { target, .. } | Instruction::Move { target, .. } |
                     Instruction::Add { target, .. } | Instruction::Sub { target, .. } |
                     Instruction::Less { target, .. } | Instruction::Phi { target, .. } |
@@ -784,7 +841,8 @@ impl IrBackend {
         }
     }
 
-    fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize, uses_handles: bool) {
+    fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize, uses_handles: bool,
+                  float_roots: &HashSet<RegId>) {
         // compile-time-computed defs emit nothing: their uses are literals
         if let Some(t) = def_reg(instr) {
             if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
@@ -801,12 +859,30 @@ impl IrBackend {
         match instr {
             Instruction::LoadInt { target, val } =>
                 out.push_str(&format!("{ind}i_r{target} = {val};\n")),
-            Instruction::NewTable { target, .. } => {
+            Instruction::LoadFloat { target, val } =>
+                out.push_str(&format!("{ind}f_r{target} = {val:?};\n")),
+            Instruction::NewTable { target, ty } => {
+                // A table is monomorphic: its static element type picks the
+                // storage side at construction and it never changes.
+                let float_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::Float));
                 if uses_handles {
                     // 1-based arena handle; 0 stays reserved for null
+                    if float_tbl {
+                        out.push_str(&format!(
+                            "{ind}tables.push(Box::new(Table::new_float()));\n\
+                             {ind}t_r{target} = tables.len() as i64;\n"
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "{ind}tables.push(Box::new(Table::new()));\n\
+                             {ind}t_r{target} = tables.len() as i64;\n"
+                        ));
+                    }
+                } else if float_tbl {
                     out.push_str(&format!(
-                        "{ind}tables.push(Box::new(Table::new()));\n\
-                         {ind}t_r{target} = tables.len() as i64;\n"
+                        "{ind}let mut new_table = Box::new(Table::new_float());\n\
+                         {ind}t_r{target} = &mut *new_table as *mut Table;\n\
+                         {ind}tables.push(new_table);\n"
                     ));
                 } else {
                     out.push_str(&format!(
@@ -819,24 +895,48 @@ impl IrBackend {
             Instruction::Move { target, source, ty } => match ty {
                 StaticType::Integer => out.push_str(&format!("{ind}i_r{target} = {};\n", self.iop_str(*source))),
                 StaticType::Boolean => out.push_str(&format!("{ind}b_r{target} = {};\n", self.bop_str(*source))),
+                StaticType::Float => out.push_str(&format!("{ind}f_r{target} = {};\n", self.fop_str(*source))),
                 StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("{ind}t_r{target} = t_r{source};\n")),
             },
-            Instruction::Add { target, left, right } =>
-                out.push_str(&format!("{ind}i_r{target} = {} + {};\n", self.iop_str(*left), self.iop_str(*right))),
-            Instruction::Sub { target, left, right } =>
-                out.push_str(&format!("{ind}i_r{target} = {} - {};\n", self.iop_str(*left), self.iop_str(*right))),
-            Instruction::Less { target, left, right } =>
-                out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right))),
+            Instruction::Add { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} + {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} + {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::Sub { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} - {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} - {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::Less { target, left, right } => {
+                if self.is_float_reg(*left) {
+                    out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
 
             Instruction::EnsureCapacity { table, limit } => {
+                // Storage side comes from the root's element kind (every
+                // EC'd root also carries fast ops; monomorphism guarantees
+                // they agree). Integer roots render the frozen template.
+                let (fld, zero) = if float_roots.contains(table) {
+                    ("farray", "0.0")
+                } else {
+                    ("array", "0")
+                };
                 if uses_handles {
                     out.push_str(&format!(
                         "{ind}let lim = {lim};\n\
                          {ind}if lim > 0 {{\n\
                          {ind}    if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          {ind}    let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {ind}    if (lim as usize) > t.array.len() {{\n\
-                         {ind}        t.array.resize(lim as usize, 0);\n\
+                         {ind}    if (lim as usize) > t.{fld}.len() {{\n\
+                         {ind}        t.{fld}.resize(lim as usize, {zero});\n\
                          {ind}    }}\n\
                          {ind}}}\n",
                         lim = self.iop_str(*limit)
@@ -846,8 +946,8 @@ impl IrBackend {
                         "{ind}let lim = {lim};\n\
                          {ind}if lim > 0 {{\n\
                          {ind}    let t = unsafe {{ &mut *t_r{table} }};\n\
-                         {ind}    if (lim as usize) > t.array.len() {{\n\
-                         {ind}        t.array.resize(lim as usize, 0);\n\
+                         {ind}    if (lim as usize) > t.{fld}.len() {{\n\
+                         {ind}        t.{fld}.resize(lim as usize, {zero});\n\
                          {ind}    }}\n\
                          {ind}}}\n",
                         lim = self.iop_str(*limit)
@@ -855,56 +955,86 @@ impl IrBackend {
                 }
             }
             Instruction::HoistRawPtr { table } => {
+                let fld = if float_roots.contains(table) { "farray" } else { "array" };
                 if uses_handles {
                     out.push_str(&format!(
                         "{ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {ind}len_r{table} = t.array.len();\n\
-                         {ind}p_r{table} = t.array.as_mut_ptr();\n"
+                         {ind}len_r{table} = t.{fld}.len();\n\
+                         {ind}p_r{table} = t.{fld}.as_mut_ptr();\n"
                     ));
                 } else {
                     out.push_str(&format!(
-                        "{ind}len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
-                         {ind}p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n"
+                        "{ind}len_r{table} = unsafe {{ (*t_r{table}).{fld}.len() }};\n\
+                         {ind}p_r{table} = unsafe {{ (*t_r{table}).{fld}.as_mut_ptr() }};\n"
                     ));
                 }
             }
 
             Instruction::SetTable { table, key, val, ty } => {
+                // Element-kind selects storage side and zero. The integer and
+                // table cases render byte-identically to the frozen templates
+                // (fld="array", zero="0"); floats take the f64 side.
                 if uses_handles {
-                    let val_str = if is_tbl(ty) { format!("t_r{val}") } else { self.iop_str(*val) };
+                    let (fld, zero, val_str) = if is_tbl(ty) {
+                        ("array", "0", format!("t_r{val}"))
+                    } else if matches!(ty, StaticType::Float) {
+                        ("farray", "0.0", format!("f_r{val}"))
+                    } else {
+                        ("array", "0", self.iop_str(*val))
+                    };
                     out.push_str(&format!(
                         "{ind}let k = {key};\n\
                          {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                          {ind}let idx = k as usize;\n\
                          {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
-                         {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val_str}; }}\n",
+                         {ind}if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
+                         {ind}unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
                         key = self.iop_str(*key)
                     ));
                 } else {
+                    let (fld, zero, val_str) = if matches!(ty, StaticType::Float) {
+                        ("farray", "0.0", self.fop_str(*val))
+                    } else {
+                        ("array", "0", self.iop_str(*val))
+                    };
                     out.push_str(&format!(
                         "{ind}let k = {key};\n\
                          {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                          {ind}let idx = k as usize;\n\
                          {ind}let t = unsafe {{ &mut *t_r{table} }};\n\
-                         {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
-                         {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
-                        key = self.iop_str(*key), val = self.iop_str(*val)
+                         {ind}if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
+                         {ind}unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
+                        key = self.iop_str(*key)
                     ));
                 }
             }
             Instruction::GetTable { target, table, key, ty } => {
                 if uses_handles {
-                    let target_str = if is_tbl(ty) { format!("t_r{target}") } else { format!("i_r{target}") };
+                    let (fld, zero, target_str) = if is_tbl(ty) {
+                        ("array", "0", format!("t_r{target}"))
+                    } else if matches!(ty, StaticType::Float) {
+                        ("farray", "0.0", format!("f_r{target}"))
+                    } else {
+                        ("array", "0", format!("i_r{target}"))
+                    };
                     out.push_str(&format!(
                         "{ind}let k = {key};\n\
                          {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                          {ind}let idx = k as usize;\n\
                          {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          {ind}let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {ind}{target_str} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                         {ind}{target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                        key = self.iop_str(*key)
+                    ));
+                } else if matches!(ty, StaticType::Float) {
+                    out.push_str(&format!(
+                        "{ind}let k = {key};\n\
+                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         {ind}let idx = k as usize;\n\
+                         {ind}let t = unsafe {{ &*t_r{table} }};\n\
+                         {ind}f_r{target} = if idx < t.farray.len() {{ unsafe {{ *t.farray.get_unchecked(idx) }} }} else {{ 0.0 }};\n",
                         key = self.iop_str(*key)
                     ));
                 } else {
@@ -919,7 +1049,13 @@ impl IrBackend {
                 }
             }
             Instruction::SetTableFast { table, key, val, ty } => {
-                let val_str = if uses_handles && is_tbl(ty) { format!("t_r{val}") } else { self.iop_str(*val) };
+                let val_str = if uses_handles && is_tbl(ty) {
+                    format!("t_r{val}")
+                } else if matches!(ty, StaticType::Float) {
+                    self.fop_str(*val)
+                } else {
+                    self.iop_str(*val)
+                };
                 out.push_str(&format!(
                     "{ind}let k = {key};\n\
                      {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
@@ -932,7 +1068,13 @@ impl IrBackend {
                 ));
             }
             Instruction::GetTableFast { target, table, key, ty } => {
-                let target_str = if uses_handles && is_tbl(ty) { format!("t_r{target}") } else { format!("i_r{target}") };
+                let target_str = if uses_handles && is_tbl(ty) {
+                    format!("t_r{target}")
+                } else if matches!(ty, StaticType::Float) {
+                    format!("f_r{target}")
+                } else {
+                    format!("i_r{target}")
+                };
                 out.push_str(&format!(
                     "{ind}let k = {key};\n\
                      {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
@@ -950,11 +1092,12 @@ impl IrBackend {
 
     /// Emit block `b` and everything that follows it, staying inside the loop
     /// whose header is `hdr` (a back edge to `hdr` closes the loop body).
-    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool], uses_handle: bool) {
+    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool], uses_handle: bool,
+                float_roots: &HashSet<RegId>) {
         if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
         emitted[b] = true;
         let block = &self.program.blocks[b];
-        for i in &block.instrs { self.emit_instr(out, i, d, uses_handle); }
+        for i in &block.instrs { self.emit_instr(out, i, d, uses_handle, float_roots); }
         match &block.terminator {
             None | Some(Terminator::Halt) => {
                 // early return == the dispatcher's `break 'cfg`: there is no
@@ -973,22 +1116,23 @@ impl IrBackend {
                             (*cond, *true_block, *false_block),
                         _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
                     };
-                    self.emit_loop(out, *t, cond, tb, d, emitted, uses_handle);
-                    self.emit_seq(out, fb, hdr, d, emitted, uses_handle);
+                    self.emit_loop(out, *t, cond, tb, d, emitted, uses_handle, float_roots);
+                    self.emit_seq(out, fb, hdr, d, emitted, uses_handle, float_roots);
                 } else {
-                    self.emit_seq(out, *t, hdr, d, emitted, uses_handle);
+                    self.emit_seq(out, *t, hdr, d, emitted, uses_handle, float_roots);
                 }
             }
             Some(Terminator::Branch { cond, true_block, false_block }) => {
                 // unreachable in practice (headers are entered via Jump), kept
                 // for totality — same handling as the Jump-into-header case
-                self.emit_loop(out, b, *cond, *true_block, d, emitted, uses_handle);
-                self.emit_seq(out, *false_block, hdr, d, emitted, uses_handle);
+                self.emit_loop(out, b, *cond, *true_block, d, emitted, uses_handle, float_roots);
+                self.emit_seq(out, *false_block, hdr, d, emitted, uses_handle, float_roots);
             }
         }
     }
 
-    fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool], uses_handle: bool) {
+    fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool], uses_handle: bool,
+                 float_roots: &HashSet<RegId>) {
         if !self.is_loop_header(h) {
             panic!("structured codegen: Branch in block {h} is not a loop header — `if` is not supported by this codegen");
         }
@@ -1015,16 +1159,16 @@ impl IrBackend {
 
         if let Some(c) = pretty {
             out.push_str(&format!("{ind}while {c} {{\n"));
-            self.emit_seq(out, body, Some(h), d + 1, emitted, uses_handle);
+            self.emit_seq(out, body, Some(h), d + 1, emitted, uses_handle, float_roots);
             out.push_str(&format!("{ind}}}\n"));
         } else {
             // General fallback: everything in the header runs every
             // iteration. Never fires on the current corpus — it exists so a
             // surprising CFG degrades to correct-but-ugly, not wrong.
             out.push_str(&format!("{ind}loop {{\n"));
-            for i in &block.instrs { self.emit_instr(out, i, d + 1, uses_handle); }
+            for i in &block.instrs { self.emit_instr(out, i, d + 1, uses_handle, float_roots); }
             out.push_str(&format!("{}if {} {{\n", indent(d + 1), self.bop_str(cond)));
-            self.emit_seq(out, body, Some(h), d + 2, emitted, uses_handle);
+            self.emit_seq(out, body, Some(h), d + 2, emitted, uses_handle, float_roots);
             out.push_str(&format!("{}    }} else {{\n", indent(d + 1)));
             out.push_str(&format!("{}        break;\n", indent(d + 1)));
             out.push_str(&format!("{}    }}\n{ind}}}\n", indent(d + 1)));
@@ -1051,6 +1195,7 @@ impl IrBackend {
         out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
 
         let mut fast_phys: HashSet<RegId> = HashSet::new();
+        let mut float_roots: HashSet<RegId> = HashSet::new();
         for b in &self.program.blocks {
             for i in &b.instrs {
                 match i {
@@ -1059,21 +1204,26 @@ impl IrBackend {
                     | Instruction::GetTableFast { table, .. } => { fast_phys.insert(*table); }
                     _ => {}
                 }
+                if let Instruction::SetTableFast { table, ty, .. } | Instruction::GetTableFast { table, ty, .. } = i {
+                    if matches!(ty, StaticType::Float) { float_roots.insert(*table); }
+                }
             }
         }
 
-        let (n_i, n_b, n_t, base) = if self.did_alloc {
-            (self.n_int, self.n_bool, self.n_table, self.phys_base as usize)
+        let (n_i, n_b, n_f, n_t, base, fbase) = if self.did_alloc {
+            (self.n_int, self.n_bool, self.n_float, self.n_table,
+             self.phys_base as usize, self.float_base as usize)
         } else {
             let mut max: RegId = 0;
             for b in &self.program.blocks {
                 for i in &b.instrs { if let Some(dd) = def_reg(i) { if dd > max { max = dd; } } }
             }
-            (max as usize + 1, max as usize + 1, max as usize + 1, 0usize)
+            (max as usize + 1, max as usize + 1, max as usize + 1, max as usize + 1, 0usize, 0usize)
         };
 
         for r in base..base + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
         for r in base..base + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }
+        for r in fbase..fbase + n_f { out.push_str(&format!("    let mut f_r{r} = 0f64;\n")); }
         for r in base..base + n_t {
             if uses_handles {
                 out.push_str(&format!("    let mut t_r{r} = 0i64;\n"));
@@ -1081,14 +1231,15 @@ impl IrBackend {
                 out.push_str(&format!("    let mut t_r{r}: *mut Table = std::ptr::null_mut();\n"));
             }
             if fast_phys.contains(&(r as RegId)) {
-                out.push_str(&format!("    let mut p_r{r}: *mut i64 = std::ptr::null_mut();\n"));
+                let ptr_ty = if float_roots.contains(&(r as RegId)) { "*mut f64" } else { "*mut i64" };
+                out.push_str(&format!("    let mut p_r{r}: {ptr_ty} = std::ptr::null_mut();\n"));
                 out.push_str(&format!("    let mut len_r{r} = 0usize;\n"));
             }
         }
         out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
         let mut emitted = vec![false; self.program.blocks.len()];
-        self.emit_seq(&mut out, 0, None, 1, &mut emitted, uses_handles);
+        self.emit_seq(&mut out, 0, None, 1, &mut emitted, uses_handles, &float_roots);
         let orphans: Vec<usize> = emitted.iter().enumerate()
             .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
         if !orphans.is_empty() {

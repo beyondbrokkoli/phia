@@ -3,6 +3,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticType {
     Integer,
+    Float,
     Boolean,
     UnknownTable(usize), // Unique ID for first-store inference
     Table(Box<StaticType>),
@@ -18,6 +19,7 @@ pub enum BinOp {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Integer(i64),
+    Float(f64),
     Identifier(String),
     NewTable(usize),
     TableIndex {

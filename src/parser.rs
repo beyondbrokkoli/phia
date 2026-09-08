@@ -118,6 +118,7 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> Expr {
         let mut expr = match self.tokens.next() {
             Some(Token::Integer(val)) => Expr::Integer(val),
+            Some(Token::Float(val)) => Expr::Float(val),
             Some(Token::Identifier(name)) => Expr::Identifier(name.to_string()),
             Some(Token::LeftBrace) => {
                 self.expect(Token::RightBrace);

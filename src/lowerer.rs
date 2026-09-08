@@ -300,6 +300,10 @@ impl IrLowerer {
                 self.emit(Instruction::LoadInt { target: reg, val: *val });
                 (reg, StaticType::Integer)
             }
+            Expr::Float(val) => {
+                self.emit(Instruction::LoadFloat { target: reg, val: *val });
+                (reg, StaticType::Float)
+            }
             Expr::NewTable(id) => {
                 let ty = self.type_map.get(id).cloned()
                     .unwrap_or(StaticType::Table(Box::new(StaticType::Integer)));

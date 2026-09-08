@@ -10,7 +10,7 @@
 -- keep their EC zeros — half the table is written by the ABSENCE of a
 -- store. One fast store per trip through the cached raw pointer; one
 -- HR at depth 0. Final: LEN 8000000, NZ 4000000,
--- CHECKSUM 16000000000000 (the first 4,000,000 odd integers: sum = N^2).
+-- CHECKSUM -6900387035215758080 (position-weighted, i64-wrapped at this scale).
 local pa_cozy_cabin = {}
 local pa_dream_limit = 8000000
 local pa_sheep_one = 0
@@ -32,7 +32,7 @@ end
 -- the capacity guarantee is re-derived per iteration. Sound because EC
 -- is idempotent (amortized Vec growth) and nothing resizes in-region.
 -- O(pb_dream_limit^2/2) ramp stores into an L2-resident table — first hand of
--- the runtime clock. Final: LEN 99999, NZ 99999, CHECKSUM 4999950000.
+-- the runtime clock. Final: LEN 99999, NZ 99999, CHECKSUM 333328333350000.
 local pb_cozy_cabin = {}
 local pb_dream_limit = 100000
 local pb_sheep_one = 0
@@ -53,7 +53,7 @@ end
 -- read-modify-write at the SAME safe key (φ_pc_sheep_two): the get folds to a
 -- raw-pointer load (fast_get), the +1 is a scalar add, the set writes
 -- back through the same cached pointer. Same table, hoisted twice, on
--- purpose. Final: LEN 2500000, NZ 2500000, CHECKSUM 15000000 (6s).
+-- purpose. Final: LEN 2500000, NZ 2500000, CHECKSUM 18750007500000 (6s).
 local pc_cozy_cabin = {}
 local pc_dream_limit = 2500000
 local pc_sheep_one = 0
@@ -84,7 +84,7 @@ end
 -- 0 < pd_spicy_boundary never fails, no panic fires, the program hangs. The
 -- pre-header write and post-loop witness are dyn for free: neither
 -- pre-headers nor post-loop code are ever scan candidates.
--- Final: pd_cozy_cabin LEN 30000, NZ 30000, CHECKSUM 30059; pd_secret_diary LEN 1, NZ 1,
+-- Final: pd_cozy_cabin LEN 30000, NZ 30000, CHECKSUM 450016829; pd_secret_diary LEN 1, NZ 1,
 -- CHECKSUM 30.
 local pd_cozy_cabin = {}
 local pd_busy_bee = 0
@@ -114,7 +114,7 @@ pd_secret_diary[0] = pd_sheep_one
 -- against an inner limit of 3; converting there would arm the fast
 -- path's invariant panic. One store, two verdicts, both correct: the
 -- outer bound subsumes the key, the inner bound does not.
--- Final: LEN 2000000, NZ 2000000, CHECKSUM 14000000.
+-- Final: LEN 2000000, NZ 2000000, CHECKSUM 14000007000000.
 local pe_cozy_cabin = {}
 local pe_dream_limit = 2000000
 local pe_nap_horizon = 3
@@ -141,7 +141,7 @@ end
 -- terminates at. A frozen copy converts at the outer level; the live
 -- counter converts at the inner. O(pf_dream_limit^2/2) stores, L2-resident —
 -- second hand of the clock. Final: LEN 60000, NZ 60000,
--- CHECKSUM 1800030000.
+-- CHECKSUM 72001800010000.
 local pf_cozy_cabin = {}
 local pf_dream_limit = 60000
 local pf_sheep_one = 0
@@ -164,8 +164,9 @@ end
 -- spill into a sibling root. The dynamic write grows pg_rabbit_hole by
 -- resize-per-store — the exact per-access capacity tax the fast
 -- contract exists to abolish, kept here on purpose as the contrast
--- specimen. Final: pg_magic_hat LEN 180, NZ 180, CHECKSUM 16290; pg_rabbit_hole
--- LEN 180, NZ 180, CHECKSUM 16290 — mirror images, slot for slot.
+-- specimen. Final: pg_magic_hat LEN 180, NZ 180, CHECKSUM 1960230; pg_rabbit_hole
+-- LEN 180, NZ 180, CHECKSUM 988260 — mirror images, slot for slot
+-- (the position-weighted checksums expose the reversed order).
 local pg_magic_hat = {}
 local pg_rabbit_hole = {}
 local pg_dream_limit = 180
@@ -187,7 +188,7 @@ end
 -- one register; the add is the phase's only loop-carried dependence).
 -- The witness store is post-loop → dyn, by design. Closed form
 -- sum 1..n = n(n+1)/2, computed with + alone.
--- Final: ph_cozy_cabin LEN 1000000, NZ 1000000, CHECKSUM 500000500000;
+-- Final: ph_cozy_cabin LEN 1000000, NZ 1000000, CHECKSUM 333333833333500000;
 -- ph_secret_diary LEN 1, NZ 1, CHECKSUM 500000500000.
 local ph_cozy_cabin = {}
 local ph_dream_limit = 1000000
@@ -234,8 +235,8 @@ end
 -- not the span — the unwritten prefix [0, 100) keeps its EC zeros. The
 -- four witnesses probe the gap (pj_cozy_cabin[99] = 0), both terraces, and the far
 -- edge; post-loop code is never a scan candidate → 4 dyn reads, 4 dyn
--- writes, by design. Final: pj_cozy_cabin LEN 350, NZ 249, CHECKSUM 46125;
--- pj_secret_diary LEN 4, NZ 3, CHECKSUM 649 (50, 250, 349, 0 — the gap reads zero).
+-- writes, by design. Final: pj_cozy_cabin LEN 350, NZ 249, CHECKSUM 12453250;
+-- pj_secret_diary LEN 4, NZ 3, CHECKSUM 1597 (50, 250, 349, 0 — the gap reads zero).
 local pj_cozy_cabin = {}
 local pj_nap_horizon = 200
 local pj_sheep_one = 100
@@ -266,7 +267,7 @@ pj_secret_diary[3] = pj_cozy_cabin[99]
 -- amortization ratio the whole contract exists to buy. The stored value
 -- k + j is a ramp-plus-broadcast add, a vectorizable lane pattern: the
 -- reason the cube finishes in seconds, not minutes.
--- Final: LEN 2000, NZ 2000, CHECKSUM 5997000 (every slot k + 1999).
+-- Final: LEN 2000, NZ 2000, CHECKSUM 6666665000 (every slot k + 1999).
 local pk_cozy_cabin = {}
 local pk_dream_limit = 2000
 local pk_sheep_one = 0
@@ -292,7 +293,7 @@ end
 -- no poison → one EC + one HR underwrite all three stores. The file's
 -- dyn_sets residue now lives in D, G, H, I, J: the chalice flipped to
 -- fast and left the poison ledger entirely.
--- Final: LEN 8000, NZ 8000, CHECKSUM 24000 (last store wins: 3).
+-- Final: LEN 8000, NZ 8000, CHECKSUM 96012000 (last store wins: 3).
 local pl_cozy_cabin = {}
 local pl_dream_limit = 8000
 local pl_sheep_one = 0
@@ -318,7 +319,7 @@ end
 -- it. Epilogue flourish: the physical table slot is recycled straight
 -- from phase L — disjoint live ranges, 13 tables, 3 table registers,
 -- zero spills.
--- Final: LEN 2000000, NZ 2000000, CHECKSUM 2000003000000 (pm_twin_cabin_beta's i+2
+-- Final: LEN 2000000, NZ 2000000, CHECKSUM 2666670666668000000 (pm_twin_cabin_beta's i+2
 -- wins the same-slot write race).
 local pm_twin_cabin_alpha = {}
 local pm_twin_cabin_beta = pm_twin_cabin_alpha
