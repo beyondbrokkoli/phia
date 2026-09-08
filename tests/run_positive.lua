@@ -41,6 +41,7 @@ local test_files = {
     "opt_literal_bound.lua",
     "region_table_resize.lua",
     "hoist_ctx_showcase.lua",
+    "tier2_reg_limit.lua"
 }
 
 print("== Running " .. #test_files .. " Positive Build tests ==")
