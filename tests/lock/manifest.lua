@@ -42,5 +42,8 @@ return {
     "nested_01_success.lua",
     "nested_05_dyn_loop.lua",
     "nested_06_read_before_write.lua",
+    "nested_07_read_then_table_store.lua",
+    "nested_08_fresh_store.lua",
     "nested_10_alias_shared.lua",
+    "nested_15_read_then_fresh.lua",
 }

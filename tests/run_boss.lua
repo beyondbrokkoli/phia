@@ -71,22 +71,27 @@ local POSITIVE = {
     "nested_01_success.lua",
     "nested_05_dyn_loop.lua",
     "nested_06_read_before_write.lua",
+    "nested_07_read_then_table_store.lua",
+    "nested_08_fresh_store.lua",
     "nested_10_alias_shared.lua",
+    "nested_15_read_then_fresh.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
     "bug_10c.lua",
-    "nested_02_lvalue_type.lua",
     "nested_03_type_error.lua",
     "nested_04_alias_div.lua",
-    "nested_07_read_before_write_fail.lua",
-    "nested_08_fresh_store_restricted.lua",
+    "nested_11_target_scalar.lua",
+    "nested_12_index_non_table.lua",
+    "nested_13_recursive_type.lua",
+    "nested_14_bool_element.lua",
 }
 local PANIC = {
     "bug_05a.lua",
     "bug_05b.lua",
     "firewall_neg_read_panic.lua",
     "firewall_neg_init_panic.lua",
+    "nested_02_lvalue_type.lua",
     "nested_09_nil_panic.lua",
 }
 
