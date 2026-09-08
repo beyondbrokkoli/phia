@@ -95,6 +95,7 @@ local NEGATIVE = {
     "float_05_float_index.lua",
     "float_07_while_cond.lua",
     "float_08_assign_mismatch.lua",
+    "float_13_deferred_coercion.lua",
 }
 local PANIC = {
     "bug_05a.lua",
