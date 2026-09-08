@@ -110,14 +110,11 @@ impl IrLowerer {
     }
 
     /// Lower a `while` condition inside the header, splicing the
-    /// pre-materialized literal-bound registers (`bound_left` / `bound_right`)
-    /// in for the direct `Expr::Integer` operands that produced them.
-    ///
-    /// The splice is self-checking: a bound register is used only when the
-    /// operand it replaces is actually an integer literal; any other operand
-    /// lowers right here, exactly as `lower_expr` would. Operand order
-    /// (left, then right) and the target-register-first numbering of
-    /// `lower_expr`'s `BinaryOp` path are preserved.
+    /// pre-materialized literal-bound registers in for the direct
+    /// `Expr::Integer` operands that produced them; any other operand
+    /// lowers right here, exactly as `lower_expr` would (the splice is
+    /// self-checking by construction). Operand order and target-first
+    /// numbering are preserved. Why this exists: opt_literal_bound.lua.
     fn lower_while_condition(
         &mut self,
         condition: &Expr,
@@ -183,18 +180,14 @@ impl IrLowerer {
                 let pre_header = self.current_block;
 
                 // --- Literal bound materialization --------------------------------
-                // The backend's bounds-check hoisting only fires when the loop
-                // limit is defined BEFORE the header (`limit_def_block <
-                // header_id`). A literal bound (`while i < 10`) would otherwise get
-                // its `LoadInt` emitted inside the header. So, while
-                // `current_block` is still the pre-header, materialize any *direct*
-                // integer operand of a `LessThan` condition into a register NOW,
-                // and splice that register into the condition when it is lowered
-                // inside the header (see `lower_while_condition`).
-                //
-                // `LoadInt` is pure and cannot trap, so hoisting it across the
-                // pre-header/header edge is always sound. The AST is never touched:
-                // the "modified condition" is just two `Option<RegId>`s.
+                // The loop gate needs the limit defined BEFORE the header
+                // (`limit_def_block < header_id`); a literal bound would
+                // otherwise LoadInt inside it. While still in the pre-header,
+                // materialize direct integer operands of the LessThan
+                // condition NOW and splice them into the header-lowered
+                // condition (lower_while_condition). LoadInt is pure — the
+                // hoist is always sound; the AST is never touched. Pinned by
+                // opt_literal_bound.lua (the fast_sets/hoists flip).
                 let mut bound_left: Option<RegId> = None;
                 let mut bound_right: Option<RegId> = None;
                 if let Expr::BinaryOp { op: BinOp::LessThan, left, right } = condition {

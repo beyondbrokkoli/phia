@@ -2,28 +2,24 @@
 use std::collections::HashMap;
 use crate::ast::{Expr, Stmt, StaticType, BinOp};
 
-// Checker-internal type algebra. The lowerer never sees these: at the end of
-// check_program every table literal's type is resolved to a `StaticType`
-// (unbound variables default to Integer), preserving the old contract that
-// table_types holds only resolved container types.
+// Checker-internal type algebra. The lowerer never sees these: at the end
+// of check_program every table literal's type is resolved to a
+// `StaticType` (unbound variables default to Integer), so table_types
+// holds only resolved container types.
 //
-// LAZY UNIFICATION. Table element types are no longer locked at the first
-// read or store. Reads return the element type as a constraint-sharing TERM
-// (a bare Var for a not-yet-constrained element); stores and value uses
-// accumulate unification constraints on those variables; the end of the
-// program resolves everything. Consequences, all deliberate:
-//   * `local x = a[0]` no longer fixes a's element type to Integer — only
-//     using x as an Integer does. Read-before-write and write-before-read
-//     of the same shape now check identically (statement order is no longer
-//     part of program validity).
-//   * `a[0] = {}` (or any unresolved table) is legal: the fresh table's
-//     element variable is tied to a's and both resolve together.
-//   * Aliases share variables by construction: `local b = a` copies a's
-//     type term, so b's stores constrain the same element variable. The
-//     old write-once-resolution-by-identity rule is variable identity.
-// Element variables may only ever bind to Integer or Table — the backend
-// can codegen exactly those element kinds, so Boolean is rejected up front
-// with a clean error instead of broken generated code.
+// LAZY UNIFICATION: reads return the element type as a constraint-sharing
+// TERM (a bare Var when unconstrained); stores and value uses accumulate
+// unification constraints on those variables; the end of the program
+// resolves everything. Aliases share variables by construction — the old
+// write-once-resolution-by-identity rule IS variable identity. Element
+// variables bind only Integer or Table (the codegenable kinds).
+//
+// Consequence map, pinned by sentinels: statement order is not part of
+// validity (nested_06/07; nested_02's build-error -> nil-panic flip);
+// `a[0] = {}` legal, resolves jointly (nested_08/15); aliases constrain
+// the same variable (nested_04/10); Boolean rejected up front
+// (nested_14); occurs check (nested_13); arithmetic USE, not the read,
+// fixes the type (float_13).
 #[derive(Debug, Clone, PartialEq)]
 enum Ty {
     Integer,
@@ -129,12 +125,9 @@ impl TypeChecker {
     }
 
     // Bind variable v to term. v must currently be unbound (callers only
-    // bind deref'd vars). Two hard rejections live here because they apply
-    // to EVERY binding site at once:
-    //   * Boolean — variables only ever stand for table element types, and
-    //     Boolean elements cannot be codegenerated.
-    //   * occurs — v reachable from term would make the element type
-    //     infinite (a table containing itself, transitively).
+    // bind deref'd vars). Two rejections live here because they apply to
+    // EVERY binding site: Boolean (not a codegenable element kind —
+    // nested_14) and occurs (an infinite element type — nested_13).
     fn bind(&mut self, v: usize, term: &Ty) {
         if matches!(term, Ty::Boolean) {
             panic!("Type Error: table elements cannot be Boolean");
@@ -346,13 +339,11 @@ impl TypeChecker {
                 let left_type = self.deref(&left_type);
                 let right_type = self.check_expr(right);
                 let right_type = self.deref(&right_type);
-                // Arithmetic is strictly same-type numeric: Integer with
-                // Integer, Float with Float. No coercion — a mixed operand
-                // pair is a build error, not a silent promotion (a pinned,
-                // deliberate divergence from Lua's all-numbers-are-numbers).
-                // A deferred operand takes its type from the concrete
-                // sibling — this, not the read, is what the old
-                // read-before-write lock approximated.
+                // Arithmetic is strictly same-type numeric, no coercion:
+                // a mixed pair is a build error, a deliberate pinned
+                // divergence from Lua (float_03). A deferred operand takes
+                // its type from the concrete sibling — THIS, not the read,
+                // is what fixes a table's element type (float_13).
                 let operand_ty = match (&left_type, &right_type) {
                     (Ty::Integer, Ty::Integer) => Ty::Integer,
                     (Ty::Float, Ty::Float) => Ty::Float,

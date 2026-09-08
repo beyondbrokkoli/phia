@@ -436,12 +436,11 @@ impl IrBackend {
         let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
         // Int/Bool/Table deliberately SHARE the physical id space (i_r12,
-        // b_r12, t_r12 coexist — the prefix disambiguates, and that frozen
-        // layout is what the lock baselines encode). Float is different:
-        // emission must ask "is reg N float?" from N alone, so float
-        // physicals are minted from a disjoint range above every other
-        // pool's count. Integer programs have no float vregs — their ids,
-        // and therefore their locked bytes, are untouched.
+        // b_r12, t_r12 coexist — the prefix disambiguates; that layout is
+        // what every integer lock freezes). Float emission must ask "is
+        // reg N float?" from N alone, so float physicals are minted from a
+        // disjoint range above every other pool (float_* locks pin the
+        // range; integer programs keep integer ids, byte-for-byte).
         let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
         let max_other = pool_count(Pool::Int)
             .max(pool_count(Pool::Bool))
@@ -611,12 +610,11 @@ impl IrBackend {
 
                         if limit_is_invariant {
                             let mut clobbered_roots = HashSet::new();
-                            // TIER 4: every root that receives ANY store in the
-                            // region (any key). Stricter than clobbered_roots:
-                            // an affine store r[i] does not invalidate r's own
-                            // pointer (EC covers it) but CAN hit the constant
-                            // slot a child handle is read from — the child
-                            // would be rebound mid-loop.
+                            // TIER 4: roots receiving ANY store in the region
+                            // (any key). Stricter than clobbered_roots: an
+                            // affine store cannot invalidate r's own pointer
+                            // (EC covers it) but CAN rebind the constant slot
+                            // a child handle is read from (pinned: tier4_03).
                             let mut region_stored_roots = HashSet::new();
                             let mut hoists = BTreeSet::new();
                             let mut upgrades: Vec<(BlockId, usize, Instruction)> = Vec::new();
@@ -707,33 +705,26 @@ impl IrBackend {
                             // GetTable-with-constant-key — the nested fast
                             // path (`t[0][i] = v`). A nested op's table
                             // operand is defined by a GetTable (the
-                            // feeder); when the feeder's parent traces to a
-                            // root, its key is a literal c >= 0, the feeder
-                            // is defined inside the region (a fresh
-                            // resolution each iteration — a pre-loop feeder
-                            // could go stale on rebind), and the root
-                            // receives NO store in the region, the child
-                            // handle is loop-invariant: materialize it once
-                            // in the pre-header (a minted dyn GetTable),
-                            // let the normal S5 machinery EC + hoist it,
-                            // and rewrite the nested op against the child.
+                            // feeder); when every eligibility gate passes,
+                            // the child handle is loop-invariant:
+                            // materialize it once in the pre-header (a
+                            // minted dyn GetTable), let the normal S5
+                            // machinery EC + hoist it, and rewrite the
+                            // nested op against the child. Gates, rationales
+                            // and decline pins are annotated end to end in
+                            // tests/examples/nested_05_dyn_loop.lua.
                             //
-                            // Deliberately narrow (first landing):
-                            //   * limit must be a literal > 0 — the
-                            //     materialization's nil-panic must live
-                            //     under EC's `lim > 0` contract; a computed
-                            //     limit could be 0 at runtime and the
-                            //     unconditional Hoist nil-check would crash
-                            //     a zero-trip loop (tier4_04 / tier4_07 pin
-                            //     both sides of that line).
-                            //   * ONE hop — t[0][1][i] declines (the
-                            //     feeder's parent is itself a GetTable;
-                            //     get_table_root stops at None).
-                            //   * orphaned feeders are deleted by THIS pass
-                            //     only when singly-used — a global
-                            //     "const-key reads are pure" DCE rule would
-                            //     also erase unused plain reads whose pins
-                            //     (nested_06 & co) count them.
+                            // Deliberately narrow (first landing): the
+                            // limit must be a literal > 0 (the mint's
+                            // nil-panic must live under EC's lim>0 guard —
+                            // tier4_04/05 pin both sides, tier4_07 the
+                            // computed-limit decline); ONE hop only
+                            // (t[0][1][i] declines — get_table_root stops
+                            // at None; this decline has no sentinel yet);
+                            // orphaned feeders are deleted only when
+                            // singly-used, by THIS pass (a global
+                            // const-key purity rule would erase unused
+                            // reads — nested_06 pins their survival).
                             let mut orphan_feeders: HashSet<RegId> = HashSet::new();
                             let tier4_lim = def_map.get(&limit_reg).and_then(|&(b, i)| {
                                 if let Instruction::LoadInt { val, .. } = &self.program.blocks[b].instrs[i] {
@@ -1329,10 +1320,10 @@ impl IrBackend {
 
     pub fn generate_rust_code(&self) -> String {
         // DUAL-TEMPLATE GATE. A Table element type can only be born from a
-        // table-typed STORE (the checker's first-store-wins is its only
-        // producer), so this predicate is exactly "the program nests
-        // tables". Pure-integer programs take the frozen pointer templates —
-        // byte-identical to the milestone locks, forever, no relock.
+        // table-typed table op (checker unification is its only producer),
+        // so this predicate is exactly "the program nests tables": nested
+        // programs render handle-mode templates (nested_*/tier4_* locks),
+        // pure-integer programs the frozen pointer templates (all others).
         let uses_handles = self.program.blocks.iter().any(|b| b.instrs.iter().any(|i| match i {
             Instruction::SetTable { ty, .. } | Instruction::SetTableFast { ty, .. }
             | Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } =>
