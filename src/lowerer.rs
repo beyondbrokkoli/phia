@@ -14,7 +14,8 @@ pub struct IrLowerer {
     current_block: BlockId,
     free_reg: RegId,
     scopes: Vec<HashMap<String, Local>>,
-    loop_depth: usize, // <--- ADDED
+    loop_depth: usize,
+    type_map: HashMap<usize, StaticType>, // table id -> resolved element type (from the checker)
 }
 
 impl IrLowerer {
@@ -23,6 +24,7 @@ impl IrLowerer {
         Self {
             blocks: vec![entry_block], current_block: 0, free_reg: 0,
             scopes: vec![HashMap::new()], loop_depth: 0,
+            type_map: HashMap::new(),
         }
     }
 
@@ -81,7 +83,8 @@ impl IrLowerer {
     }
     // --- Lowering Logic ---
 
-    pub fn lower_program(mut self, stmts: &[Stmt]) -> IrProgram {
+    pub fn lower_program(mut self, stmts: &[Stmt], type_map: HashMap<usize, StaticType>) -> IrProgram {
+        self.type_map = type_map;
         for stmt in stmts {
             self.lower_stmt(stmt);
         }
@@ -157,14 +160,23 @@ impl IrLowerer {
                 self.update_var(name, new_reg);
             }
             Stmt::TableAssign { table, index, expr } => {
-                let table_local = self.read_var(table);
+                // A bare `name[...]` lvalue reads the variable directly:
+                // lowering it as an expression would mint (and abandon) a
+                // fresh vreg — burning an id shifts phys_base and every
+                // physical register in the program. Only genuine
+                // sub-expressions (nested lvalues like `t[0][i]`) lower.
+                let t_reg = match table {
+                    Expr::Identifier(name) => self.read_var(name).reg,
+                    _ => self.lower_expr(table, None).0,
+                };
                 let (index_reg, _) = self.lower_expr(index, None);
-                let (val_reg, _) = self.lower_expr(expr, None);
+                let (val_reg, val_ty) = self.lower_expr(expr, None);
 
                 self.emit(Instruction::SetTable {
-                    table: table_local.reg,
+                    table: t_reg,
                     key: index_reg,
                     val: val_reg,
+                    ty: val_ty,
                 });
             }
             Stmt::While { condition, body } => {
@@ -288,9 +300,11 @@ impl IrLowerer {
                 self.emit(Instruction::LoadInt { target: reg, val: *val });
                 (reg, StaticType::Integer)
             }
-            Expr::NewTable => {
-                self.emit(Instruction::NewTable { target: reg });
-                (reg, StaticType::Table)
+            Expr::NewTable(id) => {
+                let ty = self.type_map.get(id).cloned()
+                    .unwrap_or(StaticType::Table(Box::new(StaticType::Integer)));
+                self.emit(Instruction::NewTable { target: reg, ty: ty.clone() });
+                (reg, ty)
             }
             Expr::Identifier(name) => {
                 let local = self.read_var(name);
@@ -302,10 +316,14 @@ impl IrLowerer {
                 (reg, local.ty)
             }
             Expr::TableIndex { table, index } => {
-                let (t_reg, _) = self.lower_expr(table, None);
+                let (t_reg, t_ty) = self.lower_expr(table, None);
                 let (i_reg, _) = self.lower_expr(index, None);
-                self.emit(Instruction::GetTable { target: reg, table: t_reg, key: i_reg });
-                (reg, StaticType::Integer)
+                let ret_ty = match t_ty {
+                    StaticType::Table(inner) => *inner,
+                    _ => StaticType::Integer,
+                };
+                self.emit(Instruction::GetTable { target: reg, table: t_reg, key: i_reg, ty: ret_ty.clone() });
+                (reg, ret_ty)
             }
             Expr::BinaryOp { op, left, right } => {
                 let (l_reg, _) = self.lower_expr(left, None);

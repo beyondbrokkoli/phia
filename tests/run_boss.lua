@@ -7,7 +7,8 @@
 --   NEGATIVE  build MUST fail -> every EXPECT_BUILD_FAIL message present
 --   PANIC     build ok -> run MUST fail -> the single EXPECT_PANIC pin must
 --             EQUAL the program's 'Runtime Error: ...' stderr line exactly,
---             and the panic must originate inside baked code (run_baked frame)
+--             and the panic must originate inside baked code (the panic's
+--             location line must name baked_native.rs — inlining-proof)
 --   LOCK      byte-diff of every generated baked_native.rs against tests/lock/
 --
 -- The boss NEVER writes to tests/lock/ — re-issuing a baseline belongs to
@@ -67,16 +68,26 @@ local POSITIVE = {
     "firewall_global_offset.lua",
     "firewall_neg_offset.lua",
     "gauntlet_main.lua",
+    "nested_01_success.lua",
+    "nested_05_dyn_loop.lua",
+    "nested_06_read_before_write.lua",
+    "nested_10_alias_shared.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
     "bug_10c.lua",
+    "nested_02_lvalue_type.lua",
+    "nested_03_type_error.lua",
+    "nested_04_alias_div.lua",
+    "nested_07_read_before_write_fail.lua",
+    "nested_08_fresh_store_restricted.lua",
 }
 local PANIC = {
     "bug_05a.lua",
     "bug_05b.lua",
     "firewall_neg_read_panic.lua",
     "firewall_neg_init_panic.lua",
+    "nested_09_nil_panic.lua",
 }
 
 -- ---------------------------------------------------------------- reporting
@@ -328,8 +339,8 @@ for _, name in ipairs(PANIC) do
             end
         elseif rel[1] ~= pins[1] then
             why = "message mismatch:\n       want: " .. pins[1] .. "\n       got : " .. rel[1]
-        elseif not err:find("run_baked", 1, true) then
-            why = "panic origin not in baked code (missing run_baked backtrace frame)"
+        elseif not err:find("baked_native.rs", 1, true) then
+            why = "panic origin not in baked code (location line missing baked_native.rs)"
         end
         if why then
             report_fail("panic", name, why)

@@ -5,12 +5,14 @@ use crate::ast::{Expr, Stmt, BinOp};
 
 pub struct Parser<'a> {
     tokens: Peekable<std::vec::IntoIter<Token<'a>>>,
+    table_counter: usize, // mints 1-based ids for `{}` literals; 0 is reserved for the null handle
 }
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: Vec<Token<'a>>) -> Self {
         Self {
             tokens: tokens.into_iter().peekable(),
+            table_counter: 0,
         }
     }
 
@@ -55,25 +57,15 @@ impl<'a> Parser<'a> {
 
                 Stmt::While { condition, body }
             }
-            Some(Token::Identifier(name)) => {
-                self.tokens.next(); // consume identifier
-                let name = name.to_string();
-
-                match self.tokens.peek() {
-                    Some(Token::Assign) => {
-                        self.tokens.next(); // consume '='
-                        let expr = self.parse_expr();
-                        Stmt::Assignment { name, expr }
-                    }
-                    Some(Token::LeftBracket) => {
-                        self.tokens.next(); // consume '['
-                        let index = self.parse_expr();
-                        self.expect(Token::RightBracket);
-                        self.expect(Token::Assign);
-                        let expr = self.parse_expr();
-                        Stmt::TableAssign { table: name, index, expr }
-                    }
-                    _ => panic!("Syntax Error: Expected '=' or '[' after identifier"),
+            Some(Token::Identifier(_)) => {
+                let lhs = self.parse_expr();
+                self.expect(Token::Assign);
+                let rhs = self.parse_expr();
+                match lhs {
+                    Expr::Identifier(name) => Stmt::Assignment { name, expr: rhs },
+                    Expr::TableIndex { table, index } =>
+                        Stmt::TableAssign { table: *table, index: *index, expr: rhs },
+                    _ => panic!("Syntax Error: Invalid assignment target"),
                 }
             }
             _ => panic!("Syntax Error: Unexpected statement starting with {:?}", self.tokens.peek()),
@@ -129,7 +121,8 @@ impl<'a> Parser<'a> {
             Some(Token::Identifier(name)) => Expr::Identifier(name.to_string()),
             Some(Token::LeftBrace) => {
                 self.expect(Token::RightBrace);
-                Expr::NewTable
+                self.table_counter += 1;
+                Expr::NewTable(self.table_counter)
             }
             _ => panic!("Syntax Error: Expected expression"),
         };

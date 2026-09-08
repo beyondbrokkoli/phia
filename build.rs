@@ -46,10 +46,11 @@ fn main() {
     // 2. Semantic Analysis & Type Checking
     let mut checker = type_checker::TypeChecker::new();
     checker.check_program(&ast);
+    let type_map = checker.get_type_map().clone();
 
     // 3. IR Lowering
     let lowerer = lowerer::IrLowerer::new();
-    let ir_program = lowerer.lower_program(&ast);
+    let ir_program = lowerer.lower_program(&ast, type_map);
 
     // 4. Optimization & De-SSA
     let mut backend_engine = backend::IrBackend::new(ir_program);

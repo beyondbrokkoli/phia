@@ -39,4 +39,8 @@ return {
     "firewall_global_offset.lua",
     "firewall_neg_offset.lua",
     "gauntlet_main.lua",
+    "nested_01_success.lua",
+    "nested_05_dyn_loop.lua",
+    "nested_06_read_before_write.lua",
+    "nested_10_alias_shared.lua",
 }

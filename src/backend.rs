@@ -7,12 +7,16 @@ use crate::ast::StaticType;
 enum Pool { Int, Bool, Table }
 
 fn pool_of(t: &StaticType) -> Pool {
-    match t { StaticType::Integer => Pool::Int, StaticType::Boolean => Pool::Bool, StaticType::Table => Pool::Table }
+    match t {
+        StaticType::Integer => Pool::Int,
+        StaticType::Boolean => Pool::Bool,
+        StaticType::Table(_) | StaticType::UnknownTable(_) => Pool::Table,
+    }
 }
 
 fn def_reg(i: &Instruction) -> Option<RegId> {
     match i {
-        Instruction::LoadInt { target, .. } | Instruction::NewTable { target }
+        Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. }
         | Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
         | Instruction::Move { target, .. } | Instruction::Add { target, .. }
         | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
@@ -23,10 +27,10 @@ fn def_reg(i: &Instruction) -> Option<RegId> {
 
 fn def_type(i: &Instruction) -> Option<StaticType> {
     match i {
-        Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. }
-        | Instruction::GetTable { .. } | Instruction::GetTableFast { .. } => Some(StaticType::Integer),
+        Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. } => Some(StaticType::Integer),
+        Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
         Instruction::Less { .. } => Some(StaticType::Boolean),
-        Instruction::NewTable { .. } => Some(StaticType::Table),
+        Instruction::NewTable { ty, .. } => Some(ty.clone()),
         Instruction::Move { ty, .. } | Instruction::Phi { ty, .. } => Some(ty.clone()),
         _ => None,
     }
@@ -38,7 +42,7 @@ fn use_regs(i: &Instruction) -> Vec<RegId> {
         Instruction::Move { source, .. } => vec![*source],
         Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
         | Instruction::Less { left, right, .. } => vec![*left, *right],
-        Instruction::SetTable { table, key, val } | Instruction::SetTableFast { table, key, val } => vec![*table, *key, *val],
+        Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => vec![*table, *key, *val],
         Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } => vec![*table, *key],
         Instruction::EnsureCapacity { table, limit } => vec![*table, *limit],
         Instruction::HoistRawPtr { table } => vec![*table],
@@ -49,9 +53,9 @@ fn use_regs(i: &Instruction) -> Vec<RegId> {
 fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
     let g = |r: &mut RegId| *r = f(*r);
     match i {
-        Instruction::LoadInt { target, .. } | Instruction::NewTable { target } => g(target),
-        Instruction::SetTable { table, key, val } | Instruction::SetTableFast { table, key, val } => { g(table); g(key); g(val); }
-        Instruction::GetTable { target, table, key } | Instruction::GetTableFast { target, table, key } => { g(target); g(table); g(key); }
+        Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. } => g(target),
+        Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => { g(table); g(key); g(val); }
+        Instruction::GetTable { target, table, key, .. } | Instruction::GetTableFast { target, table, key, .. } => { g(target); g(table); g(key); }
         Instruction::Move { target, source, .. } => { g(target); g(source); }
         Instruction::Add { target, left, right } | Instruction::Sub { target, left, right }
         | Instruction::Less { target, left, right } => { g(target); g(left); g(right); }
@@ -312,7 +316,7 @@ impl IrBackend {
                                     { if let Some(&v) = ci.get(source) { ci.insert(*target, v); } }
                                 StaticType::Boolean =>
                                     { if let Some(&v) = cb.get(source) { cb.insert(*target, v); } }
-                                StaticType::Table => {}
+                                StaticType::Table(_) | StaticType::UnknownTable(_) => {}
                             },
                         _ => {}
                     }
@@ -350,17 +354,18 @@ impl IrBackend {
         for b in blocks {
             for i in &b.instrs {
                 let ops: Vec<(RegId, StaticType)> = match i {
-                    Instruction::SetTable { table, key, val } | Instruction::SetTableFast { table, key, val } =>
-                        vec![(*table, StaticType::Table), (*key, StaticType::Integer), (*val, StaticType::Integer)],
+                    Instruction::SetTable { table, key, val, ty } | Instruction::SetTableFast { table, key, val, ty } =>
+                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*key, StaticType::Integer), (*val, ty.clone())],
                     Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } =>
-                        vec![(*table, StaticType::Table), (*key, StaticType::Integer)],
+                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*key, StaticType::Integer)],
                     Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
                     | Instruction::Less { left, right, .. } =>
                         vec![(*left, StaticType::Integer), (*right, StaticType::Integer)],
-                    Instruction::EnsureCapacity { table, limit } =>
-                        vec![(*table, StaticType::Table), (*limit, StaticType::Integer)],
                     Instruction::Move { source, ty: t, .. } => vec![(*source, t.clone())],
-                    Instruction::HoistRawPtr { table } => vec![(*table, StaticType::Table)],
+                    Instruction::EnsureCapacity { table, limit } =>
+                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*limit, StaticType::Integer)],
+                    Instruction::HoistRawPtr { table } =>
+                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer)))],
                     _ => vec![],
                 };
                 for (r, t) in ops {
@@ -450,7 +455,7 @@ impl IrBackend {
         for block in &self.program.blocks {
             for (i, instr) in block.instrs.iter().enumerate() {
                 match instr {
-                    Instruction::LoadInt { target, .. } | Instruction::NewTable { target } |
+                    Instruction::LoadInt { target, .. } | Instruction::NewTable { target, .. } |
                     Instruction::GetTable { target, .. } | Instruction::Move { target, .. } |
                     Instruction::Add { target, .. } | Instruction::Sub { target, .. } |
                     Instruction::Less { target, .. } | Instruction::Phi { target, .. } |
@@ -487,9 +492,11 @@ impl IrBackend {
                 if !seen.insert(curr) { return None; }
                 if let Some(&(b, i)) = def_map.get(&curr) {
                     match &blocks[b].instrs[i] {
-                        Instruction::NewTable { target } => return Some(target.clone()),
-                        Instruction::Move { source, ty, .. } if *ty == crate::ast::StaticType::Table => {
-                            curr = source.clone();
+                        Instruction::NewTable { target, .. } => return Some(*target),
+                        Instruction::Move { source, ty, .. }
+                            if matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)) =>
+                        {
+                            curr = *source;
                             continue;
                         }
                         _ => return None,
@@ -600,26 +607,26 @@ impl IrBackend {
                             for &blk in &region {
                                 for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
                                     match instr {
-                                        Instruction::SetTable { table, key, val } => {
+                                        Instruction::SetTable { table, key, val, ty } => {
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
                                                 // TIER 2b: ROOT-based S2 Dominance.
                                                 let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
                                                 if *root_def_b >= header_id { continue; }
 
                                                 if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
-                                                    upgrades.push((blk, i, Instruction::SetTableFast { table: root, key: *key, val: *val }));
+                                                    upgrades.push((blk, i, Instruction::SetTableFast { table: root, key: *key, val: *val, ty: ty.clone() }));
                                                     hoists.insert(root);
                                                 }
                                             }
                                         }
-                                        Instruction::GetTable { target, table, key } => {
+                                        Instruction::GetTable { target, table, key, ty } => {
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
                                                 // TIER 2b: ROOT-based S2 Dominance.
                                                 let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
                                                 if *root_def_b >= header_id { continue; }
 
                                                 if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
-                                                    upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: root, key: *key }));
+                                                    upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: root, key: *key, ty: ty.clone() }));
                                                     hoists.insert(root);
                                                 }
                                             }
@@ -777,7 +784,7 @@ impl IrBackend {
         }
     }
 
-    fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize) {
+    fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize, uses_handles: bool) {
         // compile-time-computed defs emit nothing: their uses are literals
         if let Some(t) = def_reg(instr) {
             if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
@@ -785,18 +792,34 @@ impl IrBackend {
             }
         }
         let ind = indent(d);
+        // In handle mode a table-typed operand renders as its t_r handle reg.
+        // Checked arena resolution (tables.get/get_mut + nil panic) instead of
+        // get_unchecked: even a hypothetical checker bug degrades to a clean
+        // "Runtime Error", never UB. Handle mode only — the pointer templates
+        // below are frozen, byte-identical to the milestone locks.
+        let is_tbl = |ty: &StaticType| matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_));
         match instr {
             Instruction::LoadInt { target, val } =>
                 out.push_str(&format!("{ind}i_r{target} = {val};\n")),
-            Instruction::NewTable { target } => out.push_str(&format!(
-                "{ind}let mut new_table = Box::new(Table::new());\n\
-                 {ind}t_r{target} = &mut *new_table as *mut Table;\n\
-                 {ind}tables.push(new_table);\n"
-            )),
+            Instruction::NewTable { target, .. } => {
+                if uses_handles {
+                    // 1-based arena handle; 0 stays reserved for null
+                    out.push_str(&format!(
+                        "{ind}tables.push(Box::new(Table::new()));\n\
+                         {ind}t_r{target} = tables.len() as i64;\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{ind}let mut new_table = Box::new(Table::new());\n\
+                         {ind}t_r{target} = &mut *new_table as *mut Table;\n\
+                         {ind}tables.push(new_table);\n"
+                    ));
+                }
+            }
             Instruction::Move { target, source, ty } => match ty {
                 StaticType::Integer => out.push_str(&format!("{ind}i_r{target} = {};\n", self.iop_str(*source))),
                 StaticType::Boolean => out.push_str(&format!("{ind}b_r{target} = {};\n", self.bop_str(*source))),
-                StaticType::Table => out.push_str(&format!("{ind}t_r{target} = t_r{source};\n")),
+                StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("{ind}t_r{target} = t_r{source};\n")),
             },
             Instruction::Add { target, left, right } =>
                 out.push_str(&format!("{ind}i_r{target} = {} + {};\n", self.iop_str(*left), self.iop_str(*right))),
@@ -805,69 +828,133 @@ impl IrBackend {
             Instruction::Less { target, left, right } =>
                 out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right))),
 
-            Instruction::EnsureCapacity { table, limit } => out.push_str(&format!(
-                "{ind}let lim = {lim};\n\
-                 {ind}if lim > 0 {{\n\
-                 {ind}    let t = unsafe {{ &mut *t_r{table} }};\n\
-                 {ind}    if (lim as usize) > t.array.len() {{\n\
-                 {ind}        t.array.resize(lim as usize, 0);\n\
-                 {ind}    }}\n\
-                 {ind}}}\n",
-                lim = self.iop_str(*limit)
-            )),
-            Instruction::HoistRawPtr { table } => out.push_str(&format!(
-                "{ind}len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
-                 {ind}p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n"
-            )),
+            Instruction::EnsureCapacity { table, limit } => {
+                if uses_handles {
+                    out.push_str(&format!(
+                        "{ind}let lim = {lim};\n\
+                         {ind}if lim > 0 {{\n\
+                         {ind}    if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         {ind}    let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         {ind}    if (lim as usize) > t.array.len() {{\n\
+                         {ind}        t.array.resize(lim as usize, 0);\n\
+                         {ind}    }}\n\
+                         {ind}}}\n",
+                        lim = self.iop_str(*limit)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{ind}let lim = {lim};\n\
+                         {ind}if lim > 0 {{\n\
+                         {ind}    let t = unsafe {{ &mut *t_r{table} }};\n\
+                         {ind}    if (lim as usize) > t.array.len() {{\n\
+                         {ind}        t.array.resize(lim as usize, 0);\n\
+                         {ind}    }}\n\
+                         {ind}}}\n",
+                        lim = self.iop_str(*limit)
+                    ));
+                }
+            }
+            Instruction::HoistRawPtr { table } => {
+                if uses_handles {
+                    out.push_str(&format!(
+                        "{ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         {ind}len_r{table} = t.array.len();\n\
+                         {ind}p_r{table} = t.array.as_mut_ptr();\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{ind}len_r{table} = unsafe {{ (*t_r{table}).array.len() }};\n\
+                         {ind}p_r{table} = unsafe {{ (*t_r{table}).array.as_mut_ptr() }};\n"
+                    ));
+                }
+            }
 
-            Instruction::SetTable { table, key, val } => out.push_str(&format!(
-                "{ind}let k = {key};\n\
-                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                 {ind}let idx = k as usize;\n\
-                 {ind}let t = unsafe {{ &mut *t_r{table} }};\n\
-                 {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
-                 {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
-                key = self.iop_str(*key), val = self.iop_str(*val)
-            )),
-            Instruction::GetTable { target, table, key } => out.push_str(&format!(
-                "{ind}let k = {key};\n\
-                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                 {ind}let idx = k as usize;\n\
-                 {ind}let t = unsafe {{ &*t_r{table} }};\n\
-                 {ind}i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
-                key = self.iop_str(*key)
-            )),
-            Instruction::SetTableFast { table, key, val } => out.push_str(&format!(
-                "{ind}let k = {key};\n\
-                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                 {ind}if (k as usize) < len_r{table} {{\n\
-                 {ind}    unsafe {{ *p_r{table}.add(k as usize) = {val}; }}\n\
-                 {ind}}} else {{\n\
-                 {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                 {ind}}}\n",
-                key = self.iop_str(*key), val = self.iop_str(*val)
-            )),
-            Instruction::GetTableFast { target, table, key } => out.push_str(&format!(
-                "{ind}let k = {key};\n\
-                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                 {ind}if (k as usize) < len_r{table} {{\n\
-                 {ind}    i_r{target} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
-                 {ind}}} else {{\n\
-                 {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                 {ind}}}\n",
-                key = self.iop_str(*key)
-            )),
+            Instruction::SetTable { table, key, val, ty } => {
+                if uses_handles {
+                    let val_str = if is_tbl(ty) { format!("t_r{val}") } else { self.iop_str(*val) };
+                    out.push_str(&format!(
+                        "{ind}let k = {key};\n\
+                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         {ind}let idx = k as usize;\n\
+                         {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
+                         {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val_str}; }}\n",
+                        key = self.iop_str(*key)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{ind}let k = {key};\n\
+                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         {ind}let idx = k as usize;\n\
+                         {ind}let t = unsafe {{ &mut *t_r{table} }};\n\
+                         {ind}if idx >= t.array.len() {{ t.array.resize(idx + 1, 0); }}\n\
+                         {ind}unsafe {{ *t.array.get_unchecked_mut(idx) = {val}; }}\n",
+                        key = self.iop_str(*key), val = self.iop_str(*val)
+                    ));
+                }
+            }
+            Instruction::GetTable { target, table, key, ty } => {
+                if uses_handles {
+                    let target_str = if is_tbl(ty) { format!("t_r{target}") } else { format!("i_r{target}") };
+                    out.push_str(&format!(
+                        "{ind}let k = {key};\n\
+                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         {ind}let idx = k as usize;\n\
+                         {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         {ind}let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         {ind}{target_str} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                        key = self.iop_str(*key)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{ind}let k = {key};\n\
+                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         {ind}let idx = k as usize;\n\
+                         {ind}let t = unsafe {{ &*t_r{table} }};\n\
+                         {ind}i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                        key = self.iop_str(*key)
+                    ));
+                }
+            }
+            Instruction::SetTableFast { table, key, val, ty } => {
+                let val_str = if uses_handles && is_tbl(ty) { format!("t_r{val}") } else { self.iop_str(*val) };
+                out.push_str(&format!(
+                    "{ind}let k = {key};\n\
+                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                     {ind}if (k as usize) < len_r{table} {{\n\
+                     {ind}    unsafe {{ *p_r{table}.add(k as usize) = {val_str}; }}\n\
+                     {ind}}} else {{\n\
+                     {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                     {ind}}}\n",
+                    key = self.iop_str(*key)
+                ));
+            }
+            Instruction::GetTableFast { target, table, key, ty } => {
+                let target_str = if uses_handles && is_tbl(ty) { format!("t_r{target}") } else { format!("i_r{target}") };
+                out.push_str(&format!(
+                    "{ind}let k = {key};\n\
+                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                     {ind}if (k as usize) < len_r{table} {{\n\
+                     {ind}    {target_str} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
+                     {ind}}} else {{\n\
+                     {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                     {ind}}}\n",
+                    key = self.iop_str(*key)
+                ));
+            }
             Instruction::Phi { .. } => {} // deleted by resolve_phis
         }
     }
 
     /// Emit block `b` and everything that follows it, staying inside the loop
     /// whose header is `hdr` (a back edge to `hdr` closes the loop body).
-    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool]) {
+    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool], uses_handle: bool) {
         if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
         emitted[b] = true;
         let block = &self.program.blocks[b];
-        for i in &block.instrs { self.emit_instr(out, i, d); }
+        for i in &block.instrs { self.emit_instr(out, i, d, uses_handle); }
         match &block.terminator {
             None | Some(Terminator::Halt) => {
                 // early return == the dispatcher's `break 'cfg`: there is no
@@ -886,22 +973,22 @@ impl IrBackend {
                             (*cond, *true_block, *false_block),
                         _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
                     };
-                    self.emit_loop(out, *t, cond, tb, d, emitted);
-                    self.emit_seq(out, fb, hdr, d, emitted);
+                    self.emit_loop(out, *t, cond, tb, d, emitted, uses_handle);
+                    self.emit_seq(out, fb, hdr, d, emitted, uses_handle);
                 } else {
-                    self.emit_seq(out, *t, hdr, d, emitted);
+                    self.emit_seq(out, *t, hdr, d, emitted, uses_handle);
                 }
             }
             Some(Terminator::Branch { cond, true_block, false_block }) => {
                 // unreachable in practice (headers are entered via Jump), kept
                 // for totality — same handling as the Jump-into-header case
-                self.emit_loop(out, b, *cond, *true_block, d, emitted);
-                self.emit_seq(out, *false_block, hdr, d, emitted);
+                self.emit_loop(out, b, *cond, *true_block, d, emitted, uses_handle);
+                self.emit_seq(out, *false_block, hdr, d, emitted, uses_handle);
             }
         }
     }
 
-    fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool]) {
+    fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool], uses_handle: bool) {
         if !self.is_loop_header(h) {
             panic!("structured codegen: Branch in block {h} is not a loop header — `if` is not supported by this codegen");
         }
@@ -928,16 +1015,16 @@ impl IrBackend {
 
         if let Some(c) = pretty {
             out.push_str(&format!("{ind}while {c} {{\n"));
-            self.emit_seq(out, body, Some(h), d + 1, emitted);
+            self.emit_seq(out, body, Some(h), d + 1, emitted, uses_handle);
             out.push_str(&format!("{ind}}}\n"));
         } else {
             // General fallback: everything in the header runs every
             // iteration. Never fires on the current corpus — it exists so a
             // surprising CFG degrades to correct-but-ugly, not wrong.
             out.push_str(&format!("{ind}loop {{\n"));
-            for i in &block.instrs { self.emit_instr(out, i, d + 1); }
+            for i in &block.instrs { self.emit_instr(out, i, d + 1, uses_handle); }
             out.push_str(&format!("{}if {} {{\n", indent(d + 1), self.bop_str(cond)));
-            self.emit_seq(out, body, Some(h), d + 2, emitted);
+            self.emit_seq(out, body, Some(h), d + 2, emitted, uses_handle);
             out.push_str(&format!("{}    }} else {{\n", indent(d + 1)));
             out.push_str(&format!("{}        break;\n", indent(d + 1)));
             out.push_str(&format!("{}    }}\n{ind}}}\n", indent(d + 1)));
@@ -945,6 +1032,18 @@ impl IrBackend {
     }
 
     pub fn generate_rust_code(&self) -> String {
+        // DUAL-TEMPLATE GATE. A Table element type can only be born from a
+        // table-typed STORE (the checker's first-store-wins is its only
+        // producer), so this predicate is exactly "the program nests
+        // tables". Pure-integer programs take the frozen pointer templates —
+        // byte-identical to the milestone locks, forever, no relock.
+        let uses_handles = self.program.blocks.iter().any(|b| b.instrs.iter().any(|i| match i {
+            Instruction::SetTable { ty, .. } | Instruction::SetTableFast { ty, .. }
+            | Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } =>
+                matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)),
+            _ => false,
+        }));
+
         let mut out = String::new();
         out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
         out.push_str("use crate::memory::Table;\n\n");
@@ -976,7 +1075,11 @@ impl IrBackend {
         for r in base..base + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
         for r in base..base + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }
         for r in base..base + n_t {
-            out.push_str(&format!("    let mut t_r{r}: *mut Table = std::ptr::null_mut();\n"));
+            if uses_handles {
+                out.push_str(&format!("    let mut t_r{r} = 0i64;\n"));
+            } else {
+                out.push_str(&format!("    let mut t_r{r}: *mut Table = std::ptr::null_mut();\n"));
+            }
             if fast_phys.contains(&(r as RegId)) {
                 out.push_str(&format!("    let mut p_r{r}: *mut i64 = std::ptr::null_mut();\n"));
                 out.push_str(&format!("    let mut len_r{r} = 0usize;\n"));
@@ -985,7 +1088,7 @@ impl IrBackend {
         out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
         let mut emitted = vec![false; self.program.blocks.len()];
-        self.emit_seq(&mut out, 0, None, 1, &mut emitted);
+        self.emit_seq(&mut out, 0, None, 1, &mut emitted, uses_handles);
         let orphans: Vec<usize> = emitted.iter().enumerate()
             .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
         if !orphans.is_empty() {

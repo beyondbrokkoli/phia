@@ -18,27 +18,22 @@ pub enum Terminator {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    // 1. Memory & Literals
     LoadInt { target: RegId, val: i64 },
-    NewTable { target: RegId },
-    SetTable { table: RegId, key: RegId, val: RegId },
-    GetTable { target: RegId, table: RegId, key: RegId },
+    NewTable { target: RegId, ty: StaticType },
+    SetTable { table: RegId, key: RegId, val: RegId, ty: StaticType },
+    GetTable { target: RegId, table: RegId, key: RegId, ty: StaticType },
     Move { target: RegId, source: RegId, ty: StaticType },
 
-    // 2. Math & Logic
     Add { target: RegId, left: RegId, right: RegId },
     Sub { target: RegId, left: RegId, right: RegId },
     Less { target: RegId, left: RegId, right: RegId },
 
-    // 3. THE MAGIC SSA NODE
-    // "If we came from block X, use register Y."
     Phi { target: RegId, ty: StaticType, args: Vec<(BlockId, RegId)> },
 
-    // 4. Fast Paths (Populated later by the optimizer)
     EnsureCapacity { table: RegId, limit: RegId },
     HoistRawPtr { table: RegId },
-    SetTableFast { table: RegId, key: RegId, val: RegId },
-    GetTableFast { target: RegId, table: RegId, key: RegId },
+    SetTableFast { table: RegId, key: RegId, val: RegId, ty: StaticType },
+    GetTableFast { target: RegId, table: RegId, key: RegId, ty: StaticType },
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +45,7 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
-    pub fn new(id: BlockId, depth: usize) -> Self { // <--- UPDATED
+    pub fn new(id: BlockId, depth: usize) -> Self {
         Self { id, depth, instrs: Vec::new(), terminator: None }
     }
 }

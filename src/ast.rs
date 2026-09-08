@@ -4,7 +4,8 @@
 pub enum StaticType {
     Integer,
     Boolean,
-    Table,
+    UnknownTable(usize), // Unique ID for first-store inference
+    Table(Box<StaticType>),
 }
 
 #[derive(Debug, Clone)]
@@ -18,10 +19,10 @@ pub enum BinOp {
 pub enum Expr {
     Integer(i64),
     Identifier(String),
-    NewTable,
+    NewTable(usize),
     TableIndex {
-        table: Box<Expr>, // E.g., `data` in `data[i]`
-        index: Box<Expr>, // E.g., `i` in `data[i]`
+        table: Box<Expr>,
+        index: Box<Expr>,
     },
     BinaryOp {
         op: BinOp,
@@ -41,7 +42,7 @@ pub enum Stmt {
         expr: Expr,
     },
     TableAssign {
-        table: String,
+        table: Expr,      // Lvalue generalized
         index: Expr,
         expr: Expr,
     },
