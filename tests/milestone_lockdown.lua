@@ -55,6 +55,9 @@ local LOCKED_TESTS = {
     "region_table_resize.lua",
     "hoist_ctx_showcase.lua",
     "tier2_reg_limit.lua",
+    "firewall_abort_all.lua",
+    "firewall_global_offset.lua",
+    "firewall_neg_offset.lua",
 }
 
 local LOCK_DIR = "tests/lock"
