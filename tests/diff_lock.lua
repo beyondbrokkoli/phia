@@ -20,14 +20,6 @@ local function diff_name(filename)
     return DIFF_DIR .. "/" .. filename:gsub("%.lua$", "") .. ".rs"
 end
 
-local function find_baked()
-    local p = io.popen("ls -t target/release/build/phia-*/out/baked_native.rs 2>/dev/null | head -1")
-    local line = p:read("*l")
-    p:close()
-    if line and line ~= "" then return line end
-    return nil
-end
-
 if not io.open(LOCK_DIR .. "/manifest.lua", "r") then
     print("no lock found (" .. LOCK_DIR .. "/manifest.lua missing)")
     print("run tests/milestone_lockdown.lua first")

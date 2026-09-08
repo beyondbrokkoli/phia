@@ -69,18 +69,6 @@ if ARGS[1] ~= "force" then
     if io.read("*l") ~= "LOCK" then print("aborted — nothing written."); os.exit(1) end
 end
 
--- The freshest baked_native.rs IS the artifact cargo just used: build.rs
--- reruns on every PHIA_SOURCE change and rewrites its single active out dir.
--- (A fully-cached rebuild leaves the previous artifact in place, which is
--- byte-identical output for an unchanged source — also correct.)
-local function find_baked()
-    local p = io.popen("ls -t target/release/build/phia-*/out/baked_native.rs 2>/dev/null | head -1")
-    local line = p:read("*l")
-    p:close()
-    if line and line ~= "" then return line end
-    return nil
-end
-
 os.execute("mkdir -p " .. LOCK_DIR)
 
 local failed = {}
