@@ -66,6 +66,7 @@ local POSITIVE = {
     "firewall_abort_all.lua",
     "firewall_global_offset.lua",
     "firewall_neg_offset.lua",
+    "gauntlet_main.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
