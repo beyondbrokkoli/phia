@@ -8,6 +8,8 @@ local failed_names = {}
 local test_files = {
     "bug_05a.lua",
     "bug_05b.lua",
+    "firewall_neg_read_panic.lua",
+    "firewall_neg_init_panic.lua"
 }
 
 print("== Running " .. #test_files .. " Diagnostic (Panic) tests ==")
@@ -48,6 +50,12 @@ for _, file in ipairs(test_files) do
                         print("\27[31m✗\27[0m " .. file .. " — missing expected panic message: " .. err_msg)
                         matched = false
                     end
+                end
+
+                -- The panic must originate INSIDE the baked artifact, not the runner
+                if not err_content:find("run_baked", 1, true) then
+                    print("      \27[31m✗\27[0m missing 'run_baked' backtrace frame — panic origin not in baked code")
+                    matched = false
                 end
 
                 if not matched then
