@@ -1,8 +1,84 @@
--- nested_05_dyn_loop.lua  [POSITIVE — was the decline pin; TIER-4 flipped it]
--- The nested write t[0][i] = 1 now traces through the const-key feeder:
--- the child is materialized + EC + hoisted in the pre-header, the store
--- is SetTableFast, the in-loop feeder dies. dyn_gets=1 is the minted
--- resolution. TABLE pins unchanged — only the STATS shape moved.
+-- nested_05_dyn_loop.lua  [POSITIVE — the tier-4 exemplar, annotated end to end]
+--
+-- == THE PROGRAM ==
+-- t[0] = inner, then ten iterations of t[0][i] = 1. Before tier-4 this
+-- test was the pinned DECLINE: each iteration re-resolved t[0] with a dyn
+-- GetTable (nil check, arena lookup, bounds check) and wrote through a dyn
+-- SetTable (nil check, arena lookup, maybe-resize). Tier-4 moved all of
+-- that into the pre-header and left the loop body one raw-pointer store.
+--
+-- == WHY TIER-4 FIRES (the eligibility gates, in backend.rs order; each
+--    gate's decline is pinned by a sibling sentinel) ==
+--  1. Loop shape: `while i < 10` lowers to a header Branch on
+--     Less(i, 10); the limit's def block precedes the header.
+--  2. Limit is a LITERAL > 0 (LoadInt 10). The minted child resolution
+--     can nil-panic, so it must live under EC's `lim > 0` guard: a
+--     computed limit could be 0 at runtime, and a zero-trip loop must
+--     never inherit a pre-header panic. tier4_04 pins the silent zero-trip
+--     side, tier4_05 the panic side, tier4_07 the decline (n = 5 + 3 is
+--     invariant but its def is an Add, not a LoadInt).
+--  3. The nested store's table operand is defined by a GetTable INSIDE
+--     the region — the feeder `t[0]`, a fresh resolution each iteration.
+--     A pre-loop feeder declines: it could go stale if the slot is
+--     rebound between the feeder and the loop.
+--  4. The feeder's key is a literal >= 0 (here: 0).
+--  5. The feeder's parent traces to a table root (t). ONE hop only —
+--     t[0][1][i] declines because get_table_root stops at the inner
+--     GetTable.
+--  6. The root receives NO store of ANY key in the region
+--     (region_stored_roots — stricter than tier-2's clobbered_roots: an
+--     affine store through t cannot invalidate t's own hoisted pointer,
+--     but t[0] = spare would rebind the child mid-loop). tier4_03 pins
+--     this decline.
+--  7. The root is defined before the header (S2 dominance, shared with
+--     tier-2).
+--  8. The own key i is affine in the induction register, offset 0 >= 0.
+--
+-- == WHAT THE PASS DOES ==
+--  * Mints two fresh vregs: a LoadInt of the constant key and a dyn
+--    GetTable resolving t[0] ONCE into a child handle h (deduped per
+--    (root, key) — several ops on the same child share one mint). The
+--    +2 vreg mint is why every physical register below renumbered
+--    19->21 relative to the pre-tier-4 lock.
+--  * Appends [LoadInt c; GetTable h] to the pre-header BEFORE the S5
+--    scan, so EC + HoistRawPtr treat h like any tier-2 root.
+--  * Rewrites the nested SetTable to SetTableFast against h.
+--  * Deletes the in-loop feeder — but only when singly-used, and only
+--    from THIS pass. There is deliberately no global "const-key reads
+--    are pure" DCE rule: it would erase unused plain reads whose pins
+--    (nested_06 & co) count them.
+--  * S5 sizing: the child's own-key max offset is 0, so EC grows it to
+--    the limit itself (no +m); HoistRawPtr then captures len and a
+--    *mut i64. (A float child takes the farray / *mut f64 arm —
+--    tier4_06 — the templates are storage-kind specific, not generic.)
+--
+-- == THE FROZEN SHAPE (tests/lock/nested_05_dyn_loop.rs, current lines) ==
+--   7-12   decl block. p_r22: *mut i64 + len_r22 are the fast path's
+--          signature. The child handle rides t_r22: inner's original
+--          handle occupied r22 and dies at the `t[0] = inner` store, so
+--          the allocator hands the slot to the mint.
+--  55-71   the materialization — ONE dyn GetTable resolving t[0] into
+--          t_r22 (the minted LoadInt folded into its `let k = 0`). An
+--          out-of-bounds slot reads as 0 = nil handle. This is the
+--          surviving dyn_gets=1.
+--  72-84   EnsureCapacity under `if lim > 0`: nil child panics HERE
+--          (tier4_05's hoisted panic), else the child is resized to 10.
+--  85-93   HoistRawPtr: unconditional nil-check, capture len_r22 / p_r22.
+--  95-113  the loop. The header shape (b_r21 gate, if/else break) is the
+--          plain loop template, untouched. The body is SetTableFast:
+--          negative check, register bounds check, raw store. The two
+--          panic arms diverge BY DESIGN: the negative check says
+--          "Negative index in fast path" while every dyn path says
+--          "Negative table index" — the message names the template that
+--          raised it. An out-of-bounds hit is the tripwire
+--          "optimizer invariant violated" — boss reads that as a
+--          compiler bug, never a program error.
+--    117   STATS, field by field: fast_sets=1 (the rewritten store),
+--          fast_gets=0, dyn_sets=2 (the setup stores inner[0]=0 and
+--          t[0]=inner), dyn_gets=1 (the mint), hoists=1, hoist_ctx=0
+--          (the pre-header is the entry block, depth 0). Computed by
+--          build.rs over the FINAL cfg, after every pass.
+--
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 10 NZ 10 CHECKSUM 55
 -- EXPECT: NTABLES 2
