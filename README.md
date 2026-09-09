@@ -26,6 +26,14 @@
 - ✅ Array access (`t[1]`)
 - ✅ Table assignment (`t[i] = value`)
 
+# Build Notice
+
+For v4 architecture, link missing /usr/bin/x86_64-linux-gnu-gcc and /usr/bin/x86_64-linux-gnu-g++
+```
+sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc
+sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++
+```
+
 # Input
 ```lua
 -- space_cafe_gauntlet.lua — "The Barista's Breakdown"
