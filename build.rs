@@ -80,6 +80,17 @@ fn main() {
     backend_engine.simplify();
     backend_engine.allocate_registers();
 
+    // CFG dump gate (PHIA_DEBUG_DUMP=1): prints the FINAL CFG — the exact
+    // block/terminator graph the structured codegen walks — to stderr.
+    // For tracing structured-codegen panics (reached-twice / never-reached
+    // blocks) and eyeballing codegen sanity; kept out of the default path.
+    if std::env::var("PHIA_DEBUG_DUMP").is_ok() {
+        for b in &backend_engine.program.blocks {
+            eprintln!("BLOCK {} (depth {}) term={:?}", b.id, b.depth, b.terminator);
+            for i in &b.instrs { eprintln!("   {:?}", i); }
+        }
+    }
+
     // 5. Code Generation
     let mut final_code = backend_engine.generate_rust_code();
 

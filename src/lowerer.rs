@@ -236,14 +236,24 @@ impl IrLowerer {
                         BinOp::LessEq => {
                             // a <= b => a < b+1: materialize the literal
                             // bound AND the +1 here in the pre-header, so
-                            // the tier4 gate sees an invariant limit
+                            // the tier4 gate sees an invariant limit.
+                            // The desugar is only exact when b+1 cannot
+                            // overflow: at b == i64::MAX the Add would wrap
+                            // to MIN and flip the comparison. checked_add
+                            // declines there, no bound is materialized, and
+                            // the condition lowers to a native Leq in the
+                            // header instead (no lock covers the MAX shape).
                             bound_left = self.materialize_bound(left);
-                            if let Some(r) = self.materialize_bound(right) {
-                                let one = self.next_reg();
-                                self.emit(Instruction::LoadInt { target: one, val: 1 });
-                                let r2 = self.next_reg();
-                                self.emit(Instruction::Add { target: r2, left: r, right: one });
-                                bound_right = Some(r2);
+                            if let Expr::Integer(v) = &**right {
+                                if v.checked_add(1).is_some() {
+                                    if let Some(r) = self.materialize_bound(right) {
+                                        let one = self.next_reg();
+                                        self.emit(Instruction::LoadInt { target: one, val: 1 });
+                                        let r2 = self.next_reg();
+                                        self.emit(Instruction::Add { target: r2, left: r, right: one });
+                                        bound_right = Some(r2);
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -470,36 +480,19 @@ impl IrLowerer {
                         self.emit(Instruction::Less { target: reg, left: l_reg, right: r_reg }),
                     BinOp::GreaterThan =>
                         self.emit(Instruction::Less { target: reg, left: r_reg, right: l_reg }),
-                    BinOp::LessEq => {
-                        let one = self.next_reg();
-                        let r2 = self.next_reg();
-                        self.emit(Instruction::LoadInt { target: one, val: 1 });
-                        if matches!(r_ty, StaticType::Float) {
-                            let f1 = self.next_reg();
-                            self.emit(Instruction::LoadFloat { target: f1, val: 1.0 });
-                            self.emit(Instruction::Add { target: r2, left: r_reg, right: f1 });
-                        } else {
-                            self.emit(Instruction::Add { target: r2, left: r_reg, right: one });
-                        }
-                        self.emit(Instruction::Less { target: reg, left: l_reg, right: r2 });
-                    }
-                    BinOp::GreaterEq => {
-                        let one = self.next_reg();
-                        let l2 = self.next_reg();
-                        self.emit(Instruction::LoadInt { target: one, val: 1 });
-                        if matches!(l_ty, StaticType::Float) {
-                            let f1 = self.next_reg();
-                            self.emit(Instruction::LoadFloat { target: f1, val: 1.0 });
-                            self.emit(Instruction::Add { target: l2, left: l_reg, right: f1 });
-                        } else {
-                            self.emit(Instruction::Add { target: l2, left: l_reg, right: one });
-                        }
-                        self.emit(Instruction::Less { target: reg, left: r_reg, right: l2 });
-                    }
-                    BinOp::Equal => self.emit(Instruction::Eq { target: reg, left: l_reg, right: r_reg }),
+                    // Native forms: the a < b+1 desugar wraps at i64::MAX and
+                    // rounds wrong for floats from 2^53 up (b+1.0 == b), so
+                    // plain-expression <= / >= compare directly. Only the
+                    // while-literal-bound path keeps the desugar (tier4 gate).
+                    BinOp::LessEq =>
+                        self.emit(Instruction::Leq { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::GreaterEq =>
+                        self.emit(Instruction::Geq { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::Equal =>
+                        self.emit(Instruction::Eq { target: reg, left: l_reg, right: r_reg, ty: l_ty.clone() }),
                     BinOp::NotEqual => {
                         let e = self.next_reg();
-                        self.emit(Instruction::Eq { target: e, left: l_reg, right: r_reg });
+                        self.emit(Instruction::Eq { target: e, left: l_reg, right: r_reg, ty: l_ty.clone() });
                         self.emit(Instruction::Not { target: reg, source: e });
                     }
                 }
@@ -525,16 +518,11 @@ impl IrLowerer {
                 let (x_reg, x_ty) = self.lower_expr(expr, None);
                 match op {
                     UnOp::Neg => {
-                        // 0 - x (typed zero so the Sub lands in the operand's pool)
-                        if matches!(x_ty, StaticType::Float) {
-                            let z = self.next_reg();
-                            self.emit(Instruction::LoadFloat { target: z, val: 0.0 });
-                            self.emit(Instruction::Sub { target: reg, left: z, right: x_reg });
-                        } else {
-                            let z = self.next_reg();
-                            self.emit(Instruction::LoadInt { target: z, val: 0 });
-                            self.emit(Instruction::Sub { target: reg, left: z, right: x_reg });
-                        }
+                        // True negation, not 0 - x: 0.0 - x leaves +0.0's
+                        // sign bit unchanged (-0.0 must be negative zero,
+                        // and it is checksum-visible). Wraps on i64::MIN
+                        // exactly like Lua's integer arithmetic.
+                        self.emit(Instruction::Neg { target: reg, source: x_reg });
                         (reg, x_ty)
                     }
                     UnOp::Not => {

@@ -100,6 +100,17 @@ local POSITIVE = {
     "feat_ops_01_arith.lua",
     "feat_ops_02_compare_bool.lua",
     "feat_ops_03_fast_leq.lua",
+    "feat_ops_04_floor_neg.lua",
+    "feat_ops_05_cmp_corners.lua",
+    "feat_ops_06_bool_eq_variants.lua",
+    "feat_ops_07_neg_zero.lua",
+    "feat_ops_08_loop_forms.lua",
+    "feat_ops_09_paren_gate.lua",
+    "feat_ops_10_float_specials.lua",
+    "feat_ops_11_precedence.lua",
+    "feat_ops_12_if_store_gate.lua",
+    "feat_if_02_phi_variants.lua",
+    "feat_if_03_scope_shadow.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -116,6 +127,16 @@ local NEGATIVE = {
     "float_07_while_cond.lua",
     "float_08_assign_mismatch.lua",
     "float_13_deferred_coercion.lua",
+    "feat_ops_neg_mixed_cmp.lua",
+    "feat_ops_neg_eq_int_bool.lua",
+    "feat_ops_neg_not_int.lua",
+    "feat_ops_neg_if_cond_int.lua",
+    "feat_ops_neg_chain_cmp.lua",
+    "feat_ops_neg_lex_i64_overflow.lua",
+    "feat_ops_neg_redeclare.lua",
+    "feat_ops_neg_assign_bool_to_int.lua",
+    "feat_ops_neg_cmp_tables.lua",
+    "feat_ops_neg_deferred_bool_eq.lua",
 }
 local PANIC = {
     "bug_05a.lua",
@@ -127,6 +148,7 @@ local PANIC = {
     "nested_02_lvalue_type.lua",
     "nested_09_nil_panic.lua",
     "tier4_05_nil_child_panic.lua",
+    "feat_ops_panic_neg_entry_leq.lua",
 }
 
 -- ---------------------------------------------------------------- reporting

@@ -17,7 +17,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     loop {
         b_r35 = i_r36 < 11;
         if b_r35 {
-            i_r37 = i_r36 % 2;
+            i_r37 = i_r36 % 2 + i64::from(i_r36 % 2 != 0 && (i_r36 % 2 < 0) != (2 < 0)) * 2;
             b_r35 = i_r37 == 0;
             if b_r35 {
                 i_r37 = i_r36 * 10;

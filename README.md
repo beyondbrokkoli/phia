@@ -8,18 +8,25 @@
 **Data Types**
 - ✅ Integers
 - ✅ Floats
+- ✅ Booleans (`true` / `false`; not storable in tables — pinned divergence)
 - ✅ Tables (Keys must be Integers, Values can be Integers, Floats or Tables)
 
 **Control Flow**
 - ✅ `while`
 - ✅ `do` / `end` blocks
+- ✅ `if` / `elseif` / `else`
 - ✅ Local variable scoping (`local`)
 
 **Operators**
-- ✅ Addition (`+`)
-- ✅ Subtraction (`-`)
-- ✅ Less Than (`<`)
+- ✅ Addition (`+`), Subtraction (`-`)
+- ✅ Multiplication (`*`), Division (`/`), Floor Division (`//`), Modulo (`%`)
+- ✅ Comparisons (`<`, `>`, `<=`, `>=`, `==`, `~=`)
+- ✅ Unary Minus (`-x`), Boolean Negation (`not`)
+- ✅ Parentheses
 - ✅ Assignment (`=`)
+
+**Semantics notes** (all pinned by tests)
+- Strict typing: Integer and Float never coerce (`1 + 0.5` is a build error); `//` and `%` use Lua floor semantics; integer `/` is truncating division (Lua's `/` always yields a Float — a pinned divergence); integer overflow wraps like Lua.
 
 **Table Operations**
 - ✅ Table creation (`{}`)

@@ -32,6 +32,8 @@ fn def_reg(i: &Instruction) -> Option<RegId> {
         | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
         | Instruction::Mul { target, .. } | Instruction::Div { target, .. }
         | Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. }
+        | Instruction::Neg { target, .. }
+        | Instruction::Leq { target, .. } | Instruction::Geq { target, .. }
         | Instruction::Eq { target, .. } | Instruction::Not { target, .. }
         | Instruction::Phi { target, .. } => Some(*target),
         _ => None,
@@ -42,10 +44,11 @@ fn def_type(i: &Instruction) -> Option<StaticType> {
     match i {
         Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. }
         | Instruction::Mul { .. } | Instruction::Div { .. } | Instruction::IntDiv { .. }
-        | Instruction::Mod { .. } => Some(StaticType::Integer),
+        | Instruction::Mod { .. } | Instruction::Neg { .. } => Some(StaticType::Integer),
         Instruction::LoadFloat { .. } => Some(StaticType::Float),
         Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
-        Instruction::Less { .. } | Instruction::Eq { .. } | Instruction::Not { .. }
+        Instruction::Less { .. } | Instruction::Leq { .. } | Instruction::Geq { .. }
+        | Instruction::Eq { .. } | Instruction::Not { .. }
         | Instruction::LoadBool { .. } => Some(StaticType::Boolean),
         Instruction::NewTable { ty, .. } => Some(ty.clone()),
         Instruction::Move { ty, .. } | Instruction::Phi { ty, .. } => Some(ty.clone()),
@@ -57,11 +60,13 @@ fn use_regs(i: &Instruction) -> Vec<RegId> {
     match i {
         Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::LoadBool { .. }
         | Instruction::NewTable { .. } => vec![],
-        Instruction::Move { source, .. } => vec![*source],
+        Instruction::Move { source, .. } | Instruction::Neg { source, .. } => vec![*source],
         Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
         | Instruction::Less { left, right, .. } | Instruction::Mul { left, right, .. }
         | Instruction::Div { left, right, .. } | Instruction::IntDiv { left, right, .. }
-        | Instruction::Mod { left, right, .. } | Instruction::Eq { left, right, .. } =>
+        | Instruction::Mod { left, right, .. }
+        | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. }
+        | Instruction::Eq { left, right, .. } =>
             vec![*left, *right],
         Instruction::Not { source, .. } => vec![*source],
         Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => vec![*table, *key, *val],
@@ -84,9 +89,11 @@ fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
         Instruction::Add { target, left, right } | Instruction::Sub { target, left, right }
         | Instruction::Less { target, left, right } | Instruction::Mul { target, left, right }
         | Instruction::Div { target, left, right } | Instruction::IntDiv { target, left, right }
-        | Instruction::Mod { target, left, right } | Instruction::Eq { target, left, right } =>
+        | Instruction::Mod { target, left, right }
+        | Instruction::Leq { target, left, right } | Instruction::Geq { target, left, right }
+        | Instruction::Eq { target, left, right, .. } =>
             { g(target); g(left); g(right); }
-        Instruction::Not { target, source } => { g(target); g(source); }
+        Instruction::Neg { target, source } | Instruction::Not { target, source } => { g(target); g(source); }
         Instruction::Phi { target, args, .. } => { g(target); for (_, r) in args.iter_mut() { g(r); } }
         Instruction::EnsureCapacity { table, limit } => { g(table); g(limit); }
         Instruction::HoistRawPtr { table } => g(table),
@@ -196,15 +203,26 @@ fn const_eval(
                 .wrapping_sub(go(blocks, def_map, *right, depth + 1)?)),
             Instruction::Mul { left, right, .. } => Some(go(blocks, def_map, *left, depth + 1)?
                 .wrapping_mul(go(blocks, def_map, *right, depth + 1)?)),
-            // division/modulo only fold when exact: checked_div/rem return
-            // None on /0 and on i64::MIN/-1 overflow — those stay runtime
-            // panics instead of becoming const traps
-            Instruction::IntDiv { left, right, .. } =>
-                go(blocks, def_map, *left, depth + 1)?
-                    .checked_div(go(blocks, def_map, *right, depth + 1)?),
-            Instruction::Mod { left, right, .. } =>
-                go(blocks, def_map, *left, depth + 1)?
-                    .checked_rem(go(blocks, def_map, *right, depth + 1)?),
+            Instruction::Neg { source, .. } =>
+                go(blocks, def_map, *source, depth + 1)?.checked_neg(),
+            // Lua floor semantics: quotient rounds toward negative infinity,
+            // remainder takes the divisor's sign. checked_div/rem return None
+            // on /0 and on i64::MIN/-1 overflow — those stay runtime panics
+            // instead of becoming const traps; the sign adjustment only
+            // fires when a remainder exists and disagrees with the divisor.
+            Instruction::IntDiv { left, right, .. } => {
+                let (l, r) = (go(blocks, def_map, *left, depth + 1)?,
+                    go(blocks, def_map, *right, depth + 1)?);
+                let q = l.checked_div(r)?;
+                let m = l.checked_rem(r)?;
+                if m != 0 && ((m < 0) != (r < 0)) { q.checked_sub(1) } else { Some(q) }
+            }
+            Instruction::Mod { left, right, .. } => {
+                let (l, r) = (go(blocks, def_map, *left, depth + 1)?,
+                    go(blocks, def_map, *right, depth + 1)?);
+                let m = l.checked_rem(r)?;
+                if m != 0 && ((m < 0) != (r < 0)) { m.checked_add(r) } else { Some(m) }
+            }
             _ => None,
         }
     }
@@ -294,9 +312,23 @@ impl IrBackend {
     }
 
     fn is_loop_header(&self, h: BlockId) -> bool {
-        // A loop header has a back edge: a LATER block jumping to it.
-        self.program.blocks[h + 1..].iter().any(|p| {
+        // A loop header has a back edge: a LATER block jumping to it, from
+        // inside its own body. The second clause is load-bearing: the
+        // lowerer mints if-arm blocks (including nested ifs' joins) AFTER
+        // the enclosing join, so a nested if's inner join jumps backward
+        // to the outer join — a back edge in id space, but not a loop.
+        // For a real header the back-jumper is reachable from the header's
+        // own branch successors (the body flows to the back edge); an
+        // if-join's jumper sits in a sibling arm nothing downstream
+        // reaches. Found by feat_if_02 (nested if, then another if in the
+        // same join block): the false-positive header hit emit_loop twice.
+        let Some(Terminator::Branch { true_block, false_block, .. }) =
+            &self.program.blocks[h].terminator else { return false; };
+        let mut body_reach = self.reachable_from(*true_block);
+        body_reach.extend(self.reachable_from(*false_block));
+        self.program.blocks[h + 1..].iter().enumerate().any(|(i, p)| {
             matches!(&p.terminator, Some(Terminator::Jump(t)) if *t == h)
+                && body_reach.contains(&(h + 1 + i))
         })
     }
 
@@ -357,6 +389,8 @@ impl IrBackend {
                     | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. }
                     | Instruction::Mul { .. } | Instruction::Div { .. }
                     | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                    | Instruction::Neg { .. }
+                    | Instruction::Leq { .. } | Instruction::Geq { .. }
                     | Instruction::Eq { .. } | Instruction::Not { .. });
                 !(dead && pure)
             });
@@ -404,7 +438,22 @@ impl IrBackend {
                                     cb.insert(*target, l < r);
                                 }
                             }
-                        Instruction::Eq { target, left, right }
+                        Instruction::Leq { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    cb.insert(*target, l <= r);
+                                }
+                            }
+                        Instruction::Geq { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    cb.insert(*target, l >= r);
+                                }
+                            }
+                        // Only INTEGER equality folds. Bool Eqs deliberately
+                        // stay unfolded (emission renders both-const bools as
+                        // literals anyway) — a byte-frozen choice.
+                        Instruction::Eq { target, left, right, ty: StaticType::Integer }
                             if single_def(&defs, *target) => {
                                 if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
                                     cb.insert(*target, l == r);
@@ -422,17 +471,30 @@ impl IrBackend {
                                     ci.insert(*target, l.wrapping_mul(r));
                                 }
                             }
+                        Instruction::Neg { target, source }
+                            if single_def(&defs, *target) => {
+                                if let Some(&v) = ci.get(source) {
+                                    ci.insert(*target, v.wrapping_neg());
+                                }
+                            }
+                        // Lua floor semantics, matching the runtime templates;
                         // checked_div/rem: /0 and MIN/-1 stay unfolded
                         Instruction::IntDiv { target, left, right }
                             if single_def(&defs, *target) => {
                                 if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                    if let Some(v) = l.checked_div(r) { ci.insert(*target, v); }
+                                    if let (Some(q), Some(m)) = (l.checked_div(r), l.checked_rem(r)) {
+                                        let v = if m != 0 && ((m < 0) != (r < 0)) { q - 1 } else { q };
+                                        ci.insert(*target, v);
+                                    }
                                 }
                             }
                         Instruction::Mod { target, left, right }
                             if single_def(&defs, *target) => {
                                 if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                    if let Some(v) = l.checked_rem(r) { ci.insert(*target, v); }
+                                    if let Some(m) = l.checked_rem(r) {
+                                        let v = if m != 0 && ((m < 0) != (r < 0)) { m + r } else { m };
+                                        ci.insert(*target, v);
+                                    }
                                 }
                             }
                         Instruction::Move { target, source, ty }
@@ -476,7 +538,8 @@ impl IrBackend {
                 if skip.contains(&d) { continue; }
                 if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }
                     | Instruction::Mul { .. } | Instruction::Div { .. }
-                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }) { continue; }
+                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                    | Instruction::Neg { .. }) { continue; }
                 let p = pool_of(&t);
                 match ty.insert(d, p) {
                     Some(old) if old != p => panic!("reg {d} has conflicting types"),
@@ -488,15 +551,21 @@ impl IrBackend {
             let mut changed = false;
             for b in blocks {
                 for i in &b.instrs {
-                    let (Instruction::Add { target, left, right, .. }
-                    | Instruction::Sub { target, left, right, .. }
-                    | Instruction::Mul { target, left, right, .. }
-                    | Instruction::Div { target, left, right, .. }
-                    | Instruction::IntDiv { target, left, right, .. }
-                    | Instruction::Mod { target, left, right, .. }) = i else { continue };
-                    if skip.contains(target) || ty.contains_key(target) { continue; }
-                    if let Some(&p) = ty.get(left).or_else(|| ty.get(right)) {
-                        ty.insert(*target, p);
+                    let (target, src_pools) = match i {
+                        (Instruction::Add { target, left, right, .. }
+                        | Instruction::Sub { target, left, right, .. }
+                        | Instruction::Mul { target, left, right, .. }
+                        | Instruction::Div { target, left, right, .. }
+                        | Instruction::IntDiv { target, left, right, .. }
+                        | Instruction::Mod { target, left, right, .. }) =>
+                            (*target, [ty.get(left).copied(), ty.get(right).copied()]),
+                        Instruction::Neg { target, source, .. } =>
+                            (*target, [ty.get(source).copied(), None]),
+                        _ => continue,
+                    };
+                    if skip.contains(&target) || ty.contains_key(&target) { continue; }
+                    if let Some(p) = src_pools.into_iter().flatten().next() {
+                        ty.insert(target, p);
                         changed = true;
                     }
                 }
@@ -513,8 +582,15 @@ impl IrBackend {
                     Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
                     | Instruction::Mul { left, right, .. } | Instruction::Div { left, right, .. }
                     | Instruction::IntDiv { left, right, .. } | Instruction::Mod { left, right, .. }
-                    | Instruction::Less { left, right, .. } | Instruction::Eq { left, right, .. } =>
+                    | Instruction::Less { left, right, .. }
+                    | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. } =>
                         vec![(*left, StaticType::Integer), (*right, StaticType::Integer)],
+                    // Eq's operands are polymorphic: the instruction's ty is
+                    // the only reliable pool source (Int and Bool physicals
+                    // share one id range, so nothing else disambiguates).
+                    Instruction::Eq { left, right, ty, .. } =>
+                        vec![(*left, ty.clone()), (*right, ty.clone())],
+                    Instruction::Neg { source, .. } => vec![(*source, StaticType::Integer)],
                     Instruction::Not { source, .. } => vec![(*source, StaticType::Boolean)],
                     Instruction::Move { source, ty: t, .. } => vec![(*source, t.clone())],
                     Instruction::EnsureCapacity { table, limit } =>
@@ -647,6 +723,8 @@ impl IrBackend {
                     Instruction::Less { target, .. } | Instruction::Phi { target, .. } |
                     Instruction::Mul { target, .. } | Instruction::Div { target, .. } |
                     Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. } |
+                    Instruction::Neg { target, .. } |
+                    Instruction::Leq { target, .. } | Instruction::Geq { target, .. } |
                     Instruction::Eq { target, .. } | Instruction::Not { target, .. } |
                     Instruction::GetTableFast { target, .. } => {
                         def_map.insert(*target, (block.id, i));
@@ -1489,18 +1567,48 @@ impl IrBackend {
                     out.push_str(&format!("{ind}i_r{target} = {} / {};\n", self.iop_str(*left), self.iop_str(*right)))
                 }
             }
+            // Lua floor division: `//` rounds toward negative infinity
+            // (-7 // 2 == -4), on both the integer and float sides. The
+            // integer side is spelled explicitly (trunc quotient, minus one
+            // when a remainder exists and disagrees with the divisor's
+            // sign) rather than via div_floor — this toolchain predates
+            // stabilized int_roundings. (`/` above is the pinned
+            // divergence: Lua's `/` always yields a float and strict
+            // typing forbids that, so integer `/` is truncating division
+            // and float `/` is plain division.) /0 and MIN/-1 still panic
+            // inside the leading L / R.
             Instruction::IntDiv { target, left, right } => {
                 if self.is_float_reg(*target) {
-                    out.push_str(&format!("{ind}f_r{target} = {} / {};\n", self.fop_str(*left), self.fop_str(*right)))
+                    out.push_str(&format!("{ind}f_r{target} = ({} / {}).floor();\n", self.fop_str(*left), self.fop_str(*right)))
                 } else {
-                    out.push_str(&format!("{ind}i_r{target} = {} / {};\n", self.iop_str(*left), self.iop_str(*right)))
+                    out.push_str(&format!(
+                        "{ind}i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
+                        self.iop_str(*left), self.iop_str(*right),
+                        self.iop_str(*left), self.iop_str(*right),
+                        self.iop_str(*left), self.iop_str(*right)))
                 }
             }
+            // Lua modulo: result takes the divisor's sign (-7 % 3 == 2),
+            // unlike Rust's truncated remainder — adjust the remainder by
+            // the divisor exactly when the two signs disagree.
             Instruction::Mod { target, left, right } => {
                 if self.is_float_reg(*target) {
-                    out.push_str(&format!("{ind}f_r{target} = {} % {};\n", self.fop_str(*left), self.fop_str(*right)))
+                    out.push_str(&format!("{ind}f_r{target} = {} - ({} / {}).floor() * {};\n",
+                        self.fop_str(*left), self.fop_str(*left), self.fop_str(*right), self.fop_str(*right)))
                 } else {
-                    out.push_str(&format!("{ind}i_r{target} = {} % {};\n", self.iop_str(*left), self.iop_str(*right)))
+                    out.push_str(&format!(
+                        "{ind}i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",
+                        self.iop_str(*left), self.iop_str(*right),
+                        self.iop_str(*left), self.iop_str(*right),
+                        self.iop_str(*left), self.iop_str(*right),
+                        self.iop_str(*right), self.iop_str(*right)))
+                }
+            }
+            Instruction::Neg { target, source } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = -{};\n", self.fop_str(*source)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = -{};\n", self.iop_str(*source)))
                 }
             }
             Instruction::Less { target, left, right } => {
@@ -1510,19 +1618,34 @@ impl IrBackend {
                     out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right)))
                 }
             }
-            Instruction::Eq { target, left, right } => {
+            Instruction::Leq { target, left, right } => {
                 if self.is_float_reg(*left) {
-                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.fop_str(*left), self.fop_str(*right)))
-                } else if self.phys_pools.get(left) == Some(&Pool::Bool)
-                    // const-folded bool operands render as literals
-                    || (self.consts_b.contains_key(left) && self.consts_b.contains_key(right)
-                        && !self.phys_pools.contains_key(left))
-                {
-                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.bop_str(*left), self.bop_str(*right)))
+                    out.push_str(&format!("{ind}b_r{target} = {} <= {};\n", self.fop_str(*left), self.fop_str(*right)))
                 } else {
-                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.iop_str(*left), self.iop_str(*right)))
+                    out.push_str(&format!("{ind}b_r{target} = {} <= {};\n", self.iop_str(*left), self.iop_str(*right)))
                 }
             }
+            Instruction::Geq { target, left, right } => {
+                if self.is_float_reg(*left) {
+                    out.push_str(&format!("{ind}b_r{target} = {} >= {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}b_r{target} = {} >= {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            // The instruction's ty is the single source of truth for the
+            // rendering: Int and Bool physicals share one id range, so the
+            // pool tables cannot tell an int operand from a bool operand
+            // (a const-bool-on-the-left Eq used to render undeclared i_rN
+            // registers, and an aliased physical bool rendered the wrong
+            // variable entirely).
+            Instruction::Eq { target, left, right, ty } => match ty {
+                StaticType::Float =>
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.fop_str(*left), self.fop_str(*right))),
+                StaticType::Boolean =>
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.bop_str(*left), self.bop_str(*right))),
+                _ =>
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.iop_str(*left), self.iop_str(*right))),
+            },
             Instruction::Not { target, source } =>
                 out.push_str(&format!("{ind}b_r{target} = !{};\n", self.bop_str(*source))),
 
@@ -1777,13 +1900,20 @@ impl IrBackend {
                 out.push_str(&format!("{ind}if {} {{\n", self.bop_str(*cond)));
                 self.emit_seq(out, *true_block, hdr, join, d + 1, emitted, uses_handle);
                 // skip an `else` that would be empty: bare else-block with
-                // no instructions jumping straight to the join
+                // no instructions jumping straight to the join. The block
+                // is still CONSUMED — mark it emitted, or the orphan check
+                // below fires on the common `if c then flag = true end`
+                // inside a loop (the coalesced loop phi turns the else
+                // arm's join Move into a removable self-copy, re-emptying
+                // the block; found by probe_ops_loop_forms).
                 let trivial_else = self.program.blocks[*false_block].instrs.is_empty()
                     && matches!(&self.program.blocks[*false_block].terminator,
                                 Some(Terminator::Jump(t)) if Some(*t) == join);
                 if !trivial_else {
                     out.push_str(&format!("{ind}}} else {{\n"));
                     self.emit_seq(out, *false_block, hdr, join, d + 1, emitted, uses_handle);
+                } else {
+                    emitted[*false_block] = true;
                 }
                 out.push_str(&format!("{ind}}}\n"));
                 if let Some(j) = join {

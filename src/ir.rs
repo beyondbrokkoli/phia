@@ -32,8 +32,21 @@ pub enum Instruction {
     Div { target: RegId, left: RegId, right: RegId },
     IntDiv { target: RegId, left: RegId, right: RegId },
     Mod { target: RegId, left: RegId, right: RegId },
+    Neg { target: RegId, source: RegId },
     Less { target: RegId, left: RegId, right: RegId },
-    Eq { target: RegId, left: RegId, right: RegId },
+    // Native <= / >= — comparisons that cannot ride the Less desugar
+    // (a <= b => a < b+1 wraps at i64::MAX and rounds wrong for floats
+    // at 2^53) lower to these instead. The tier4 while-gate shapes keep
+    // the desugar: literal-bound `while i <= n` still materializes the
+    // pre-header +1 and opens the fast path exactly as before.
+    Leq { target: RegId, left: RegId, right: RegId },
+    Geq { target: RegId, left: RegId, right: RegId },
+    // ty = the OPERAND type (Integer | Float | Boolean — the checker
+    // guarantees both sides agree). Eq operands are the only polymorphic
+    // operands in the IR without an instruction-carried type, and Int and
+    // Bool physicals deliberately share one id range, so the pool tables
+    // cannot disambiguate them — the rendering needs this field.
+    Eq { target: RegId, left: RegId, right: RegId, ty: StaticType },
     Not { target: RegId, source: RegId },
 
     Phi { target: RegId, ty: StaticType, args: Vec<(BlockId, RegId)> },

@@ -91,6 +91,17 @@ local LOCKED_TESTS = {
     "feat_ops_01_arith.lua",
     "feat_ops_02_compare_bool.lua",
     "feat_ops_03_fast_leq.lua",
+    "feat_ops_04_floor_neg.lua",
+    "feat_ops_05_cmp_corners.lua",
+    "feat_ops_06_bool_eq_variants.lua",
+    "feat_ops_07_neg_zero.lua",
+    "feat_ops_08_loop_forms.lua",
+    "feat_ops_09_paren_gate.lua",
+    "feat_ops_10_float_specials.lua",
+    "feat_ops_11_precedence.lua",
+    "feat_ops_12_if_store_gate.lua",
+    "feat_if_02_phi_variants.lua",
+    "feat_if_03_scope_shadow.lua",
 }
 
 local LOCK_DIR = "tests/lock"
