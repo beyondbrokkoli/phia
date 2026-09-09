@@ -1,2 +1,4 @@
 /target
-/tests/diff
+/tests/diff/*
+!/tests/diff/.gitkeep
+/tests/sandbox
