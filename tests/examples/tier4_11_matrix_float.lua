@@ -1,20 +1,21 @@
 -- tier4_11_matrix_float.lua  [POSITIVE — matrix x float composition]
--- The tier4_10 shape with FLOAT children: the minted row handle flows
--- into SetTableFast with a Float ty, float_roots covers the row
--- register, and the hoisted pointer is *mut f64 off the farray side; EC
--- zero-fills with 0.0. Three milestones composing in one loop: nested
--- tables, float values, per-row hoisting. The universes collide and the
--- checksums agree.
+-- The tier4_10 shape with FLOAT children: the minted row handle (a fast
+-- *p_t.add(i) read since tier4_13, against t's *mut i64 handle-array
+-- pointer hoisted at ctx 0) flows into SetTableFast with a Float ty,
+-- and the per-row hoisted pointer is *mut f64 off the farray side; EC
+-- zero-fills with 0.0. Four milestones composing in one loop: nested
+-- tables, float values, per-row hoisting, fast row resolution. The
+-- universes collide and the checksums agree.
 -- EXPECT: TABLE 0 LEN 2 NZ 2 CHECKSUM 8
 -- EXPECT: TABLE 1 LEN 4 NZ 4 CHECKSUM 9088264048033660928 SUM 1
 -- EXPECT: TABLE 2 LEN 4 NZ 4 CHECKSUM 9088264048033660928 SUM 1
 -- EXPECT: NTABLES 3
 -- EXPECT: fast_sets=1
--- EXPECT: fast_gets=0
+-- EXPECT: fast_gets=1
 -- EXPECT: dyn_sets=4
--- EXPECT: dyn_gets=1
--- EXPECT: hoists=1
--- EXPECT: hoist_ctx=1
+-- EXPECT: dyn_gets=0
+-- EXPECT: hoists=2
+-- EXPECT: hoist_ctx=0,1
 local t = {}
 local row0 = {}
 row0[0] = 0.5

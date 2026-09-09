@@ -62,8 +62,10 @@ end
 -- tables into the grid's HANDLE array (the grid's own hoisted pointer is
 -- *mut i64 — handle and float tables live in disjoint id ranges since
 -- the pool split; this phase is why that range exists). The fill loop is
--- the matrix path: t[i] re-resolves once per outer trip, EC + hoist
--- re-arm per row. Values shown after phase L's two epochs (0.75 each).
+-- the matrix path with its tier4_13 fast row resolution: the grid's
+-- pointer pair hoists above the outer loop (ctx 0), the row loads fast
+-- (`row = *p_grid.add(i)` once per outer trip), EC + hoist re-arm per
+-- row at depth 1. Values shown after phase L's two epochs (0.75 each).
 -- Final: grid LEN 32 of handles; each row LEN 1024, NZ 1024, SUM 768.
 -- EXPECT: TABLE 6 LEN 32 NZ 32 CHECKSUM 15136
 -- EXPECT: TABLE 7 LEN 1024 NZ 1024 CHECKSUM -3458764513820540928 SUM 768
@@ -114,10 +116,12 @@ while fd_row < 32 do
     fd_row = fd_row + 1
 end
 
--- PHASE E — The Grid Readback. The matrix READ: t[i] resolves per outer
--- trip, the read rides the hoisted row pointer (fast_get), the
--- accumulator is a float phi carried across both loops. Post-loop
--- witness store is dyn by design. Read happens BEFORE phase L's epochs.
+-- PHASE E — The Grid Readback. The matrix READ: the row loads fast once
+-- per outer trip (ctx-0 root hoist + fast mint), and since tier4_13 the
+-- leaf read rides the per-row hoisted pointer too (fast_get at depth 1 —
+-- previously a dyn arena get per inner trip), the accumulator is a
+-- float phi carried across both loops. Post-loop witness store is dyn
+-- by design. Read happens BEFORE phase L's epochs.
 -- Final: report SUM 8192 (= 32768 × 0.25).
 -- EXPECT: TABLE 39 LEN 1 NZ 1 CHECKSUM 4665729213955833856 SUM 8192
 local fe_total = 0.0
@@ -267,20 +271,23 @@ while fk_row < 4 do
 end
 
 -- PHASE L — The Grand Reconciliation. Two read-modify-write epochs over
--- the phase-D grid at the file's deepest hoist (depth 2: the row's EC +
--- hoist re-arm in the middle body, 32 times per epoch, underwriting 64
--- fast reads and 64 fast writes each). The audit re-sums post-epochs;
--- the three witnesses are dyn by design (post-loop code is never a
--- scan candidate). Grid rows finish at 0.75 everywhere.
+-- the phase-D grid at the file's deepest hoists: the grid's pointer pair
+-- re-hoists in the epoch body at the row level (ctx 1, tier4_13), the
+-- row loads fast per row trip, and the leaf EC + hoist re-arm in the
+-- middle body (ctx 2, 32 times per epoch, underwriting 64 fast reads and
+-- 64 fast writes each). The audit loop repeats the phase-E shape. The
+-- audit re-sums post-epochs; the three witnesses are dyn by design
+-- (post-loop code is never a scan candidate). Grid rows finish at 0.75
+-- everywhere.
 -- Final: probe SUM 24577.5 (= 0.75 + 0.75 + 32768 × 0.75).
 -- EXPECT: TABLE 61 LEN 3 NZ 3 CHECKSUM -9061242450269437952 SUM 24577.5
 -- EXPECT: NTABLES 62
 -- EXPECT: fast_sets=12
--- EXPECT: fast_gets=3
+-- EXPECT: fast_gets=7
 -- EXPECT: dyn_sets=23
--- EXPECT: dyn_gets=19
--- EXPECT: hoists=13
--- EXPECT: hoist_ctx=0,0,0,0,1,0,0,0,0,0,1,0,2
+-- EXPECT: dyn_gets=15
+-- EXPECT: hoists=17
+-- EXPECT: hoist_ctx=0,0,0,0,0,1,0,1,0,0,0,0,1,1,0,2,1
 local fl_epoch = 0
 while fl_epoch < 2 do
     local fl_row = 0

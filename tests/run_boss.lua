@@ -93,6 +93,9 @@ local POSITIVE = {
     "tier4_10_matrix.lua",
     "tier4_11_matrix_float.lua",
     "tier4_12_unprovable_limit.lua",
+    "tier4_13_matrix_fast_row.lua",
+    "tier4_14_matrix_alias_decline.lua",
+    "tier4_15_matrix_copy_reach.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",

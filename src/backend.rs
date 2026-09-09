@@ -649,6 +649,87 @@ impl IrBackend {
             }
         };
 
+        // TIER 4-13 (fast row resolution) — REACH alias closure, computed
+        // ONCE, program-wide. REACH(R) = the roots whose handles may ever
+        // sit in R's slots. Handles enter a table's slots ONLY through
+        // stores (NewTable mints fresh handles, GetTable copies them out),
+        // so two rules close the set: a root-traceable val lands directly,
+        // a val READ from another table's slots copies that table's whole
+        // reach. A scalar store through a child of R (`t[i][j] = v`) can
+        // resize exactly the storage of the Tables REACH(R) names — never
+        // R's own array — so regions containing such a store may still
+        // hoist R, but must not hoist (nor EC under) anything in REACH(R).
+        // Unresolvable (phi) vals poison the dest: unknown slots abort.
+        let handle_origin = |blocks: &[BasicBlock], mut r: RegId| -> Option<Result<RegId, RegId>> {
+            let mut seen = HashSet::new();
+            loop {
+                if !seen.insert(r) { return None; }
+                let &(b, i) = def_map.get(&r)?;
+                match &blocks[b].instrs[i] {
+                    Instruction::NewTable { .. } => return Some(Ok(r)),
+                    Instruction::Move { source, ty, .. }
+                        if matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)) =>
+                    {
+                        r = *source;
+                    }
+                    // names whatever Table the parent root's slots hold
+                    Instruction::GetTable { table, .. } | Instruction::GetTableFast { table, .. } =>
+                        return get_table_root(blocks, *table).map(Err),
+                    _ => return None,
+                }
+            }
+        };
+        let mut reach: HashMap<RegId, HashSet<RegId>> = HashMap::new();
+        let mut reach_tainted: HashSet<RegId> = HashSet::new();
+        loop {
+            let mut changed = false;
+            for b in &self.program.blocks {
+                for ins in &b.instrs {
+                    let (Instruction::SetTable { table, val, ty, .. }
+                    | Instruction::SetTableFast { table, val, ty, .. }) = ins else { continue };
+                    if !matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)) { continue; }
+                    let Some(dest) = get_table_root(&self.program.blocks, *table) else { continue };
+                    match handle_origin(&self.program.blocks, *val) {
+                        Some(Ok(r)) => { changed |= reach.entry(dest).or_default().insert(r); }
+                        Some(Err(src)) => {
+                            let src_set: Vec<RegId> = reach.get(&src)
+                                .map(|s| s.iter().copied().collect())
+                                .unwrap_or_default();
+                            let d = reach.entry(dest).or_default();
+                            for r in src_set {
+                                changed |= d.insert(r);
+                            }
+                        }
+                        None => { changed |= reach_tainted.insert(dest); }
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+
+        // The parent root of a child-store's table operand: follow table
+        // Moves, then ONE GetTable/GetTableFast hop whose own table
+        // operand is root-traceable. Deeper chains and phi-carried tables
+        // stay behind the abort firewall (firewall_abort_all, tier4_03).
+        let child_parent_root = |blocks: &[BasicBlock], table_reg: RegId| -> Option<RegId> {
+            let mut curr = table_reg;
+            let mut seen = HashSet::new();
+            loop {
+                if !seen.insert(curr) { return None; }
+                let &(b, i) = def_map.get(&curr)?;
+                match &blocks[b].instrs[i] {
+                    Instruction::Move { source, ty, .. }
+                        if matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)) =>
+                    {
+                        curr = *source;
+                    }
+                    Instruction::GetTable { table, .. } | Instruction::GetTableFast { table, .. } =>
+                        return get_table_root(blocks, *table),
+                    _ => return None,
+                }
+            }
+        };
+
         let num_blocks = self.program.blocks.len();
         for header_id in 0..num_blocks {
             let terminator = self.program.blocks[header_id].terminator.clone();
@@ -671,6 +752,9 @@ impl IrBackend {
                             // (EC covers it) but CAN rebind the constant slot
                             // a child handle is read from (pinned: tier4_03).
                             let mut region_stored_roots = HashSet::new();
+                            // TIER 4-13: parent roots of non-affine SCALAR
+                            // child-stores in this region (see PASS 1).
+                            let mut child_store_roots = HashSet::new();
                             let mut hoists = BTreeSet::new();
                             let mut upgrades: Vec<(BlockId, usize, Instruction)> = Vec::new();
 
@@ -685,14 +769,40 @@ impl IrBackend {
                             'poison: for &blk in &region {
                                 for instr in &self.program.blocks[blk].instrs {
                                     match instr {
-                                        Instruction::SetTable { table, key, .. } => {
+                                        Instruction::SetTable { table, key, ty, .. } => {
                                             if let Some(root) = get_table_root(&self.program.blocks, *table) {
                                                 region_stored_roots.insert(root);
                                             }
                                             match key_offset(&self.program.blocks, *key, idx_reg) {
                                                 None => match get_table_root(&self.program.blocks, *table) {
                                                     Some(root) => { clobbered_roots.insert(root); }
-                                                    None => { abort_all = true; break 'poison; }
+                                                    None => {
+                                                        // TIER 4-13: a non-affine SCALAR store
+                                                        // through a one-hop child of root R
+                                                        // (`t[i][j] = v`, the matrix store seen
+                                                        // from the OUTER loop) mutates only
+                                                        // storage of the Tables R's slots name
+                                                        // — never R's own array. It need not
+                                                        // abort the region: PASS 2 and tier-4
+                                                        // below decline exactly the roots in
+                                                        // REACH(R) instead. Table-VALUED stores
+                                                        // and deeper/unresolvable operands keep
+                                                        // the abort — stores are how aliases
+                                                        // are born (firewall_abort_all, and the
+                                                        // affine cousin pads ECs globally).
+                                                        let scalar_val = !matches!(
+                                                            ty,
+                                                            StaticType::Table(_) | StaticType::UnknownTable(_)
+                                                        );
+                                                        if scalar_val {
+                                                            match child_parent_root(&self.program.blocks, *table) {
+                                                                Some(r) => { child_store_roots.insert(r); }
+                                                                None => { abort_all = true; break 'poison; }
+                                                            }
+                                                        } else {
+                                                            abort_all = true; break 'poison;
+                                                        }
+                                                    }
                                                 },
                                                 Some(off) if off < 0 => {} // Cannot resize
                                                 Some(off) => match get_table_root(&self.program.blocks, *table) {
@@ -723,6 +833,23 @@ impl IrBackend {
 
                             if abort_all { continue; }
 
+                            // TIER 4-13 hazard set: everything a child-store
+                            // in THIS region may resize. Hoisting (and EC'ing
+                            // under a hoist) any of these roots here would be
+                            // unsound — the store runs mid-region, past any
+                            // pre-header sizing. A tainted parent (phi-typed
+                            // vals stored into it somewhere) has unknown
+                            // slots: keep the firewall and decline the region.
+                            let mut hazard_roots: HashSet<RegId> = HashSet::new();
+                            let mut hazard_tainted = false;
+                            for &r in &child_store_roots {
+                                if reach_tainted.contains(&r) { hazard_tainted = true; break; }
+                                if let Some(s) = reach.get(&r) {
+                                    hazard_roots.extend(s.iter().copied());
+                                }
+                            }
+                            if hazard_tainted { continue; }
+
                             // PASS 2: Read-Only. Determine upgrades. (Tier 2 + Tier 2b S2 check)
                             for &blk in &region {
                                 for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
@@ -733,7 +860,12 @@ impl IrBackend {
                                                 let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
                                                 if *root_def_b >= header_id { continue; }
 
-                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
+                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0)
+                                                    && !clobbered_roots.contains(&root)
+                                                    // tier4_13: a child-store in this region may
+                                                    // resize this root's storage mid-loop
+                                                    && !hazard_roots.contains(&root)
+                                                {
                                                     upgrades.push((blk, i, Instruction::SetTableFast { table: root, key: *key, val: *val, ty: ty.clone() }));
                                                     hoists.insert(root);
                                                 }
@@ -745,7 +877,10 @@ impl IrBackend {
                                                 let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0,0));
                                                 if *root_def_b >= header_id { continue; }
 
-                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0) && !clobbered_roots.contains(&root) {
+                                                if key_offset(&self.program.blocks, *key, idx_reg).map_or(false, |off| off >= 0)
+                                                    && !clobbered_roots.contains(&root)
+                                                    && !hazard_roots.contains(&root)
+                                                {
                                                     upgrades.push((blk, i, Instruction::GetTableFast { target: *target, table: root, key: *key, ty: ty.clone() }));
                                                     hoists.insert(root);
                                                 }
@@ -810,14 +945,23 @@ impl IrBackend {
                                 },
                                 None => None,
                             };
-                            if matches!((tier4_lim, tier4_entry), (Some(lim), Some(e)) if lim > 0 && e < lim) {
+                            // tier4_13: with a child-store in this region, a
+                            // minted/hoisted child (whose Table is a REACH
+                            // member of its parent) could be resized by that
+                            // same store mid-region. Blunt decline — inert
+                            // for the matrix shapes, where the child-store
+                            // is only non-affine at the OUTER level and the
+                            // minting pass is the inner one (hazard empty).
+                            if matches!((tier4_lim, tier4_entry), (Some(lim), Some(e)) if lim > 0 && e < lim)
+                                && hazard_roots.is_empty()
+                            {
                                 let region_set: HashSet<BlockId> = region.iter().copied().collect();
                                 // dedup key: (parent, const-key OR invariant key-reg)
                                 let mut child_regs: HashMap<(RegId, Option<i64>, Option<RegId>), RegId> = HashMap::new();
-                                // (handle, const?, key operand, parent, ty) — key operand is
-                                // a minted LoadInt target for consts, the original
-                                // register for invariant keys
-                                let mut mints: Vec<(RegId, Option<i64>, RegId, RegId, StaticType)> = Vec::new();
+                                // (handle, const?, key operand, parent, ty, fast) — key
+                                // operand is a minted LoadInt target for consts, the
+                                // original register for invariant keys
+                                let mut mints: Vec<(RegId, Option<i64>, RegId, RegId, StaticType, bool)> = Vec::new();
                                 for &blk in &region {
                                     for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
                                         let (table_op, own_key) = match instr {
@@ -891,13 +1035,21 @@ impl IrBackend {
                                             // the coalesced slot holds the
                                             // entry value: the child re-resolves
                                             // once per ENCLOSING trip.
-                                            let mut chain: Vec<(RegId, Option<i64>, RegId, StaticType)> = Vec::new();
+                                            // chain entries carry the hop's kind:
+                                            // a Fast feeder rides a root pointer
+                                            // an earlier pass hoisted (tier4_13),
+                                            // and the mint re-materializes it in
+                                            // kind — a FAST row resolution.
+                                            let mut chain: Vec<(RegId, Option<i64>, RegId, StaticType, bool)> = Vec::new();
                                             let mut cur = table_op;
                                             while chain.len() < 8 {
                                                 let Some(&(cb, ci)) = def_map.get(&cur) else { break };
                                                 if !region_set.contains(&cb) { break; }
-                                                let Instruction::GetTable { table, key, ty, .. } =
-                                                    &self.program.blocks[cb].instrs[ci] else { break };
+                                                let (table, key, ty, fast) = match &self.program.blocks[cb].instrs[ci] {
+                                                    Instruction::GetTable { table, key, ty, .. } => (table, key, ty, false),
+                                                    Instruction::GetTableFast { table, key, ty, .. } => (table, key, ty, true),
+                                                    _ => break,
+                                                };
                                                 let ck = match const_eval(&self.program.blocks, &def_map, *key) {
                                                     Some(c) if c >= 0 => Some(c),
                                                     Some(_) => break,
@@ -907,7 +1059,7 @@ impl IrBackend {
                                                         _ => break,
                                                     },
                                                 };
-                                                chain.push((cur, ck, *key, ty.clone()));
+                                                chain.push((cur, ck, *key, ty.clone(), fast));
                                                 cur = *table;
                                             }
                                             if chain.is_empty() { continue; }
@@ -916,7 +1068,7 @@ impl IrBackend {
                                             let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0, 0));
                                             if *root_def_b >= header_id { continue; }
                                             let mut parent = root;
-                                            for &(feeder, ck, kreg, ref fty) in chain.iter().rev() {
+                                            for &(feeder, ck, kreg, ref fty, fast) in chain.iter().rev() {
                                                 let dk = (parent, ck, if ck.is_some() { None } else { Some(kreg) });
                                                 let hh = if let Some(&hh) = child_regs.get(&dk) {
                                                     hh
@@ -929,8 +1081,8 @@ impl IrBackend {
                                                     });
                                                     let hh = next_vreg; next_vreg += 1;
                                                     match key_mint {
-                                                        Some((k, c)) => mints.push((hh, Some(c), k, parent, fty.clone())),
-                                                        None => mints.push((hh, None, kreg, parent, fty.clone())),
+                                                        Some((k, c)) => mints.push((hh, Some(c), k, parent, fty.clone(), fast)),
+                                                        None => mints.push((hh, None, kreg, parent, fty.clone(), fast)),
                                                     }
                                                     child_regs.insert(dk, hh);
                                                     hh
@@ -964,15 +1116,25 @@ impl IrBackend {
                                             if *tgt == header_id { pre = b; break; }
                                         }
                                     }
-                                    for (h, ck, key_op, parent, ty) in mints {
+                                    for (h, ck, key_op, parent, ty, fast) in mints {
                                         if let Some(c) = ck {
                                             self.program.blocks[pre].instrs.push(
                                                 Instruction::LoadInt { target: key_op, val: c }
                                             );
                                         }
-                                        self.program.blocks[pre].instrs.push(
-                                            Instruction::GetTable { target: h, table: parent, key: key_op, ty }
-                                        );
+                                        // in kind: a Fast hop's mint rides the root
+                                        // pointer its pass already hoisted + EC'd
+                                        // (same table, same key, same bound) — the
+                                        // tier4_13 fast row resolution `row = *p_t.add(i)`
+                                        if fast {
+                                            self.program.blocks[pre].instrs.push(
+                                                Instruction::GetTableFast { target: h, table: parent, key: key_op, ty }
+                                            );
+                                        } else {
+                                            self.program.blocks[pre].instrs.push(
+                                                Instruction::GetTable { target: h, table: parent, key: key_op, ty }
+                                            );
+                                        }
                                     }
                                 }
                                 // singly-used in-region feeders die; feeders
@@ -994,11 +1156,15 @@ impl IrBackend {
                                 self.program.blocks[blk].instrs[i] = new_instr;
                             }
                             // tier-4 cleanup: the rewrites above dropped the
-                            // feeders' last use — remove the dead reads
+                            // feeders' last use — remove the dead reads (dyn
+                            // and fast: the mint re-does the identical read,
+                            // panics included, in a dominating position)
                             if !orphan_feeders.is_empty() {
                                 for &blk in &region {
                                     self.program.blocks[blk].instrs.retain(|ins| {
-                                        !matches!(ins, Instruction::GetTable { target, .. } if orphan_feeders.contains(target))
+                                        !matches!(ins,
+                                            Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
+                                            if orphan_feeders.contains(target))
                                     });
                                 }
                             }
