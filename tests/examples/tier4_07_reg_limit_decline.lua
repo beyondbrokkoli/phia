@@ -1,18 +1,22 @@
--- tier4_07_reg_limit_decline.lua  [POSITIVE — the literal-limit gate]
--- The limit is n = 5 + 3: invariant and literal-FED, but its def is an
--- Add, not a LoadInt — tier-4 cannot prove lim > 0 at compile time and
--- declines (a zero-trip loop with a nil child must never inherit a
--- pre-header panic). Flat tier-2 has no such restriction — the divergence
--- is deliberate and pinned here. Extending to proven-positive computed
--- limits is future work.
+-- tier4_07_reg_limit_decline.lua  [POSITIVE — was the literal-limit
+-- decline pin; the proven-positive computed-limit extension flipped it]
+-- The limit is n = 5 + 3: invariant, literal-fed, and its def is an Add —
+-- once tier-4 folded limit def chains locally (propagate_constants runs
+-- AFTER optimize), 8 > 0 is provable and the nested store converts: the
+-- mint materializes the child once, EC sizes to the (post-fold) limit 8,
+-- the store rides the hoisted pointer. The DECLINE arm did not vanish —
+-- it moved to limits no folder can prove (a table-fed n: tier4_12), and
+-- the >=1-trip side gained its own pin (init above limit: tier4_08).
+-- Flat tier-2 never had the restriction — that divergence is now closed.
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 8 NZ 8 CHECKSUM 36
 -- EXPECT: NTABLES 2
--- EXPECT: fast_sets=0
+-- EXPECT: fast_sets=1
 -- EXPECT: fast_gets=0
--- EXPECT: dyn_sets=3
+-- EXPECT: dyn_sets=2
 -- EXPECT: dyn_gets=1
--- EXPECT: hoists=0
+-- EXPECT: hoists=1
+-- EXPECT: hoist_ctx=0
 local t = {}
 local inner = {}
 inner[0] = 0

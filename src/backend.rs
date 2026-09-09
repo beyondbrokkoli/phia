@@ -146,6 +146,36 @@ fn single_def(defs: &HashMap<RegId, usize>, r: RegId) -> bool {
     defs.get(&r).copied() == Some(1)
 }
 
+// Local constant folder over def_map (LoadInt / int-Move / Add / Sub over
+// constants). propagate_constants runs AFTER optimize() in the pipeline, so
+// passes that need proof-of-value inside optimize() fold for themselves.
+// Phis return None — a loop-carried value has no compile-time value.
+fn const_eval(
+    blocks: &[BasicBlock],
+    def_map: &HashMap<RegId, (BlockId, usize)>,
+    r: RegId,
+) -> Option<i64> {
+    fn go(
+        blocks: &[BasicBlock],
+        def_map: &HashMap<RegId, (BlockId, usize)>,
+        r: RegId,
+        depth: usize,
+    ) -> Option<i64> {
+        if depth > 64 { return None; }
+        let &(b, i) = def_map.get(&r)?;
+        match &blocks[b].instrs[i] {
+            Instruction::LoadInt { val, .. } => Some(*val),
+            Instruction::Move { source, .. } => go(blocks, def_map, *source, depth + 1),
+            Instruction::Add { left, right, .. } => Some(go(blocks, def_map, *left, depth + 1)?
+                .wrapping_add(go(blocks, def_map, *right, depth + 1)?)),
+            Instruction::Sub { left, right, .. } => Some(go(blocks, def_map, *left, depth + 1)?
+                .wrapping_sub(go(blocks, def_map, *right, depth + 1)?)),
+            _ => None,
+        }
+    }
+    go(blocks, def_map, r, 0)
+}
+
 fn loop_region(blocks: &[BasicBlock], header: BlockId, body: BlockId) -> Vec<BlockId> {
     // Every block an iteration can execute: reachable from the body
     // without passing back through the header. Headers themselves are
@@ -715,26 +745,54 @@ impl IrBackend {
                             // tests/examples/nested_05_dyn_loop.lua.
                             //
                             // Deliberately narrow (first landing): the
-                            // limit must be a literal > 0 (the mint's
-                            // nil-panic must live under EC's lim>0 guard —
-                            // tier4_04/05 pin both sides, tier4_07 the
-                            // computed-limit decline); ONE hop only
-                            // (t[0][1][i] declines — get_table_root stops
-                            // at None; this decline has no sentinel yet);
-                            // orphaned feeders are deleted only when
-                            // singly-used, by THIS pass (a global
-                            // const-key purity rule would erase unused
-                            // reads — nested_06 pins their survival).
+                            // limit must const-fold positive AND the
+                            // induction var's entry value must fold
+                            // below it — the mint's EC/Hoist nil-panic
+                            // is faithful only for a loop that iterates
+                            // (tier4_04/05 lim side, tier4_08 entry
+                            // side, tier4_12 the unprovable decline);
+                            // hop keys are non-negative consts or
+                            // registers invariant for the region (an
+                            // enclosing phi — the matrix path,
+                            // tier4_10/11); orphaned feeders are
+                            // deleted only when singly-used, by THIS
+                            // pass (a global const-key purity rule
+                            // would erase unused reads — nested_06
+                            // pins their survival).
                             let mut orphan_feeders: HashSet<RegId> = HashSet::new();
-                            let tier4_lim = def_map.get(&limit_reg).and_then(|&(b, i)| {
-                                if let Instruction::LoadInt { val, .. } = &self.program.blocks[b].instrs[i] {
-                                    Some(*val)
-                                } else { None }
-                            });
-                            if matches!(tier4_lim, Some(v) if v > 0) {
+                            // Proven-positive COMPUTED limits: fold the
+                            // limit's def chain locally instead of demanding
+                            // a LoadInt def (tier4_07). Unprovable limits
+                            // still decline (tier4_12).
+                            let tier4_lim = const_eval(&self.program.blocks, &def_map, limit_reg);
+                            // >=1-TRIP PROOF, alongside lim > 0: the mint's
+                            // EC/Hoist nil-panic in the pre-header is
+                            // faithful only if the loop actually iterates,
+                            // and a positive limit alone does not guarantee
+                            // that — the induction var can START above it
+                            // (zero trips, nil child: dyn runs silent, the
+                            // mint would panic — tier4_08). The entry value
+                            // is the phi's pre-header argument, or the reg
+                            // itself when no phi exists (then it is constant
+                            // across iterations, so it either trips forever
+                            // or never).
+                            let tier4_entry = match def_map.get(&idx_reg) {
+                                Some(&(b, i)) => match &self.program.blocks[b].instrs[i] {
+                                    Instruction::Phi { args, .. } => args.iter()
+                                        .find(|&&(pb, _)| pb < header_id)
+                                        .and_then(|&(_, r)| const_eval(&self.program.blocks, &def_map, r)),
+                                    _ => const_eval(&self.program.blocks, &def_map, idx_reg),
+                                },
+                                None => None,
+                            };
+                            if matches!((tier4_lim, tier4_entry), (Some(lim), Some(e)) if lim > 0 && e < lim) {
                                 let region_set: HashSet<BlockId> = region.iter().copied().collect();
-                                let mut child_regs: HashMap<(RegId, i64), RegId> = HashMap::new();
-                                let mut mints: Vec<(RegId, RegId, RegId, i64, StaticType)> = Vec::new();
+                                // dedup key: (parent, const-key OR invariant key-reg)
+                                let mut child_regs: HashMap<(RegId, Option<i64>, Option<RegId>), RegId> = HashMap::new();
+                                // (handle, const?, key operand, parent, ty) — key operand is
+                                // a minted LoadInt target for consts, the original
+                                // register for invariant keys
+                                let mut mints: Vec<(RegId, Option<i64>, RegId, RegId, StaticType)> = Vec::new();
                                 for &blk in &region {
                                     for (i, instr) in self.program.blocks[blk].instrs.iter().enumerate() {
                                         let (table_op, own_key) = match instr {
@@ -745,40 +803,118 @@ impl IrBackend {
                                         // flat-eligible ops traced to roots in PASS 2 — not ours
                                         if get_table_root(&self.program.blocks, table_op).is_some() { continue; }
                                         let Some(&(fb, fi)) = def_map.get(&table_op) else { continue };
-                                        if !region_set.contains(&fb) { continue; }
-                                        let (parent, feed_key, feed_ty) =
-                                            match &self.program.blocks[fb].instrs[fi] {
-                                                Instruction::GetTable { table, key, ty, .. } =>
-                                                    (*table, *key, ty.clone()),
-                                                _ => continue,
-                                            };
-                                        let feed_const = match def_map.get(&feed_key) {
-                                            Some(&(kb, ki)) =>
-                                                match &self.program.blocks[kb].instrs[ki] {
-                                                    Instruction::LoadInt { val, .. } => Some(*val),
-                                                    _ => None,
-                                                },
-                                            None => None,
-                                        };
-                                        let Some(c) = feed_const else { continue };
-                                        if c < 0 { continue; }
-                                        let Some(root) = get_table_root(&self.program.blocks, parent) else { continue };
-                                        if region_stored_roots.contains(&root) { continue; }
-                                        let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0, 0));
-                                        if *root_def_b >= header_id { continue; }
                                         let Some(off) = key_offset(&self.program.blocks, own_key, idx_reg) else { continue };
                                         if off < 0 { continue; }
 
-                                        let child_key = (root, c);
-                                        let h = if let Some(&h) = child_regs.get(&child_key) {
-                                            h
+                                        // The replacement handle the op will target.
+                                        let h: RegId;
+                                        if !region_set.contains(&fb) {
+                                            // MATRIX PATH (tier4_10/11): the feeder
+                                            // lives in THIS loop's pre-header — the
+                                            // child varies per ENCLOSING trip
+                                            // (`t[i][j]`). No mint: the feeder IS the
+                                            // materialization, re-resolved every
+                                            // enclosing trip; EC + Hoist land right
+                                            // after it in the same block, so the
+                                            // hoist re-arms per enclosing trip too.
+                                            // Soundness: the feeder's register is
+                                            // SSA-stable, and the slot it resolved
+                                            // goes stale only via a store through
+                                            // the parent root inside THIS region —
+                                            // the region_stored_roots guard below.
+                                            // The feeder must sit in the pre-header
+                                            // block ITSELF: an intervening loop
+                                            // between it and this header could
+                                            // resize the child or rebind the slot
+                                            // after the hoist.
+                                            let mut pre: Option<BlockId> = None;
+                                            for b in 0..header_id {
+                                                if let Some(Terminator::Jump(tgt)) = &self.program.blocks[b].terminator {
+                                                    if *tgt == header_id { pre = Some(b); break; }
+                                                }
+                                            }
+                                            if pre != Some(fb) { continue; }
+                                            let root = match &self.program.blocks[fb].instrs[fi] {
+                                                Instruction::GetTable { table, .. } =>
+                                                    get_table_root(&self.program.blocks, *table),
+                                                Instruction::GetTableFast { table, .. } => Some(*table),
+                                                _ => None,
+                                            };
+                                            let Some(root) = root else { continue };
+                                            if region_stored_roots.contains(&root) { continue; }
+                                            let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0, 0));
+                                            if *root_def_b >= header_id { continue; }
+                                            h = table_op;
                                         } else {
-                                            let k = next_vreg; next_vreg += 1;
-                                            let h = next_vreg; next_vreg += 1;
-                                            mints.push((k, h, root, c, feed_ty));
-                                            child_regs.insert(child_key, h);
-                                            h
-                                        };
+                                            // IN-REGION feeder: walk the chain
+                                            // upward (multi-hop, tier4_09). Every
+                                            // hop must be an in-region GetTable
+                                            // whose key is a non-negative CONST
+                                            // or a register INVARIANT for this
+                                            // region — defined outside the
+                                            // region AND outside this header
+                                            // (an enclosing phi: the matrix
+                                            // case t[i][j], tier4_10/11). The
+                                            // chain is re-materialized in the
+                                            // pre-header, root down, deduped
+                                            // per (parent, key) so sibling ops
+                                            // share prefixes. Only the LEAF is
+                                            // EC'd and hoisted — intermediate
+                                            // handles are resolution steps. An
+                                            // invariant key re-reads its
+                                            // register in the pre-header, where
+                                            // the coalesced slot holds the
+                                            // entry value: the child re-resolves
+                                            // once per ENCLOSING trip.
+                                            let mut chain: Vec<(RegId, Option<i64>, RegId, StaticType)> = Vec::new();
+                                            let mut cur = table_op;
+                                            while chain.len() < 8 {
+                                                let Some(&(cb, ci)) = def_map.get(&cur) else { break };
+                                                if !region_set.contains(&cb) { break; }
+                                                let Instruction::GetTable { table, key, ty, .. } =
+                                                    &self.program.blocks[cb].instrs[ci] else { break };
+                                                let ck = match const_eval(&self.program.blocks, &def_map, *key) {
+                                                    Some(c) if c >= 0 => Some(c),
+                                                    Some(_) => break,
+                                                    None => match def_map.get(key) {
+                                                        // invariant: def outside region and header
+                                                        Some(&(kb, _)) if !region_set.contains(&kb) && kb != header_id => None,
+                                                        _ => break,
+                                                    },
+                                                };
+                                                chain.push((cur, ck, *key, ty.clone()));
+                                                cur = *table;
+                                            }
+                                            if chain.is_empty() { continue; }
+                                            let Some(root) = get_table_root(&self.program.blocks, cur) else { continue };
+                                            if region_stored_roots.contains(&root) { continue; }
+                                            let (root_def_b, _) = def_map.get(&root).unwrap_or(&(0, 0));
+                                            if *root_def_b >= header_id { continue; }
+                                            let mut parent = root;
+                                            for &(feeder, ck, kreg, ref fty) in chain.iter().rev() {
+                                                let dk = (parent, ck, if ck.is_some() { None } else { Some(kreg) });
+                                                let hh = if let Some(&hh) = child_regs.get(&dk) {
+                                                    hh
+                                                } else {
+                                                    // mint k BEFORE h: the const-hop vreg
+                                                    // order is frozen in the single-hop locks
+                                                    let key_mint = ck.map(|c| {
+                                                        let k = next_vreg; next_vreg += 1;
+                                                        (k, c)
+                                                    });
+                                                    let hh = next_vreg; next_vreg += 1;
+                                                    match key_mint {
+                                                        Some((k, c)) => mints.push((hh, Some(c), k, parent, fty.clone())),
+                                                        None => mints.push((hh, None, kreg, parent, fty.clone())),
+                                                    }
+                                                    child_regs.insert(dk, hh);
+                                                    hh
+                                                };
+                                                parent = hh;
+                                                orphan_feeders.insert(feeder);
+                                            }
+                                            h = parent;
+                                        }
                                         let rewritten = match instr {
                                             Instruction::SetTable { key, val, ty, .. } =>
                                                 Instruction::SetTableFast { table: h, key: *key, val: *val, ty: ty.clone() },
@@ -791,7 +927,6 @@ impl IrBackend {
                                             .and_modify(|m| *m = (*m).max(off))
                                             .or_insert(off);
                                         hoists.insert(h);
-                                        orphan_feeders.insert(table_op);
                                     }
                                 }
                                 if !mints.is_empty() {
@@ -804,12 +939,14 @@ impl IrBackend {
                                             if *tgt == header_id { pre = b; break; }
                                         }
                                     }
-                                    for (k, h, root, c, ty) in mints {
+                                    for (h, ck, key_op, parent, ty) in mints {
+                                        if let Some(c) = ck {
+                                            self.program.blocks[pre].instrs.push(
+                                                Instruction::LoadInt { target: key_op, val: c }
+                                            );
+                                        }
                                         self.program.blocks[pre].instrs.push(
-                                            Instruction::LoadInt { target: k, val: c }
-                                        );
-                                        self.program.blocks[pre].instrs.push(
-                                            Instruction::GetTable { target: h, table: root, key: k, ty }
+                                            Instruction::GetTable { target: h, table: parent, key: key_op, ty }
                                         );
                                     }
                                 }

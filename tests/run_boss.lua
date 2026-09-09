@@ -86,6 +86,11 @@ local POSITIVE = {
     "tier4_04_zero_iter.lua",
     "tier4_06_float_child.lua",
     "tier4_07_reg_limit_decline.lua",
+    "tier4_08_zero_trip_init.lua",
+    "tier4_09_multihop.lua",
+    "tier4_10_matrix.lua",
+    "tier4_11_matrix_float.lua",
+    "tier4_12_unprovable_limit.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",

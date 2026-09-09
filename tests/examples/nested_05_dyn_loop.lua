@@ -11,20 +11,25 @@
 --    gate's decline is pinned by a sibling sentinel) ==
 --  1. Loop shape: `while i < 10` lowers to a header Branch on
 --     Less(i, 10); the limit's def block precedes the header.
---  2. Limit is a LITERAL > 0 (LoadInt 10). The minted child resolution
---     can nil-panic, so it must live under EC's `lim > 0` guard: a
---     computed limit could be 0 at runtime, and a zero-trip loop must
---     never inherit a pre-header panic. tier4_04 pins the silent zero-trip
---     side, tier4_05 the panic side, tier4_07 the decline (n = 5 + 3 is
---     invariant but its def is an Add, not a LoadInt).
+--  2. Limit PROVABLY positive and ENTERED below: the limit's def chain
+--     const-folds (LoadInt/Move/Add/Sub over constants — 10 here, but
+--     5 + 3 works too, tier4_07) to a value > 0, AND the phi's entry
+--     value folds below it. The minted child resolution can nil-panic,
+--     so it must live under EC's `lim > 0` guard and only arm for a
+--     loop that iterates: an unprovable limit declines (tier4_12), an
+--     entry above the limit declines (tier4_08 — that one was a live
+--     bug once), the zero-trip sides are pinned by tier4_04/05.
 --  3. The nested store's table operand is defined by a GetTable INSIDE
 --     the region — the feeder `t[0]`, a fresh resolution each iteration.
---     A pre-loop feeder declines: it could go stale if the slot is
---     rebound between the feeder and the loop.
---  4. The feeder's key is a literal >= 0 (here: 0).
---  5. The feeder's parent traces to a table root (t). ONE hop only —
---     t[0][1][i] declines because get_table_root stops at the inner
---     GetTable.
+--     A feeder defined in the loop's own pre-header block also converts
+--     (the matrix path, tier4_10): its register is SSA-stable and the
+--     slot it read is protected by gate 6.
+--  4. The feeder's key is a non-negative constant (here: 0) or a
+--     register invariant for the region — an enclosing phi (the
+--     per-row matrix case t[i][j], tier4_10/11).
+--  5. The feeder chain traces to a table root (t). Multi-hop chains
+--     materialize per hop, root down, only the leaf hoisted
+--     (tier4_09).
 --  6. The root receives NO store of ANY key in the region
 --     (region_stored_roots — stricter than tier-2's clobbered_roots: an
 --     affine store through t cannot invalidate t's own hoisted pointer,
