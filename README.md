@@ -7,7 +7,8 @@
 
 **Data Types**
 - ✅ Integers
-- ✅ "Tables" (keys and values must be integers)
+- ✅ Floats
+- ✅ Tables (Keys must be Integers, Values can be Integers, Floats or Tables)
 
 **Control Flow**
 - ✅ `while`
