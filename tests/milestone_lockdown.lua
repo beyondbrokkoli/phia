@@ -87,6 +87,10 @@ local LOCKED_TESTS = {
     "tier4_13_matrix_fast_row.lua",
     "tier4_14_matrix_alias_decline.lua",
     "tier4_15_matrix_copy_reach.lua",
+    "feat_if_01_phi_merge.lua",
+    "feat_ops_01_arith.lua",
+    "feat_ops_02_compare_bool.lua",
+    "feat_ops_03_fast_leq.lua",
 }
 
 local LOCK_DIR = "tests/lock"

@@ -1,6 +1,6 @@
 // src/lowerer.rs
 use std::collections::{HashMap, BTreeSet};
-use crate::ast::{Expr, Stmt, BinOp, StaticType};
+use crate::ast::{Expr, Stmt, BinOp, UnOp, StaticType};
 use crate::ir::{Instruction, BasicBlock, Terminator, BlockId, RegId, IrProgram};
 
 #[derive(Clone)]
@@ -115,6 +115,11 @@ impl IrLowerer {
     /// lowers right here, exactly as `lower_expr` would (the splice is
     /// self-checking by construction). Operand order and target-first
     /// numbering are preserved. Why this exists: opt_literal_bound.lua.
+    /// The comparison desugars ride the same splice so `while i <= n` and
+    /// `while n > i` keep the tier4 `idx < invariant` gate shape:
+    ///   a > b  => Less(b, a)      (operands swap, bounds follow)
+    ///   a <= b => Less(a, b+1)    (the +1 is PRE-materialized with the
+    ///                              literal bound, outside the header)
     fn lower_while_condition(
         &mut self,
         condition: &Expr,
@@ -137,6 +142,37 @@ impl IrLowerer {
                 };
 
                 self.emit(Instruction::Less { target, left: l_reg, right: r_reg });
+                (target, StaticType::Boolean)
+            }
+            // a > b: Less with swapped operands; the Less's left operand is
+            // the AST's right (and vice versa), so the splices swap too
+            Expr::BinaryOp { op: BinOp::GreaterThan, left, right }
+                if bound_left.is_some() || bound_right.is_some() =>
+            {
+                let target = self.next_reg();
+
+                let l_reg = match (&**right, bound_right) {
+                    (Expr::Integer(_), Some(reg)) => reg,
+                    _ => self.lower_expr(right, None).0,
+                };
+                let r_reg = match (&**left, bound_left) {
+                    (Expr::Integer(_), Some(reg)) => reg,
+                    _ => self.lower_expr(left, None).0,
+                };
+
+                self.emit(Instruction::Less { target, left: l_reg, right: r_reg });
+                (target, StaticType::Boolean)
+            }
+            // a <= b: bound_right is ALREADY the pre-header b+1 register
+            Expr::BinaryOp { op: BinOp::LessEq, left, .. } if bound_right.is_some() => {
+                let target = self.next_reg();
+
+                let l_reg = match (&**left, bound_left) {
+                    (Expr::Integer(_), Some(reg)) => reg,
+                    _ => self.lower_expr(left, None).0,
+                };
+
+                self.emit(Instruction::Less { target, left: l_reg, right: bound_right.unwrap() });
                 (target, StaticType::Boolean)
             }
             // No materialized bounds: byte-for-byte the original lowering.
@@ -190,10 +226,28 @@ impl IrLowerer {
                 // opt_literal_bound.lua (the fast_sets/hoists flip).
                 let mut bound_left: Option<RegId> = None;
                 let mut bound_right: Option<RegId> = None;
-                if let Expr::BinaryOp { op: BinOp::LessThan, left, right } = condition {
-                    // Left first, then right: preserves operand order.
-                    bound_left = self.materialize_bound(left);
-                    bound_right = self.materialize_bound(right);
+                if let Expr::BinaryOp { op, left, right } = condition {
+                    match op {
+                        BinOp::LessThan | BinOp::GreaterThan => {
+                            // Left first, then right: preserves operand order.
+                            bound_left = self.materialize_bound(left);
+                            bound_right = self.materialize_bound(right);
+                        }
+                        BinOp::LessEq => {
+                            // a <= b => a < b+1: materialize the literal
+                            // bound AND the +1 here in the pre-header, so
+                            // the tier4 gate sees an invariant limit
+                            bound_left = self.materialize_bound(left);
+                            if let Some(r) = self.materialize_bound(right) {
+                                let one = self.next_reg();
+                                self.emit(Instruction::LoadInt { target: one, val: 1 });
+                                let r2 = self.next_reg();
+                                self.emit(Instruction::Add { target: r2, left: r, right: one });
+                                bound_right = Some(r2);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 self.loop_depth += 1;
@@ -282,6 +336,74 @@ impl IrLowerer {
                 self.current_block = exit_block;
                 self.loop_depth -= 1;
             }
+            Stmt::If { condition, then_body, else_body } => {
+                // Structured if: cond block branches to then/else arms, both
+                // arms jump to a join block. Variables mutated in EITHER arm
+                // get a join phi (2 same-side preds -> classic Move lowering
+                // in resolve_phis). The scope snapshot isolates the arms:
+                // whatever the then-arm renames must not leak into the
+                // else-arm's reads (each arm continues from the pre-if state).
+                let (cond_reg, _) = self.lower_expr(condition, None);
+
+                let then_block = self.new_block();
+                let else_block = self.new_block();
+                let join_block = self.new_block();
+
+                self.terminate(Terminator::Branch {
+                    cond: cond_reg,
+                    true_block: then_block,
+                    false_block: else_block,
+                });
+
+                let mut mutated = find_mutated_vars(then_body);
+                mutated.extend(find_mutated_vars(else_body));
+                let mutated: Vec<String> = mutated.into_iter()
+                    .filter(|name| self.has_var(name))
+                    .collect();
+
+                // canonical order, same policy as the while loop phis
+                let mut phi_order: Vec<(String, RegId)> = mutated.into_iter()
+                    .map(|name| { let local = self.read_var(&name); (name, local.reg) })
+                    .collect();
+                phi_order.sort_by(|(name_a, a), (name_b, b)| (a, name_a).cmp(&(b, name_b)));
+
+                let snapshot = self.scopes.clone();
+
+                // then arm
+                self.current_block = then_block;
+                self.scopes.push(HashMap::new());
+                for s in then_body { self.lower_stmt(s); }
+                self.scopes.pop();
+                let then_end = self.current_block;
+                let then_regs: Vec<(String, RegId)> = phi_order.iter()
+                    .map(|(name, _)| (name.clone(), self.read_var(name).reg))
+                    .collect();
+                self.terminate(Terminator::Jump(join_block));
+
+                // else arm continues from the pre-if state
+                self.scopes = snapshot;
+                self.current_block = else_block;
+                self.scopes.push(HashMap::new());
+                for s in else_body { self.lower_stmt(s); }
+                self.scopes.pop();
+                let else_end = self.current_block;
+                let else_regs: Vec<(String, RegId)> = phi_order.iter()
+                    .map(|(name, _)| (name.clone(), self.read_var(name).reg))
+                    .collect();
+                self.terminate(Terminator::Jump(join_block));
+
+                // join: one phi per mutated var, merging both arm outcomes
+                self.current_block = join_block;
+                for (i, (name, _)) in phi_order.iter().enumerate() {
+                    let phi_reg = self.next_reg();
+                    self.emit(Instruction::Phi {
+                        target: phi_reg,
+                        ty: self.read_var(name).ty.clone(),
+                        args: vec![(then_end, then_regs[i].1), (else_end, else_regs[i].1)],
+                    });
+                    self.update_var(name, phi_reg);
+                }
+            }
         }
     }
 
@@ -296,6 +418,10 @@ impl IrLowerer {
             Expr::Float(val) => {
                 self.emit(Instruction::LoadFloat { target: reg, val: *val });
                 (reg, StaticType::Float)
+            }
+            Expr::Boolean(val) => {
+                self.emit(Instruction::LoadBool { target: reg, val: *val });
+                (reg, StaticType::Boolean)
             }
             Expr::NewTable(id) => {
                 let ty = self.type_map.get(id).cloned()
@@ -325,10 +451,57 @@ impl IrLowerer {
             Expr::BinaryOp { op, left, right } => {
                 let (l_reg, l_ty) = self.lower_expr(left, None);
                 let (r_reg, r_ty) = self.lower_expr(right, None);
+                // Comparison desugars ride the EXISTING Less machinery so the
+                // tier4 loop gate (`i < lim` shape) keeps recognizing them:
+                //   a > b  => b < a          (operand swap, exact)
+                //   a <= b => a < b+1        (exact in i64/f64 integers/floats
+                //                             away from overflow; see below)
+                //   a >= b => b < a+1
+                // The +1 is a fresh LoadInt/Add pair — for `while i <= n` the
+                // Add is loop-invariant, so the gate still opens.
                 match op {
                     BinOp::Add => self.emit(Instruction::Add { target: reg, left: l_reg, right: r_reg }),
                     BinOp::Sub => self.emit(Instruction::Sub { target: reg, left: l_reg, right: r_reg }),
-                    BinOp::LessThan => self.emit(Instruction::Less { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::Mul => self.emit(Instruction::Mul { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::Div => self.emit(Instruction::Div { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::IntDiv => self.emit(Instruction::IntDiv { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::Mod => self.emit(Instruction::Mod { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::LessThan =>
+                        self.emit(Instruction::Less { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::GreaterThan =>
+                        self.emit(Instruction::Less { target: reg, left: r_reg, right: l_reg }),
+                    BinOp::LessEq => {
+                        let one = self.next_reg();
+                        let r2 = self.next_reg();
+                        self.emit(Instruction::LoadInt { target: one, val: 1 });
+                        if matches!(r_ty, StaticType::Float) {
+                            let f1 = self.next_reg();
+                            self.emit(Instruction::LoadFloat { target: f1, val: 1.0 });
+                            self.emit(Instruction::Add { target: r2, left: r_reg, right: f1 });
+                        } else {
+                            self.emit(Instruction::Add { target: r2, left: r_reg, right: one });
+                        }
+                        self.emit(Instruction::Less { target: reg, left: l_reg, right: r2 });
+                    }
+                    BinOp::GreaterEq => {
+                        let one = self.next_reg();
+                        let l2 = self.next_reg();
+                        self.emit(Instruction::LoadInt { target: one, val: 1 });
+                        if matches!(l_ty, StaticType::Float) {
+                            let f1 = self.next_reg();
+                            self.emit(Instruction::LoadFloat { target: f1, val: 1.0 });
+                            self.emit(Instruction::Add { target: l2, left: l_reg, right: f1 });
+                        } else {
+                            self.emit(Instruction::Add { target: l2, left: l_reg, right: one });
+                        }
+                        self.emit(Instruction::Less { target: reg, left: r_reg, right: l2 });
+                    }
+                    BinOp::Equal => self.emit(Instruction::Eq { target: reg, left: l_reg, right: r_reg }),
+                    BinOp::NotEqual => {
+                        let e = self.next_reg();
+                        self.emit(Instruction::Eq { target: e, left: l_reg, right: r_reg });
+                        self.emit(Instruction::Not { target: reg, source: e });
+                    }
                 }
                 // The checker guarantees same-type numeric operands, so the
                 // static result type follows either operand. The IR Add/Sub
@@ -338,7 +511,8 @@ impl IrLowerer {
                 // side and render an f_r register as i_r (found by the Float
                 // Gauntlet storing t[i] = t[i] + 0.25; pinned by float_14).
                 let ty = match op {
-                    BinOp::LessThan => StaticType::Boolean,
+                    BinOp::LessThan | BinOp::GreaterThan | BinOp::LessEq | BinOp::GreaterEq
+                    | BinOp::Equal | BinOp::NotEqual => StaticType::Boolean,
                     _ => if matches!(l_ty, StaticType::Float) || matches!(r_ty, StaticType::Float) {
                         StaticType::Float
                     } else {
@@ -346,6 +520,28 @@ impl IrLowerer {
                     },
                 };
                 (reg, ty)
+            }
+            Expr::UnaryOp { op, expr } => {
+                let (x_reg, x_ty) = self.lower_expr(expr, None);
+                match op {
+                    UnOp::Neg => {
+                        // 0 - x (typed zero so the Sub lands in the operand's pool)
+                        if matches!(x_ty, StaticType::Float) {
+                            let z = self.next_reg();
+                            self.emit(Instruction::LoadFloat { target: z, val: 0.0 });
+                            self.emit(Instruction::Sub { target: reg, left: z, right: x_reg });
+                        } else {
+                            let z = self.next_reg();
+                            self.emit(Instruction::LoadInt { target: z, val: 0 });
+                            self.emit(Instruction::Sub { target: reg, left: z, right: x_reg });
+                        }
+                        (reg, x_ty)
+                    }
+                    UnOp::Not => {
+                        self.emit(Instruction::Not { target: reg, source: x_reg });
+                        (reg, StaticType::Boolean)
+                    }
+                }
             }
         }
     }
@@ -358,6 +554,10 @@ fn find_mutated_vars(stmts: &[Stmt]) -> BTreeSet<String> {
         match stmt {
             Stmt::Assignment { name, .. } => { mutated.insert(name.clone()); }
             Stmt::While { body, .. } => { mutated.extend(find_mutated_vars(body)); }
+            Stmt::If { then_body, else_body, .. } => {
+                mutated.extend(find_mutated_vars(then_body));
+                mutated.extend(find_mutated_vars(else_body));
+            }
             _ => {}
         }
     }

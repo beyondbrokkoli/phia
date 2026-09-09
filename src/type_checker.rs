@@ -1,6 +1,6 @@
 // src/type_checker.rs
 use std::collections::HashMap;
-use crate::ast::{Expr, Stmt, StaticType, BinOp};
+use crate::ast::{Expr, Stmt, StaticType, BinOp, UnOp};
 
 // Checker-internal type algebra. The lowerer never sees these: at the end
 // of check_program every table literal's type is resolved to a
@@ -281,21 +281,34 @@ impl TypeChecker {
                 }
             }
             Stmt::While { condition, body } => {
-                let cond_type = self.check_expr(condition);
-                let cond_type = self.deref(&cond_type);
-                match cond_type {
-                    Ty::Boolean => {}
-                    Ty::Var(v) => {
-                        // Only a table-element read can still be deferred
-                        // here, and Boolean is not a legal element type.
-                        self.bind(v, &Ty::Boolean); // always rejects
-                    }
-                    _ => panic!("Type Error: 'while' condition must be a Boolean"),
-                }
+                self.check_cond(condition, "while");
                 self.begin_scope();
                 for s in body { self.check_stmt(s); }
                 self.end_scope();
             }
+            Stmt::If { condition, then_body, else_body } => {
+                self.check_cond(condition, "if");
+                self.begin_scope();
+                for s in then_body { self.check_stmt(s); }
+                self.end_scope();
+                self.begin_scope();
+                for s in else_body { self.check_stmt(s); }
+                self.end_scope();
+            }
+        }
+    }
+
+    fn check_cond(&mut self, condition: &Expr, kw: &str) {
+        let cond_type = self.check_expr(condition);
+        let cond_type = self.deref(&cond_type);
+        match cond_type {
+            Ty::Boolean => {}
+            Ty::Var(v) => {
+                // Only a table-element read can still be deferred
+                // here, and Boolean is not a legal element type.
+                self.bind(v, &Ty::Boolean); // always rejects
+            }
+            _ => panic!("Type Error: '{}' condition must be a Boolean", kw),
         }
     }
 
@@ -303,6 +316,7 @@ impl TypeChecker {
         match expr {
             Expr::Integer(_) => Ty::Integer,
             Expr::Float(_) => Ty::Float,
+            Expr::Boolean(_) => Ty::Boolean,
             Expr::NewTable(id) => {
                 self.mint_table_var(*id);
                 Ty::Table(Box::new(Ty::Var(*id)))
@@ -364,11 +378,46 @@ impl TypeChecker {
                         self.unify(&l, &r);
                         l
                     }
+                    // == / ~= on two Booleans: the only non-numeric binary op
+                    (Ty::Boolean, Ty::Boolean) if matches!(op, BinOp::Equal | BinOp::NotEqual) =>
+                        Ty::Boolean,
                     _ => panic!("Type Error: Binary operations currently only support Integers"),
                 };
                 match op {
-                    BinOp::Add | BinOp::Sub => operand_ty,
-                    BinOp::LessThan => Ty::Boolean,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::IntDiv
+                    | BinOp::Mod => operand_ty,
+                    BinOp::LessThan | BinOp::GreaterThan | BinOp::LessEq | BinOp::GreaterEq
+                        if matches!(operand_ty, Ty::Integer | Ty::Float) => Ty::Boolean,
+                    // == and ~= additionally accept two Booleans
+                    BinOp::Equal | BinOp::NotEqual
+                        if matches!(operand_ty, Ty::Integer | Ty::Float | Ty::Boolean) =>
+                        Ty::Boolean,
+                    // comparisons on non-numeric operands (e.g. tables)
+                    _ => panic!("Type Error: comparisons require numeric operands"),
+                }
+            }
+            Expr::UnaryOp { op, expr } => {
+                let operand = self.check_expr(expr);
+                let operand = self.deref(&operand);
+                match op {
+                    UnOp::Neg => match operand {
+                        Ty::Integer | Ty::Float => operand,
+                        Ty::Var(v) => {
+                            // negation is a numeric USE: it fixes a deferred
+                            // operand to Integer (the arithmetic-USE rule)
+                            self.bind(v, &Ty::Integer);
+                            Ty::Integer
+                        }
+                        _ => panic!("Type Error: unary '-' requires a numeric operand"),
+                    },
+                    UnOp::Not => match operand {
+                        Ty::Boolean => Ty::Boolean,
+                        Ty::Var(v) => {
+                            self.bind(v, &Ty::Boolean); // always rejects
+                            Ty::Boolean
+                        }
+                        _ => panic!("Type Error: 'not' requires a Boolean operand"),
+                    },
                 }
             }
         }

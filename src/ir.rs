@@ -20,6 +20,7 @@ pub enum Terminator {
 pub enum Instruction {
     LoadInt { target: RegId, val: i64 },
     LoadFloat { target: RegId, val: f64 },
+    LoadBool { target: RegId, val: bool },
     NewTable { target: RegId, ty: StaticType },
     SetTable { table: RegId, key: RegId, val: RegId, ty: StaticType },
     GetTable { target: RegId, table: RegId, key: RegId, ty: StaticType },
@@ -27,7 +28,13 @@ pub enum Instruction {
 
     Add { target: RegId, left: RegId, right: RegId },
     Sub { target: RegId, left: RegId, right: RegId },
+    Mul { target: RegId, left: RegId, right: RegId },
+    Div { target: RegId, left: RegId, right: RegId },
+    IntDiv { target: RegId, left: RegId, right: RegId },
+    Mod { target: RegId, left: RegId, right: RegId },
     Less { target: RegId, left: RegId, right: RegId },
+    Eq { target: RegId, left: RegId, right: RegId },
+    Not { target: RegId, source: RegId },
 
     Phi { target: RegId, ty: StaticType, args: Vec<(BlockId, RegId)> },
 

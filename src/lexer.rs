@@ -20,6 +20,10 @@ pub enum Token<'a> {
     LeftBracket,
     #[token("]")]
     RightBracket,
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
     #[token("{")]
     LeftBrace,
     #[token("}")]
@@ -40,12 +44,32 @@ pub enum Token<'a> {
     Else,
     #[token("while")]
     While,
+    #[token("not")]
+    Not,
     #[token("+")]
     Plus,
     #[token("-")]
     Minus,
     #[token("<")]
     LessThan,
+    #[token("<=")]
+    LessEq,
+    #[token(">")]
+    GreaterThan,
+    #[token(">=")]
+    GreaterEq,
+    #[token("==")]
+    Equal,
+    #[token("~=")]
+    NotEqual,
+    #[token("*")]
+    Star,
+    #[token("/")]
+    Slash,
+    #[token("//")]
+    DoubleSlash,
+    #[token("%")]
+    Percent,
 
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     Identifier(&'a str),

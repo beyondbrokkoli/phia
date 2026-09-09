@@ -25,10 +25,14 @@ fn pool_of(t: &StaticType) -> Pool {
 fn def_reg(i: &Instruction) -> Option<RegId> {
     match i {
         Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+        | Instruction::LoadBool { target, .. }
         | Instruction::NewTable { target, .. }
         | Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
         | Instruction::Move { target, .. } | Instruction::Add { target, .. }
         | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
+        | Instruction::Mul { target, .. } | Instruction::Div { target, .. }
+        | Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. }
+        | Instruction::Eq { target, .. } | Instruction::Not { target, .. }
         | Instruction::Phi { target, .. } => Some(*target),
         _ => None,
     }
@@ -36,10 +40,13 @@ fn def_reg(i: &Instruction) -> Option<RegId> {
 
 fn def_type(i: &Instruction) -> Option<StaticType> {
     match i {
-        Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. } => Some(StaticType::Integer),
+        Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. }
+        | Instruction::Mul { .. } | Instruction::Div { .. } | Instruction::IntDiv { .. }
+        | Instruction::Mod { .. } => Some(StaticType::Integer),
         Instruction::LoadFloat { .. } => Some(StaticType::Float),
         Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
-        Instruction::Less { .. } => Some(StaticType::Boolean),
+        Instruction::Less { .. } | Instruction::Eq { .. } | Instruction::Not { .. }
+        | Instruction::LoadBool { .. } => Some(StaticType::Boolean),
         Instruction::NewTable { ty, .. } => Some(ty.clone()),
         Instruction::Move { ty, .. } | Instruction::Phi { ty, .. } => Some(ty.clone()),
         _ => None,
@@ -48,10 +55,15 @@ fn def_type(i: &Instruction) -> Option<StaticType> {
 
 fn use_regs(i: &Instruction) -> Vec<RegId> {
     match i {
-        Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::NewTable { .. } => vec![],
+        Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::LoadBool { .. }
+        | Instruction::NewTable { .. } => vec![],
         Instruction::Move { source, .. } => vec![*source],
         Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
-        | Instruction::Less { left, right, .. } => vec![*left, *right],
+        | Instruction::Less { left, right, .. } | Instruction::Mul { left, right, .. }
+        | Instruction::Div { left, right, .. } | Instruction::IntDiv { left, right, .. }
+        | Instruction::Mod { left, right, .. } | Instruction::Eq { left, right, .. } =>
+            vec![*left, *right],
+        Instruction::Not { source, .. } => vec![*source],
         Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => vec![*table, *key, *val],
         Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } => vec![*table, *key],
         Instruction::EnsureCapacity { table, limit } => vec![*table, *limit],
@@ -64,12 +76,17 @@ fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
     let g = |r: &mut RegId| *r = f(*r);
     match i {
         Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+        | Instruction::LoadBool { target, .. }
         | Instruction::NewTable { target, .. } => g(target),
         Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => { g(table); g(key); g(val); }
         Instruction::GetTable { target, table, key, .. } | Instruction::GetTableFast { target, table, key, .. } => { g(target); g(table); g(key); }
         Instruction::Move { target, source, .. } => { g(target); g(source); }
         Instruction::Add { target, left, right } | Instruction::Sub { target, left, right }
-        | Instruction::Less { target, left, right } => { g(target); g(left); g(right); }
+        | Instruction::Less { target, left, right } | Instruction::Mul { target, left, right }
+        | Instruction::Div { target, left, right } | Instruction::IntDiv { target, left, right }
+        | Instruction::Mod { target, left, right } | Instruction::Eq { target, left, right } =>
+            { g(target); g(left); g(right); }
+        Instruction::Not { target, source } => { g(target); g(source); }
         Instruction::Phi { target, args, .. } => { g(target); for (_, r) in args.iter_mut() { g(r); } }
         Instruction::EnsureCapacity { table, limit } => { g(table); g(limit); }
         Instruction::HoistRawPtr { table } => g(table),
@@ -177,6 +194,17 @@ fn const_eval(
                 .wrapping_add(go(blocks, def_map, *right, depth + 1)?)),
             Instruction::Sub { left, right, .. } => Some(go(blocks, def_map, *left, depth + 1)?
                 .wrapping_sub(go(blocks, def_map, *right, depth + 1)?)),
+            Instruction::Mul { left, right, .. } => Some(go(blocks, def_map, *left, depth + 1)?
+                .wrapping_mul(go(blocks, def_map, *right, depth + 1)?)),
+            // division/modulo only fold when exact: checked_div/rem return
+            // None on /0 and on i64::MIN/-1 overflow — those stay runtime
+            // panics instead of becoming const traps
+            Instruction::IntDiv { left, right, .. } =>
+                go(blocks, def_map, *left, depth + 1)?
+                    .checked_div(go(blocks, def_map, *right, depth + 1)?),
+            Instruction::Mod { left, right, .. } =>
+                go(blocks, def_map, *left, depth + 1)?
+                    .checked_rem(go(blocks, def_map, *right, depth + 1)?),
             _ => None,
         }
     }
@@ -324,8 +352,12 @@ impl IrBackend {
                 // panic on negative keys — neither is ever "dead code" here.
                 let dead = def_reg(i).map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
                 let pure = matches!(i,
-                    Instruction::LoadInt { .. } | Instruction::Move { .. }
-                    | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. });
+                    Instruction::LoadInt { .. } | Instruction::LoadBool { .. }
+                    | Instruction::Move { .. }
+                    | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. }
+                    | Instruction::Mul { .. } | Instruction::Div { .. }
+                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                    | Instruction::Eq { .. } | Instruction::Not { .. });
                 !(dead && pure)
             });
         }
@@ -352,6 +384,8 @@ impl IrBackend {
                     match i {
                         Instruction::LoadInt { target, val }
                             if single_def(&defs, *target) => { ci.insert(*target, *val); }
+                        Instruction::LoadBool { target, val }
+                            if single_def(&defs, *target) => { cb.insert(*target, *val); }
                         Instruction::Add { target, left, right }
                             if single_def(&defs, *target) => {
                             if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
@@ -366,10 +400,41 @@ impl IrBackend {
                         }
                         Instruction::Less { target, left, right }
                             if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                cb.insert(*target, l < r);
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    cb.insert(*target, l < r);
+                                }
                             }
-                        }
+                        Instruction::Eq { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    cb.insert(*target, l == r);
+                                }
+                            }
+                        Instruction::Not { target, source }
+                            if single_def(&defs, *target) => {
+                                if let Some(&v) = cb.get(source) {
+                                    cb.insert(*target, !v);
+                                }
+                            }
+                        Instruction::Mul { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    ci.insert(*target, l.wrapping_mul(r));
+                                }
+                            }
+                        // checked_div/rem: /0 and MIN/-1 stay unfolded
+                        Instruction::IntDiv { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    if let Some(v) = l.checked_div(r) { ci.insert(*target, v); }
+                                }
+                            }
+                        Instruction::Mod { target, left, right }
+                            if single_def(&defs, *target) => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    if let Some(v) = l.checked_rem(r) { ci.insert(*target, v); }
+                                }
+                            }
                         Instruction::Move { target, source, ty }
                             if single_def(&defs, *target) => match ty {
                                 StaticType::Integer =>
@@ -401,15 +466,17 @@ impl IrBackend {
             .chain(self.consts_b.keys().copied()).collect();
 
         // 1. types
-        // Add/Sub are untyped in the IR: their targets inherit the operand
-        // pool (Integer or Float) — pass 2 fixpoints that through chains
-        // (`y = x + 1` needs x's pool first).
+        // The arithmetic ops are untyped in the IR: their targets inherit
+        // the operand pool (Integer or Float) — pass 2 fixpoints that
+        // through chains (`y = x + 1` needs x's pool first).
         let mut ty: HashMap<RegId, Pool> = HashMap::new();
         for b in blocks {
             for i in &b.instrs {
                 let (Some(d), Some(t)) = (def_reg(i), def_type(i)) else { continue };
                 if skip.contains(&d) { continue; }
-                if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }) { continue; }
+                if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }
+                    | Instruction::Mul { .. } | Instruction::Div { .. }
+                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }) { continue; }
                 let p = pool_of(&t);
                 match ty.insert(d, p) {
                     Some(old) if old != p => panic!("reg {d} has conflicting types"),
@@ -422,7 +489,11 @@ impl IrBackend {
             for b in blocks {
                 for i in &b.instrs {
                     let (Instruction::Add { target, left, right, .. }
-                    | Instruction::Sub { target, left, right, .. }) = i else { continue };
+                    | Instruction::Sub { target, left, right, .. }
+                    | Instruction::Mul { target, left, right, .. }
+                    | Instruction::Div { target, left, right, .. }
+                    | Instruction::IntDiv { target, left, right, .. }
+                    | Instruction::Mod { target, left, right, .. }) = i else { continue };
                     if skip.contains(target) || ty.contains_key(target) { continue; }
                     if let Some(&p) = ty.get(left).or_else(|| ty.get(right)) {
                         ty.insert(*target, p);
@@ -440,8 +511,11 @@ impl IrBackend {
                     Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } =>
                         vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*key, StaticType::Integer)],
                     Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
-                    | Instruction::Less { left, right, .. } =>
+                    | Instruction::Mul { left, right, .. } | Instruction::Div { left, right, .. }
+                    | Instruction::IntDiv { left, right, .. } | Instruction::Mod { left, right, .. }
+                    | Instruction::Less { left, right, .. } | Instruction::Eq { left, right, .. } =>
                         vec![(*left, StaticType::Integer), (*right, StaticType::Integer)],
+                    Instruction::Not { source, .. } => vec![(*source, StaticType::Boolean)],
                     Instruction::Move { source, ty: t, .. } => vec![(*source, t.clone())],
                     Instruction::EnsureCapacity { table, limit } =>
                         vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*limit, StaticType::Integer)],
@@ -566,10 +640,14 @@ impl IrBackend {
             for (i, instr) in block.instrs.iter().enumerate() {
                 match instr {
                     Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+                    | Instruction::LoadBool { target, .. }
                     | Instruction::NewTable { target, .. } |
                     Instruction::GetTable { target, .. } | Instruction::Move { target, .. } |
                     Instruction::Add { target, .. } | Instruction::Sub { target, .. } |
                     Instruction::Less { target, .. } | Instruction::Phi { target, .. } |
+                    Instruction::Mul { target, .. } | Instruction::Div { target, .. } |
+                    Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. } |
+                    Instruction::Eq { target, .. } | Instruction::Not { target, .. } |
                     Instruction::GetTableFast { target, .. } => {
                         def_map.insert(*target, (block.id, i));
                     }
@@ -1344,6 +1422,8 @@ impl IrBackend {
                 out.push_str(&format!("{ind}i_r{target} = {val};\n")),
             Instruction::LoadFloat { target, val } =>
                 out.push_str(&format!("{ind}f_r{target} = {val:?};\n")),
+            Instruction::LoadBool { target, val } =>
+                out.push_str(&format!("{ind}b_r{target} = {val};\n")),
             Instruction::NewTable { target, ty } => {
                 // A table is monomorphic: its static element type picks the
                 // storage side at construction and it never changes.
@@ -1395,6 +1475,34 @@ impl IrBackend {
                     out.push_str(&format!("{ind}i_r{target} = {} - {};\n", self.iop_str(*left), self.iop_str(*right)))
                 }
             }
+            Instruction::Mul { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} * {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} * {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::Div { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} / {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} / {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::IntDiv { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} / {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} / {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::Mod { target, left, right } => {
+                if self.is_float_reg(*target) {
+                    out.push_str(&format!("{ind}f_r{target} = {} % {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}i_r{target} = {} % {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
             Instruction::Less { target, left, right } => {
                 if self.is_float_reg(*left) {
                     out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.fop_str(*left), self.fop_str(*right)))
@@ -1402,6 +1510,21 @@ impl IrBackend {
                     out.push_str(&format!("{ind}b_r{target} = {} < {};\n", self.iop_str(*left), self.iop_str(*right)))
                 }
             }
+            Instruction::Eq { target, left, right } => {
+                if self.is_float_reg(*left) {
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.fop_str(*left), self.fop_str(*right)))
+                } else if self.phys_pools.get(left) == Some(&Pool::Bool)
+                    // const-folded bool operands render as literals
+                    || (self.consts_b.contains_key(left) && self.consts_b.contains_key(right)
+                        && !self.phys_pools.contains_key(left))
+                {
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.bop_str(*left), self.bop_str(*right)))
+                } else {
+                    out.push_str(&format!("{ind}b_r{target} = {} == {};\n", self.iop_str(*left), self.iop_str(*right)))
+                }
+            }
+            Instruction::Not { target, source } =>
+                out.push_str(&format!("{ind}b_r{target} = !{};\n", self.bop_str(*source))),
 
             Instruction::EnsureCapacity { table, limit } => {
                 // Storage side comes from the table's pool: float-element
@@ -1574,9 +1697,42 @@ impl IrBackend {
         }
     }
 
+    /// Every block reachable from `b` via any terminator edge.
+    fn reachable_from(&self, b: BlockId) -> HashSet<BlockId> {
+        let mut seen = HashSet::new();
+        let mut stack = vec![b];
+        while let Some(x) = stack.pop() {
+            if !seen.insert(x) { continue; }
+            match &self.program.blocks[x].terminator {
+                Some(Terminator::Jump(t)) => stack.push(*t),
+                Some(Terminator::Branch { true_block, false_block, .. }) => {
+                    stack.push(*true_block);
+                    stack.push(*false_block);
+                }
+                _ => {}
+            }
+        }
+        seen
+    }
+
+    /// The block both if-arms converge on (None if they never rejoin, i.e.
+    /// both paths halt — not producible by this language, defensive only).
+    /// The join is minted immediately after both arms, and every other block
+    /// reachable from BOTH arms sits behind the join — so it is exactly the
+    /// smallest common block id above both arms.
+    fn common_join(&self, tb: BlockId, fb: BlockId) -> Option<BlockId> {
+        let rf = self.reachable_from(fb);
+        self.reachable_from(tb).into_iter()
+            .filter(|b| *b > tb.max(fb) && rf.contains(b))
+            .min()
+    }
+
     /// Emit block `b` and everything that follows it, staying inside the loop
     /// whose header is `hdr` (a back edge to `hdr` closes the loop body).
-    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, d: usize, emitted: &mut [bool], uses_handle: bool) {
+    /// `stop` is the join block of an enclosing structured if: reaching it
+    /// ends this arm — the parent emits the join after both arms.
+    fn emit_seq(&self, out: &mut String, b: BlockId, hdr: Option<BlockId>, stop: Option<BlockId>, d: usize, emitted: &mut [bool], uses_handle: bool) {
+        if Some(b) == stop { return; }
         if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
         emitted[b] = true;
         let block = &self.program.blocks[b];
@@ -1590,6 +1746,8 @@ impl IrBackend {
             Some(Terminator::Jump(t)) => {
                 if Some(*t) == hdr {
                     // back edge: this loop body is complete
+                } else if Some(*t) == stop {
+                    // if-arm reached its join: the parent continues
                 } else if *t < b {
                     panic!("structured codegen: stray backward jump {b} -> {t}");
                 } else if self.is_loop_header(*t) {
@@ -1600,23 +1758,44 @@ impl IrBackend {
                         _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
                     };
                     self.emit_loop(out, *t, cond, tb, d, emitted, uses_handle);
-                    self.emit_seq(out, fb, hdr, d, emitted, uses_handle);
+                    self.emit_seq(out, fb, hdr, stop, d, emitted, uses_handle);
                 } else {
-                    self.emit_seq(out, *t, hdr, d, emitted, uses_handle);
+                    self.emit_seq(out, *t, hdr, stop, d, emitted, uses_handle);
                 }
             }
-            Some(Terminator::Branch { cond, true_block, false_block }) => {
-                // unreachable in practice (headers are entered via Jump), kept
-                // for totality — same handling as the Jump-into-header case
+            Some(Terminator::Branch { cond, true_block, false_block }) if self.is_loop_header(b) => {
+                // a header reached directly (not via its pre-header Jump):
+                // same handling as the Jump-into-header case
                 self.emit_loop(out, b, *cond, *true_block, d, emitted, uses_handle);
-                self.emit_seq(out, *false_block, hdr, d, emitted, uses_handle);
+                self.emit_seq(out, *false_block, hdr, stop, d, emitted, uses_handle);
+            }
+            Some(Terminator::Branch { cond, true_block, false_block }) => {
+                // non-header branch = structured if/else. Both arms converge
+                // on the join block, which the parent emits after the arms.
+                let join = self.common_join(*true_block, *false_block);
+                let ind = indent(d);
+                out.push_str(&format!("{ind}if {} {{\n", self.bop_str(*cond)));
+                self.emit_seq(out, *true_block, hdr, join, d + 1, emitted, uses_handle);
+                // skip an `else` that would be empty: bare else-block with
+                // no instructions jumping straight to the join
+                let trivial_else = self.program.blocks[*false_block].instrs.is_empty()
+                    && matches!(&self.program.blocks[*false_block].terminator,
+                                Some(Terminator::Jump(t)) if Some(*t) == join);
+                if !trivial_else {
+                    out.push_str(&format!("{ind}}} else {{\n"));
+                    self.emit_seq(out, *false_block, hdr, join, d + 1, emitted, uses_handle);
+                }
+                out.push_str(&format!("{ind}}}\n"));
+                if let Some(j) = join {
+                    self.emit_seq(out, j, hdr, stop, d, emitted, uses_handle);
+                }
             }
         }
     }
 
     fn emit_loop(&self, out: &mut String, h: BlockId, cond: RegId, body: BlockId, d: usize, emitted: &mut [bool], uses_handle: bool) {
         if !self.is_loop_header(h) {
-            panic!("structured codegen: Branch in block {h} is not a loop header — `if` is not supported by this codegen");
+            panic!("structured codegen: Branch in block {h} is not a loop header");
         }
         if emitted[h] { panic!("structured codegen: header {h} reached twice"); }
         emitted[h] = true;
@@ -1641,7 +1820,7 @@ impl IrBackend {
 
         if let Some(c) = pretty {
             out.push_str(&format!("{ind}while {c} {{\n"));
-            self.emit_seq(out, body, Some(h), d + 1, emitted, uses_handle);
+            self.emit_seq(out, body, Some(h), None, d + 1, emitted, uses_handle);
             out.push_str(&format!("{ind}}}\n"));
         } else {
             // General fallback: everything in the header runs every
@@ -1650,7 +1829,7 @@ impl IrBackend {
             out.push_str(&format!("{ind}loop {{\n"));
             for i in &block.instrs { self.emit_instr(out, i, d + 1, uses_handle); }
             out.push_str(&format!("{}if {} {{\n", indent(d + 1), self.bop_str(cond)));
-            self.emit_seq(out, body, Some(h), d + 2, emitted, uses_handle);
+            self.emit_seq(out, body, Some(h), None, d + 2, emitted, uses_handle);
             out.push_str(&format!("{}    }} else {{\n", indent(d + 1)));
             out.push_str(&format!("{}        break;\n", indent(d + 1)));
             out.push_str(&format!("{}    }}\n{ind}}}\n", indent(d + 1)));
@@ -1709,7 +1888,7 @@ impl IrBackend {
         out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
         let mut emitted = vec![false; self.program.blocks.len()];
-        self.emit_seq(&mut out, 0, None, 1, &mut emitted, uses_handles);
+        self.emit_seq(&mut out, 0, None, None, 1, &mut emitted, uses_handles);
         let orphans: Vec<usize> = emitted.iter().enumerate()
             .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
         if !orphans.is_empty() {
