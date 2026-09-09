@@ -16,6 +16,65 @@ use std::process::Command;
 #[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
 #[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust (Optimize & Codegen)
 
+// DISPATCHED IR renderer — one arm per block, explicit control flow, in
+// the shape of the archived dispatched codegen's match arms (the `bN:`
+// bodies below were literally its `N =>` arms). Deliberately exhaustive:
+// a new IR op fails this match until the dump learns it, so the facility
+// can never silently go stale.
+fn render_dispatched_ir(out: &mut String, blocks: &[ir::BasicBlock]) {
+    use ir::Instruction as I;
+    out.push_str("== DISPATCHED IR — post-optimize, pre-resolve_phis (vreg ids; phis intact) ==\n");
+    for b in blocks {
+        let term = match &b.terminator {
+            Some(ir::Terminator::Jump(t)) => format!("goto b{t}"),
+            Some(ir::Terminator::Branch { cond, true_block, false_block }) =>
+                format!("branch v{cond} ? b{true_block} : b{false_block}"),
+            Some(ir::Terminator::Halt) | None => "halt".to_string(),
+        };
+        out.push_str(&format!("b{}: {{  // depth {}\n", b.id, b.depth));
+        for i in &b.instrs {
+            let s = match i {
+                I::LoadInt { target, val } => format!("v{target} = LoadInt {val}"),
+                I::LoadFloat { target, val } => format!("v{target} = LoadFloat {val:?}"),
+                I::LoadBool { target, val } => format!("v{target} = LoadBool {val}"),
+                I::NewTable { target, ty } => format!("v{target} = NewTable : {ty:?}"),
+                I::SetTable { table, key, val, ty } =>
+                    format!("SetTable v{table}[v{key}] = v{val} : {ty:?}"),
+                I::SetTableFast { table, key, val, ty } =>
+                    format!("SetTableFast! v{table}[v{key}] = v{val} : {ty:?}"),
+                I::GetTable { target, table, key, ty } =>
+                    format!("v{target} = GetTable v{table}[v{key}] : {ty:?}"),
+                I::GetTableFast { target, table, key, ty } =>
+                    format!("v{target} = GetTableFast! v{table}[v{key}] : {ty:?}"),
+                I::Move { target, source, ty } => format!("v{target} = Move v{source} : {ty:?}"),
+                I::Add { target, left, right } => format!("v{target} = Add v{left}, v{right}"),
+                I::Sub { target, left, right } => format!("v{target} = Sub v{left}, v{right}"),
+                I::Mul { target, left, right } => format!("v{target} = Mul v{left}, v{right}"),
+                I::Div { target, left, right } => format!("v{target} = Div v{left}, v{right}"),
+                I::IntDiv { target, left, right } => format!("v{target} = IntDiv v{left}, v{right}"),
+                I::Mod { target, left, right } => format!("v{target} = Mod v{left}, v{right}"),
+                I::Neg { target, source } => format!("v{target} = Neg v{source}"),
+                I::Less { target, left, right } => format!("v{target} = Less v{left}, v{right}"),
+                I::Leq { target, left, right } => format!("v{target} = Leq v{left}, v{right}"),
+                I::Geq { target, left, right } => format!("v{target} = Geq v{left}, v{right}"),
+                I::Eq { target, left, right, ty } =>
+                    format!("v{target} = Eq v{left}, v{right} : {ty:?}"),
+                I::Not { target, source } => format!("v{target} = Not v{source}"),
+                I::Phi { target, ty, args } => {
+                    let a: Vec<String> = args.iter()
+                        .map(|(b, r)| format!("b{b}:v{r}")).collect();
+                    format!("v{target} = Phi [{}] : {ty:?}", a.join(", "))
+                }
+                I::EnsureCapacity { table, limit } =>
+                    format!("EnsureCapacity v{table} >= v{limit}"),
+                I::HoistRawPtr { table } => format!("HoistRawPtr v{table}"),
+            };
+            out.push_str(&format!("    {s}\n"));
+        }
+        out.push_str(&format!("    {term}\n}}\n"));
+    }
+}
+
 fn main() {
     // Cargo will re-run build.rs for different test files
     println!("cargo:rerun-if-env-changed=PHIA_SOURCE");
@@ -75,20 +134,53 @@ fn main() {
     let mut backend_engine = backend::IrBackend::new(ir_program);
 
     backend_engine.optimize();
+
+    // DEBUG DUMPS (PHIA_DEBUG_DUMP=<mode>) — written as files into OUT_DIR,
+    // beside baked_native.rs, so they survive cargo's build-script stderr
+    // capture (stderr only surfaces when the build FAILS; files work for
+    // healthy builds too — `ls -t target/release/build/phia-*/out/ir_*.txt`):
+    //   mid   — DISPATCHED IR -> ir_dispatched.txt: the post-optimize,
+    //           pre-resolve_phis program, one numbered arm per block with
+    //           explicit goto/branch/halt, in the shape of the archived
+    //           dispatched codegen's match arms. The only window where
+    //           loop/if phis are still intact AND the tier4 rewrites (fast
+    //           ops, EC/Hoist, pre-header mints) are already applied —
+    //           phi-coalescing bugs are visible here in their original
+    //           form; the final dump below shows their aftermath.
+    //   final — (also 1 / any other nonempty value) -> ir_final_cfg.txt:
+    //           the FINAL CFG after allocate_registers, the exact graph the
+    //           structured codegen walks, physical register ids. For
+    //           tracing structured-codegen panics (reached-twice /
+    //           never-reached blocks) and codegen sanity checks.
+    //   all   — both.
+    let dump_mode = std::env::var("PHIA_DEBUG_DUMP").unwrap_or_default();
+    let (dump_mid, dump_final) = match dump_mode.as_str() {
+        "mid" => (true, false),
+        "all" => (true, true),
+        "" => (false, false),
+        _ => (false, true),
+    };
+    let dump_dir = std::env::var("OUT_DIR").unwrap();
+    if dump_mid {
+        let mut s = String::new();
+        render_dispatched_ir(&mut s, &backend_engine.program.blocks);
+        std::fs::write(Path::new(&dump_dir).join("ir_dispatched.txt"), s).unwrap();
+    }
+
     backend_engine.resolve_phis();
     backend_engine.propagate_constants();
     backend_engine.simplify();
     backend_engine.allocate_registers();
 
-    // CFG dump gate (PHIA_DEBUG_DUMP=1): prints the FINAL CFG — the exact
-    // block/terminator graph the structured codegen walks — to stderr.
-    // For tracing structured-codegen panics (reached-twice / never-reached
-    // blocks) and eyeballing codegen sanity; kept out of the default path.
-    if std::env::var("PHIA_DEBUG_DUMP").is_ok() {
+    if dump_final {
+        let mut s = String::from(
+            "== FINAL CFG — post-allocate_registers (physical ids), the structured codegen's input ==\n",
+        );
         for b in &backend_engine.program.blocks {
-            eprintln!("BLOCK {} (depth {}) term={:?}", b.id, b.depth, b.terminator);
-            for i in &b.instrs { eprintln!("   {:?}", i); }
+            s.push_str(&format!("BLOCK {} (depth {}) term={:?}\n", b.id, b.depth, b.terminator));
+            for i in &b.instrs { s.push_str(&format!("   {:?}\n", i)); }
         }
+        std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();
     }
 
     // 5. Code Generation

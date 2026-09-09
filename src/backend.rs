@@ -552,12 +552,12 @@ impl IrBackend {
             for b in blocks {
                 for i in &b.instrs {
                     let (target, src_pools) = match i {
-                        (Instruction::Add { target, left, right, .. }
+                        Instruction::Add { target, left, right, .. }
                         | Instruction::Sub { target, left, right, .. }
                         | Instruction::Mul { target, left, right, .. }
                         | Instruction::Div { target, left, right, .. }
                         | Instruction::IntDiv { target, left, right, .. }
-                        | Instruction::Mod { target, left, right, .. }) =>
+                        | Instruction::Mod { target, left, right, .. } =>
                             (*target, [ty.get(left).copied(), ty.get(right).copied()]),
                         Instruction::Neg { target, source, .. } =>
                             (*target, [ty.get(source).copied(), None]),
