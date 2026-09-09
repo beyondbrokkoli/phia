@@ -323,16 +323,27 @@ impl IrLowerer {
                 (reg, ret_ty)
             }
             Expr::BinaryOp { op, left, right } => {
-                let (l_reg, _) = self.lower_expr(left, None);
-                let (r_reg, _) = self.lower_expr(right, None);
+                let (l_reg, l_ty) = self.lower_expr(left, None);
+                let (r_reg, r_ty) = self.lower_expr(right, None);
                 match op {
                     BinOp::Add => self.emit(Instruction::Add { target: reg, left: l_reg, right: r_reg }),
                     BinOp::Sub => self.emit(Instruction::Sub { target: reg, left: l_reg, right: r_reg }),
                     BinOp::LessThan => self.emit(Instruction::Less { target: reg, left: l_reg, right: r_reg }),
                 }
+                // The checker guarantees same-type numeric operands, so the
+                // static result type follows either operand. The IR Add/Sub
+                // are untyped (allocate_registers re-derives their pool),
+                // but THIS ty feeds store/decl metadata — an int label on a
+                // float add makes the store template pick the wrong storage
+                // side and render an f_r register as i_r (found by the Float
+                // Gauntlet storing t[i] = t[i] + 0.25; pinned by float_14).
                 let ty = match op {
                     BinOp::LessThan => StaticType::Boolean,
-                    _ => StaticType::Integer,
+                    _ => if matches!(l_ty, StaticType::Float) || matches!(r_ty, StaticType::Float) {
+                        StaticType::Float
+                    } else {
+                        StaticType::Integer
+                    },
                 };
                 (reg, ty)
             }
