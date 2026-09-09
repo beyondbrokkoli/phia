@@ -109,6 +109,9 @@ local LOCKED_TESTS = {
     "probe_05_hoist_stability.lua",
     "probe_06_ssa_names.lua",
     "probe_07_mint_child.lua",
+    "string_01_scalar.lua",
+    "string_02_table_loop.lua",
+    "string_03_nested.lua",
 }
 
 local LOCK_DIR = "tests/lock"

@@ -39,7 +39,20 @@ fn main() {
     let elapsed = t0.elapsed();
 
     for (id, t) in tables.iter().enumerate() {
-        if t.is_float {
+        if t.is_string {
+            // String tables: same position-weighted checksum formula, with
+            // FNV-1a over each element's bytes standing in for the value.
+            // Deterministic in content, never in address. NZ counts
+            // non-empty elements — the empty string is the pool's zero
+            // (absence), exactly like 0 and 0.0.
+            let (mut nz, mut ck) = (0u64, 0i64);
+            for (i, v) in t.sarray.iter().enumerate() {
+                if !v.is_empty() { nz += 1; }
+                ck = ck.wrapping_add((i as i64 + 1)
+                    .wrapping_mul(fnv::fnv1a64(v.as_bytes()) as i64));
+            }
+            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.sarray.len());
+        } else if t.is_float {
             // Float tables: bit-pattern checksum (absolutely deterministic,
             // same position-weighted formula as integers) plus a sequential
             // SUM for human-readable pins.

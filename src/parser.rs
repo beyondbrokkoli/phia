@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
 
     // Lowest precedence: comparisons (all non-chaining, like Lua)
     fn parse_comparison(&mut self) -> Expr {
-        let left = self.parse_term();
+        let left = self.parse_concat();
 
         let op = match self.tokens.peek() {
             Some(Token::LessThan) => BinOp::LessThan,
@@ -176,12 +176,31 @@ impl<'a> Parser<'a> {
             _ => return left,
         };
         self.tokens.next(); // consume the operator
-        let right = self.parse_term();
+        let right = self.parse_concat();
         Expr::BinaryOp {
             op,
             left: Box::new(left),
             right: Box::new(right),
         }
+    }
+
+    // Next precedence: .. (concat). Lua places it between comparisons and
+    // + -, and right-associates it; chains here fold LEFT. Concat is
+    // associative — (a..b)..c and a..(b..c) are the same string — so the
+    // associativity divergence is unobservable (pinned by string tests).
+    fn parse_concat(&mut self) -> Expr {
+        let mut left = self.parse_term();
+
+        while let Some(Token::Concat) = self.tokens.peek() {
+            self.tokens.next(); // consume '..'
+            let right = self.parse_term();
+            left = Expr::BinaryOp {
+                op: BinOp::Concat,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        left
     }
 
     // Next precedence: +, -
@@ -252,6 +271,7 @@ impl<'a> Parser<'a> {
             Some(Token::Float(val)) => Expr::Float(val),
             Some(Token::True) => Expr::Boolean(true),
             Some(Token::False) => Expr::Boolean(false),
+            Some(Token::String(s)) => Expr::String(s.trim_matches('"').to_string()),
             Some(Token::Identifier(name)) => Expr::Identifier(name.to_string()),
             Some(Token::LeftBrace) => {
                 self.expect(Token::RightBrace);

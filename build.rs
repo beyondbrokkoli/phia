@@ -37,6 +37,8 @@ fn render_dispatched_ir(out: &mut String, blocks: &[ir::BasicBlock]) {
                 I::LoadInt { target, val } => format!("v{target} = LoadInt {val}"),
                 I::LoadFloat { target, val } => format!("v{target} = LoadFloat {val:?}"),
                 I::LoadBool { target, val } => format!("v{target} = LoadBool {val}"),
+                I::LoadString { target, val } => format!("v{target} = LoadString {val:?}"),
+                I::Concat { target, left, right } => format!("v{target} = Concat v{left}, v{right}"),
                 I::NewTable { target, ty } => format!("v{target} = NewTable : {ty:?}"),
                 I::SetTable { table, key, val, ty } =>
                     format!("SetTable v{table}[v{key}] = v{val} : {ty:?}"),
@@ -123,6 +125,7 @@ fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
                         StaticType::Integer => format!("i_r{r}"),
                         StaticType::Float => format!("f_r{r}"),
                         StaticType::Boolean => format!("b_r{r}"),
+                        StaticType::String => format!("s_r{r}"),
                         StaticType::Table(_) | StaticType::UnknownTable(_) =>
                             if uses_handles { format!("t_r{r} len_r{r}") }
                             else { format!("len_r{r}") },

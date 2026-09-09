@@ -9,7 +9,8 @@
 - ✅ Integers
 - ✅ Floats
 - ✅ Booleans (`true` / `false`; not storable in tables — pinned divergence)
-- ✅ Tables (Keys must be Integers, Values can be Integers, Floats or Tables)
+- ✅ Strings (`"literal"`; `..` concat and `==` / `~=` only — Lua's number coercion on `..` and lexicographic ordering are refused, pinned divergences; storable as table elements, absent keys read as `""`)
+- ✅ Tables (Keys must be Integers, Values can be Integers, Floats, Strings or Tables)
 
 **Control Flow**
 - ✅ `while`
@@ -22,6 +23,7 @@
 - ✅ Multiplication (`*`), Division (`/`), Floor Division (`//`), Modulo (`%`)
 - ✅ Comparisons (`<`, `>`, `<=`, `>=`, `==`, `~=`)
 - ✅ Unary Minus (`-x`), Boolean Negation (`not`)
+- ✅ Concatenation (`..`, two Strings; chains fold left — associative, unobservable)
 - ✅ Parentheses
 - ✅ Assignment (`=`)
 

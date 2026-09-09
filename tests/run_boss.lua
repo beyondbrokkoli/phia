@@ -122,6 +122,9 @@ local POSITIVE = {
     "probe_05_hoist_stability.lua",
     "probe_06_ssa_names.lua",
     "probe_07_mint_child.lua",
+    "string_01_scalar.lua",
+    "string_02_table_loop.lua",
+    "string_03_nested.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -148,6 +151,9 @@ local NEGATIVE = {
     "feat_ops_neg_assign_bool_to_int.lua",
     "feat_ops_neg_cmp_tables.lua",
     "feat_ops_neg_deferred_bool_eq.lua",
+    "string_neg_mixed_concat.lua",
+    "string_neg_cmp.lua",
+    "string_neg_element_conflict.lua",
 }
 local PANIC = {
     "bug_05a.lua",

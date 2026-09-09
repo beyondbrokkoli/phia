@@ -445,6 +445,10 @@ impl IrLowerer {
                 self.emit(Instruction::LoadBool { target: reg, val: *val });
                 (reg, StaticType::Boolean)
             }
+            Expr::String(val) => {
+                self.emit(Instruction::LoadString { target: reg, val: val.clone() });
+                (reg, StaticType::String)
+            }
             Expr::NewTable(id) => {
                 let ty = self.type_map.get(id).cloned()
                     .unwrap_or(StaticType::Table(Box::new(StaticType::Integer)));
@@ -507,6 +511,8 @@ impl IrLowerer {
                         self.emit(Instruction::Eq { target: e, left: l_reg, right: r_reg, ty: l_ty.clone() });
                         self.emit(Instruction::Not { target: reg, source: e });
                     }
+                    BinOp::Concat =>
+                        self.emit(Instruction::Concat { target: reg, left: l_reg, right: r_reg }),
                 }
                 // The checker guarantees same-type numeric operands, so the
                 // static result type follows either operand. The IR Add/Sub
@@ -518,6 +524,7 @@ impl IrLowerer {
                 let ty = match op {
                     BinOp::LessThan | BinOp::GreaterThan | BinOp::LessEq | BinOp::GreaterEq
                     | BinOp::Equal | BinOp::NotEqual => StaticType::Boolean,
+                    BinOp::Concat => StaticType::String,
                     _ => if matches!(l_ty, StaticType::Float) || matches!(r_ty, StaticType::Float) {
                         StaticType::Float
                     } else {

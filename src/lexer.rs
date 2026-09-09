@@ -72,6 +72,8 @@ pub enum Token<'a> {
     DoubleSlash,
     #[token("%")]
     Percent,
+    #[token("..")]
+    Concat,
     #[token(",")]
     Comma,
 

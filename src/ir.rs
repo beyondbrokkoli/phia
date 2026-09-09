@@ -21,6 +21,7 @@ pub enum Instruction {
     LoadInt { target: RegId, val: i64 },
     LoadFloat { target: RegId, val: f64 },
     LoadBool { target: RegId, val: bool },
+    LoadString { target: RegId, val: String },
     NewTable { target: RegId, ty: StaticType },
     SetTable { table: RegId, key: RegId, val: RegId, ty: StaticType },
     GetTable { target: RegId, table: RegId, key: RegId, ty: StaticType },
@@ -48,6 +49,10 @@ pub enum Instruction {
     // cannot disambiguate them — the rendering needs this field.
     Eq { target: RegId, left: RegId, right: RegId, ty: StaticType },
     Not { target: RegId, source: RegId },
+    // String concatenation. Monomorphic — String-only operands by the
+    // checker — so it carries no kind: the polymorphic-operand rule
+    // (Int/Bool sharing an id range) cannot apply to it.
+    Concat { target: RegId, left: RegId, right: RegId },
 
     Phi { target: RegId, ty: StaticType, args: Vec<(BlockId, RegId)> },
 

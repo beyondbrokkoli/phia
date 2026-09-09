@@ -12,7 +12,8 @@ use crate::ast::{Expr, Stmt, StaticType, BinOp, UnOp};
 // unification constraints on those variables; the end of the program
 // resolves everything. Aliases share variables by construction — the old
 // write-once-resolution-by-identity rule IS variable identity. Element
-// variables bind only Integer or Table (the codegenable kinds).
+// variables bind only the codegenable element kinds (Integer, Float,
+// String, Table — Boolean alone is rejected in bind()).
 //
 // Consequence map, pinned by sentinels: statement order is not part of
 // validity (nested_06/07; nested_02's build-error -> nil-panic flip);
@@ -25,6 +26,7 @@ enum Ty {
     Integer,
     Float,
     Boolean,
+    String,
     Table(Box<Ty>),
     Var(usize),
 }
@@ -172,6 +174,7 @@ impl TypeChecker {
             Ty::Integer => "Integer".to_string(),
             Ty::Float => "Float".to_string(),
             Ty::Boolean => "Boolean".to_string(),
+            Ty::String => "String".to_string(),
             Ty::Var(_) => "?".to_string(),
             Ty::Table(inner) => format!("Table({})", self.display(&inner)),
         }
@@ -184,6 +187,7 @@ impl TypeChecker {
         match self.deref(ty) {
             Ty::Integer => StaticType::Integer,
             Ty::Float => StaticType::Float,
+            Ty::String => StaticType::String,
             // bind() rejects Boolean bindings, so this is a checker bug,
             // not a program error — fail loudly instead of mis-lowering.
             Ty::Boolean => panic!("checker bug: Boolean leaked into a table type"),
@@ -243,7 +247,8 @@ impl TypeChecker {
                     }
                     (Ty::Integer, Ty::Integer)
                     | (Ty::Float, Ty::Float)
-                    | (Ty::Boolean, Ty::Boolean) => {}
+                    | (Ty::Boolean, Ty::Boolean)
+                    | (Ty::String, Ty::String) => {}
                     _ => panic!(
                         "Type Error (Rule #2 Violation): Cannot assign {} to variable '{}' of type {}",
                         self.display(&actual_type), name, self.display(&expected_type)
@@ -323,6 +328,7 @@ impl TypeChecker {
             Expr::Integer(_) => Ty::Integer,
             Expr::Float(_) => Ty::Float,
             Expr::Boolean(_) => Ty::Boolean,
+            Expr::String(_) => Ty::String,
             Expr::NewTable(id) => {
                 self.mint_table_var(*id);
                 Ty::Table(Box::new(Ty::Var(*id)))
@@ -369,12 +375,12 @@ impl TypeChecker {
                     (Ty::Float, Ty::Float) => Ty::Float,
                     (Ty::Integer, Ty::Float) | (Ty::Float, Ty::Integer) =>
                         panic!("Type Error: Binary operations do not support mixed Integer and Float"),
-                    (Ty::Var(_), Ty::Integer | Ty::Float) => {
+                    (Ty::Var(_), Ty::Integer | Ty::Float | Ty::String) => {
                         let t = right_type.clone();
                         if let Ty::Var(v) = left_type { self.bind(v, &t); }
                         t
                     }
-                    (Ty::Integer | Ty::Float, Ty::Var(_)) => {
+                    (Ty::Integer | Ty::Float | Ty::String, Ty::Var(_)) => {
                         let t = left_type.clone();
                         if let Ty::Var(v) = right_type { self.bind(v, &t); }
                         t
@@ -385,18 +391,29 @@ impl TypeChecker {
                         l
                     }
                     // == / ~= on two Booleans: the only non-numeric binary op
+                    // besides string concat/eq
                     (Ty::Boolean, Ty::Boolean) if matches!(op, BinOp::Equal | BinOp::NotEqual) =>
                         Ty::Boolean,
+                    // Strings: `..` and == / ~= between two Strings. Lua
+                    // coerces numbers on `..` (2 .. "x"); strict typing
+                    // refuses — a pinned divergence like float_03's.
+                    (Ty::String, Ty::String) if matches!(op, BinOp::Concat | BinOp::Equal | BinOp::NotEqual) =>
+                        Ty::String,
+                    // any other String pairing — arith, ordering, or mixed
+                    // with a number/bool — is a build error
+                    (Ty::String, _) | (_, Ty::String) =>
+                        panic!("Type Error: strings only support '..' and == / ~= between two strings"),
                     _ => panic!("Type Error: Binary operations currently only support Integers"),
                 };
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::IntDiv
                     | BinOp::Mod => operand_ty,
+                    BinOp::Concat => Ty::String,
                     BinOp::LessThan | BinOp::GreaterThan | BinOp::LessEq | BinOp::GreaterEq
                         if matches!(operand_ty, Ty::Integer | Ty::Float) => Ty::Boolean,
-                    // == and ~= additionally accept two Booleans
+                    // == and ~= additionally accept two Booleans or two Strings
                     BinOp::Equal | BinOp::NotEqual
-                        if matches!(operand_ty, Ty::Integer | Ty::Float | Ty::Boolean) =>
+                        if matches!(operand_ty, Ty::Integer | Ty::Float | Ty::Boolean | Ty::String) =>
                         Ty::Boolean,
                     // comparisons on non-numeric operands (e.g. tables)
                     _ => panic!("Type Error: comparisons require numeric operands"),
