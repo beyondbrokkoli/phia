@@ -151,7 +151,7 @@ impl<'a> Parser<'a> {
 
     // Lowest precedence: comparisons (all non-chaining, like Lua)
     fn parse_comparison(&mut self) -> Expr {
-        let mut left = self.parse_term();
+        let left = self.parse_term();
 
         let op = match self.tokens.peek() {
             Some(Token::LessThan) => BinOp::LessThan,
