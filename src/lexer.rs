@@ -34,6 +34,8 @@ pub enum Token<'a> {
     False,
     #[token("nil")]
     Nil,
+    #[token("probe")]
+    Probe,
     #[token("if")]
     If,
     #[token("then")]
@@ -70,6 +72,8 @@ pub enum Token<'a> {
     DoubleSlash,
     #[token("%")]
     Percent,
+    #[token(",")]
+    Comma,
 
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     Identifier(&'a str),

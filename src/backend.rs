@@ -73,6 +73,8 @@ fn use_regs(i: &Instruction) -> Vec<RegId> {
         Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } => vec![*table, *key],
         Instruction::EnsureCapacity { table, limit } => vec![*table, *limit],
         Instruction::HoistRawPtr { table } => vec![*table],
+        Instruction::DebugProbe { operands, .. } =>
+            operands.iter().map(|&(r, _)| r).collect(),
         Instruction::Phi { args, .. } => args.iter().map(|&(_, r)| r).collect(),
     }
 }
@@ -97,6 +99,8 @@ fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
         Instruction::Phi { target, args, .. } => { g(target); for (_, r) in args.iter_mut() { g(r); } }
         Instruction::EnsureCapacity { table, limit } => { g(table); g(limit); }
         Instruction::HoistRawPtr { table } => g(table),
+        Instruction::DebugProbe { operands, .. } =>
+            { for (r, _) in operands.iter_mut() { g(r); } }
     }
 }
 
@@ -252,6 +256,22 @@ fn loop_region(blocks: &[BasicBlock], header: BlockId, body: BlockId) -> Vec<Blo
 }
 
 fn indent(d: usize) -> String { "    ".repeat(d) }
+
+// DUAL-TEMPLATE GATE, shared with the build.rs probe-map sidecar (which
+// must render the same table tokens the runtime PROBE line prints). A
+// Table element type can only be born from a table-typed table op
+// (checker unification is its only producer), so this predicate is
+// exactly "the program nests tables": nested programs render handle-mode
+// templates (nested_*/tier4_* locks), pure-integer programs the frozen
+// pointer templates (all others).
+pub fn program_uses_handles(blocks: &[BasicBlock]) -> bool {
+    blocks.iter().any(|b| b.instrs.iter().any(|i| match i {
+        Instruction::SetTable { ty, .. } | Instruction::SetTableFast { ty, .. }
+        | Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } =>
+            matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)),
+        _ => false,
+    }))
+}
 
 pub struct IrBackend {
     pub program: IrProgram,
@@ -597,6 +617,12 @@ impl IrBackend {
                         vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*limit, StaticType::Integer)],
                     Instruction::HoistRawPtr { table } =>
                         vec![(*table, StaticType::Table(Box::new(StaticType::Integer)))],
+                    // The probe's operand list IS its kind carrier. Without
+                    // this arm the operands never enter the ty map, never
+                    // get physical ids, and emission renders undeclared
+                    // registers — the polymorphic-operand rule, enforced.
+                    Instruction::DebugProbe { operands, .. } =>
+                        operands.iter().map(|(r, t)| (*r, t.clone())).collect(),
                     _ => vec![],
                 };
                 for (r, t) in ops {
@@ -1649,6 +1675,62 @@ impl IrBackend {
             Instruction::Not { target, source } =>
                 out.push_str(&format!("{ind}b_r{target} = !{};\n", self.bop_str(*source))),
 
+            // Runtime observation. One line per trip, naming each operand's
+            // physical slot: the runtime line names the exact register
+            // ir_final_cfg.txt shows, which is what joins a run back to its
+            // dump. Determinism contract: values, handles and arena-derived
+            // lengths only — never addresses — so PROBE lines stay
+            // re-derivable pins. A table operand prints its handle (0 is
+            // the one observable nil in the language) plus its materialized
+            // length; a nil handle's len renders as MAX, a sentinel no real
+            // table can collide with.
+            Instruction::DebugProbe { tag, operands } => {
+                let mut fmt_parts: Vec<String> = Vec::new();
+                let mut args: Vec<String> = Vec::new();
+                for &(r, ref t) in operands {
+                    match t {
+                        StaticType::Integer => {
+                            fmt_parts.push(format!("i_r{r}={{}}"));
+                            args.push(self.iop_str(r));
+                        }
+                        StaticType::Float => {
+                            fmt_parts.push(format!("f_r{r}={{:?}}"));
+                            args.push(self.fop_str(r));
+                        }
+                        StaticType::Boolean => {
+                            fmt_parts.push(format!("b_r{r}={{}}"));
+                            args.push(self.bop_str(r));
+                        }
+                        StaticType::Table(_) | StaticType::UnknownTable(_) => {
+                            let fld = if self.is_ftable_reg(r) { "farray" } else { "array" };
+                            if uses_handles {
+                                fmt_parts.push(format!("t_r{r}={{}} len_r{r}={{}}"));
+                                args.push(format!("t_r{r}"));
+                                args.push(format!(
+                                    "match tables.get((t_r{r} - 1) as usize) \
+                                     {{ Some(t) => t.{fld}.len(), None => usize::MAX }}"
+                                ));
+                            } else {
+                                // pointer mode: a table-typed operand is
+                                // always NewTable-defined before use (only
+                                // nested programs read tables out of tables,
+                                // and those render handle mode), so the
+                                // deref cannot see null
+                                fmt_parts.push(format!("len_r{r}={{}}"));
+                                args.push(format!("unsafe {{ (*t_r{r}).{fld}.len() }}"));
+                            }
+                        }
+                    }
+                }
+                // a brace in the user tag would be a format directive
+                let safe_tag = tag.replace('{', "{{").replace('}', "}}");
+                out.push_str(&format!(
+                    "{ind}println!(\"PROBE {safe_tag}: {}\", {});\n",
+                    fmt_parts.join(" "),
+                    args.join(", ")
+                ));
+            }
+
             Instruction::EnsureCapacity { table, limit } => {
                 // Storage side comes from the table's pool: float-element
                 // tables resize the farray with 0.0 zeros, handle tables
@@ -1967,17 +2049,7 @@ impl IrBackend {
     }
 
     pub fn generate_rust_code(&self) -> String {
-        // DUAL-TEMPLATE GATE. A Table element type can only be born from a
-        // table-typed table op (checker unification is its only producer),
-        // so this predicate is exactly "the program nests tables": nested
-        // programs render handle-mode templates (nested_*/tier4_* locks),
-        // pure-integer programs the frozen pointer templates (all others).
-        let uses_handles = self.program.blocks.iter().any(|b| b.instrs.iter().any(|i| match i {
-            Instruction::SetTable { ty, .. } | Instruction::SetTableFast { ty, .. }
-            | Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } =>
-                matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_)),
-            _ => false,
-        }));
+        let uses_handles = program_uses_handles(&self.program.blocks);
 
         let mut out = String::new();
         out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");

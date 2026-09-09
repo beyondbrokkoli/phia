@@ -346,6 +346,18 @@ impl IrLowerer {
                 self.current_block = exit_block;
                 self.loop_depth -= 1;
             }
+            Stmt::Probe { tag, exprs } => {
+                // Operands lower in place, here: identifiers resolve to
+                // their current SSA reg (lower_expr mints no Move for a
+                // bare read), so the probe observes exactly what the next
+                // instruction at this point would read.
+                let mut operands = Vec::new();
+                for e in exprs {
+                    let (r, ty) = self.lower_expr(e, None);
+                    operands.push((r, ty));
+                }
+                self.emit(Instruction::DebugProbe { tag: tag.clone(), operands });
+            }
             Stmt::If { condition, then_body, else_body } => {
                 // Structured if: cond block branches to then/else arms, both
                 // arms jump to a join block. Variables mutated in EITHER arm

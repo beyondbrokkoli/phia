@@ -102,6 +102,13 @@ local LOCKED_TESTS = {
     "feat_ops_12_if_store_gate.lua",
     "feat_if_02_phi_variants.lua",
     "feat_if_03_scope_shadow.lua",
+    "probe_01_scalar.lua",
+    "probe_02_loop_phi.lua",
+    "probe_03_ec_offset.lua",
+    "probe_04_leq_desugar_ec.lua",
+    "probe_05_hoist_stability.lua",
+    "probe_06_ssa_names.lua",
+    "probe_07_mint_child.lua",
 }
 
 local LOCK_DIR = "tests/lock"

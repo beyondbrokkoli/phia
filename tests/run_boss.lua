@@ -3,7 +3,11 @@
 --
 -- One file, one source of truth for every test listing. Four disciplines:
 --   POSITIVE  build ok -> run ok -> every EXPECT pin exact
---             (TABLE = whole line, NTABLES = counted, k=v = stats, else substring)
+--             (TABLE/PROBE = whole line, NTABLES = counted, k=v = stats,
+--              else substring. PROBE needs the whole-line case: its lines
+--              carry `=` so the k=v branch would otherwise grab them, and
+--              that branch matches only the FIRST line per key prefix —
+--              in-loop probes repeat the prefix by design.)
 --   NEGATIVE  build MUST fail -> every EXPECT_BUILD_FAIL message present
 --   PANIC     build ok -> run MUST fail -> the single EXPECT_PANIC pin must
 --             EQUAL the program's 'Runtime Error: ...' stderr line exactly,
@@ -111,6 +115,13 @@ local POSITIVE = {
     "feat_ops_12_if_store_gate.lua",
     "feat_if_02_phi_variants.lua",
     "feat_if_03_scope_shadow.lua",
+    "probe_01_scalar.lua",
+    "probe_02_loop_phi.lua",
+    "probe_03_ec_offset.lua",
+    "probe_04_leq_desugar_ec.lua",
+    "probe_05_hoist_stability.lua",
+    "probe_06_ssa_names.lua",
+    "probe_07_mint_child.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -315,7 +326,7 @@ for _, name in ipairs(POSITIVE) do
             local out = read_file(OUT)
             local bad
             for _, exp in ipairs(expects) do
-                if exp:match("^TABLE ") then
+                if exp:match("^TABLE ") or exp:match("^PROBE ") then
                     if not has_exact_line(out, exp) then bad = "want line: " .. exp break end
                 elseif exp:match("^NTABLES") then
                     local want = tonumber(exp:match("%d+"))

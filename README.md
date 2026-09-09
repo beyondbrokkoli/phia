@@ -33,6 +33,10 @@
 - ✅ Array access (`t[1]`)
 - ✅ Table assignment (`t[i] = value`)
 
+**Debugging**
+- ✅ `probe "tag" expr, expr, ...` — the runtime observation intrinsic. Prints one `PROBE tag:` line per trip, naming each operand's physical register and its value (tables print their arena handle and materialized length; handle `0` is the observable nil). Deterministic output only — values, handles, lengths, never addresses — so `-- EXPECT: PROBE ...` pins work exactly like TABLE pins (whole line, via the boss). Pins embed physical register names by design: the probe's subject is the vreg→physical mapping.
+- Debug dumps (`PHIA_DEBUG_DUMP=mid|final|all`, files beside `baked_native.rs` in `target/release/build/phia-*/out/`) plus `probe_map.txt` — written whenever the program contains probes, it joins the runtime `PROBE` lines to both dumps: tag → runtime line, ordinal → MID/FINAL pair, FINAL tokens → `ir_final_cfg.txt`, MID vregs + phi ancestry → `ir_dispatched.txt`. Same freshness discipline as the dumps: files persist across builds, trust `ls -t`.
+
 # Input
 ```lua
 -- space_cafe_gauntlet.lua — "The Barista's Breakdown"

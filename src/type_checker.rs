@@ -280,6 +280,12 @@ impl TypeChecker {
                     _ => panic!("Type Error: target is not a table"),
                 }
             }
+            Stmt::Probe { exprs, .. } => {
+                // Observation only: operands must be well-typed expressions
+                // (reads constrain element vars exactly like any other use),
+                // but the probe itself types nothing and returns nothing.
+                for e in exprs { self.check_expr(e); }
+            }
             Stmt::While { condition, body } => {
                 self.check_cond(condition, "while");
                 self.begin_scope();

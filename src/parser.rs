@@ -88,6 +88,19 @@ impl<'a> Parser<'a> {
 
                 Stmt::If { condition, then_body, else_body }
             }
+            Some(Token::Probe) => {
+                self.tokens.next(); // consume 'probe'
+                let tag = match self.tokens.next() {
+                    Some(Token::String(s)) => s.trim_matches('"').to_string(),
+                    _ => panic!("Syntax Error: Expected string tag after 'probe'"),
+                };
+                let mut exprs = vec![self.parse_expr()];
+                while matches!(self.tokens.peek(), Some(Token::Comma)) {
+                    self.tokens.next(); // consume ','
+                    exprs.push(self.parse_expr());
+                }
+                Stmt::Probe { tag, exprs }
+            }
             Some(Token::Identifier(_)) => {
                 let lhs = self.parse_expr();
                 self.expect(Token::Assign);

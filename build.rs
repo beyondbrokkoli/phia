@@ -68,11 +68,75 @@ fn render_dispatched_ir(out: &mut String, blocks: &[ir::BasicBlock]) {
                 I::EnsureCapacity { table, limit } =>
                     format!("EnsureCapacity v{table} >= v{limit}"),
                 I::HoistRawPtr { table } => format!("HoistRawPtr v{table}"),
+                I::DebugProbe { tag, operands } => {
+                    let ops: Vec<String> = operands.iter()
+                        .map(|(r, t)| format!("v{r}:{t:?}")).collect();
+                    format!("DebugProbe \"{tag}\" [{}]", ops.join(", "))
+                }
             };
             out.push_str(&format!("    {s}\n"));
         }
         out.push_str(&format!("    {term}\n}}\n"));
     }
+}
+
+// PROBE MAP scan — one line per DebugProbe in stable emission order.
+// Probes are never DCE'd and blocks are never reordered, so the ordinal
+// joins the MID and FINAL scans of one build, and the tag joins the
+// runtime `PROBE <tag>:` lines. MID renders vreg ids and annotates an
+// operand whose def is a (still intact) phi with its incoming edges;
+// FINAL renders the exact value tokens the runtime line prints
+// (pool-prefixed physical names, matching emission).
+fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
+    use ir::Instruction as I;
+    use std::collections::HashMap;
+    // vreg -> its defining Phi. One hop only (direct phi defs) — the
+    // loop-induction common case; move chains are not chased.
+    let mut phi_defs: HashMap<ir::RegId, (usize, usize)> = HashMap::new();
+    if mid {
+        for (b, block) in blocks.iter().enumerate() {
+            for (i, ins) in block.instrs.iter().enumerate() {
+                if let I::Phi { target, .. } = ins { phi_defs.insert(*target, (b, i)); }
+            }
+        }
+    }
+    let uses_handles = backend::program_uses_handles(blocks);
+    let mut lines = Vec::new();
+    let mut ordinal = 0usize;
+    for (b, block) in blocks.iter().enumerate() {
+        for ins in &block.instrs {
+            let I::DebugProbe { tag, operands } = ins else { continue };
+            let ops: Vec<String> = operands.iter().map(|(r, t)| {
+                if mid {
+                    let mut s = format!("v{r}:{t:?}");
+                    if let Some(&(pb, pi)) = phi_defs.get(r) {
+                        if let I::Phi { args, .. } = &blocks[pb].instrs[pi] {
+                            let incoming: Vec<String> = args.iter()
+                                .map(|(bb, rr)| format!("b{bb}:v{rr}")).collect();
+                            s.push_str(&format!(" [phi <- {}]", incoming.join(", ")));
+                        }
+                    }
+                    s
+                } else {
+                    use ast::StaticType;
+                    match t {
+                        StaticType::Integer => format!("i_r{r}"),
+                        StaticType::Float => format!("f_r{r}"),
+                        StaticType::Boolean => format!("b_r{r}"),
+                        StaticType::Table(_) | StaticType::UnknownTable(_) =>
+                            if uses_handles { format!("t_r{r} len_r{r}") }
+                            else { format!("len_r{r}") },
+                    }
+                }
+            }).collect();
+            lines.push(format!(
+                "#{ordinal} tag=\"{tag}\" b{b} depth{} {}",
+                block.depth, ops.join(" ")
+            ));
+            ordinal += 1;
+        }
+    }
+    lines
 }
 
 fn main() {
@@ -167,6 +231,9 @@ fn main() {
         std::fs::write(Path::new(&dump_dir).join("ir_dispatched.txt"), s).unwrap();
     }
 
+    // MID probe scan must run while phis are still intact (pre-resolve_phis).
+    let probe_mid = scan_probes(&backend_engine.program.blocks, true);
+
     backend_engine.resolve_phis();
     backend_engine.propagate_constants();
     backend_engine.simplify();
@@ -181,6 +248,27 @@ fn main() {
             for i in &b.instrs { s.push_str(&format!("   {:?}\n", i)); }
         }
         std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();
+    }
+
+    // PROBE MAP sidecar — written whenever the program contains probes
+    // (tiny, and the runtime echo is always live, unlike the dump-gated
+    // files). Deliberately OUTSIDE baked_native.rs so the byte-frozen
+    // lock baselines never see it (source_stamp.rs precedent). This is
+    // the join: tag -> runtime PROBE line; ordinal -> MID/FINAL pair;
+    // FINAL tokens -> physical registers in ir_final_cfg.txt; MID
+    // vregs + phi ancestry -> ir_dispatched.txt.
+    let probe_final = scan_probes(&backend_engine.program.blocks, false);
+    if !probe_final.is_empty() {
+        let mut s = String::from(
+            "== PROBE MAP — joins runtime PROBE lines to both IR dumps ==\n\
+             == MID: vreg ids, phis intact (pairs with ir_dispatched.txt); [phi <- ...] marks an operand whose def is that phi ==\n",
+        );
+        for l in &probe_mid { s.push_str(l); s.push('\n'); }
+        s.push_str(
+            "== FINAL: the exact value tokens the runtime PROBE line prints (pairs with ir_final_cfg.txt) ==\n",
+        );
+        for l in &probe_final { s.push_str(l); s.push('\n'); }
+        std::fs::write(Path::new(&dump_dir).join("probe_map.txt"), s).unwrap();
     }
 
     // 5. Code Generation

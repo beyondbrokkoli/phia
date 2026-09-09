@@ -55,6 +55,12 @@ pub enum Instruction {
     HoistRawPtr { table: RegId },
     SetTableFast { table: RegId, key: RegId, val: RegId, ty: StaticType },
     GetTableFast { target: RegId, table: RegId, key: RegId, ty: StaticType },
+    /// Runtime observation point: prints its operands' values under the
+    /// tag. Defines nothing; carries each operand's kind because Int and
+    /// Bool physicals share one id range and nothing else disambiguates
+    /// them at emission (the polymorphic-operand rule). Never DCE'd: it
+    /// has no def to be dead and it is not in the pure set.
+    DebugProbe { tag: String, operands: Vec<(RegId, StaticType)> },
 }
 
 #[derive(Debug, Clone)]

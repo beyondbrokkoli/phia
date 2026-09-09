@@ -78,4 +78,11 @@ pub enum Stmt {
         // elseif chains desugar to nested Ifs in the else arm (parser)
         else_body: Vec<Stmt>,
     },
+    // Runtime observation point: print the operands' values under the tag.
+    // Effect-only, type-transparent — the checker validates operands but
+    // a probe constrains nothing and returns nothing.
+    Probe {
+        tag: String,
+        exprs: Vec<Expr>,
+    },
 }
