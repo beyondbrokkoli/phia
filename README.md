@@ -1,18 +1,17 @@
 # Phia 🌙
 
-> 🌟 **Huge Shoutout to [logos](https://github.com/maciejhirsz/logos)!** 🌟
+> 🌟 **[logos](https://github.com/maciejhirsz/logos)!** 🌟
 > This project would simply not be possible without the `logos` crate.
 
-Phia is an ahead-of-time compiler for a statically typed Lua dialect: source in,
-plain Rust out, `rustc` finishes the job.
+Phia is an ahead-of-time compiler for a statically typed Lua subset.
 
-## Why bother?
+### Why bother?
 
-Fair question: why would anyone want a vibecoded Lua compiler? The honest
-answer is pinned at the project root — [main.lua](main.lua).
-It is a deliberately unfair synthetic workload, hammered through the patterns the optimizer
-can prove — induction variables, affine keys, aliasing chains, hoist placement
-across loop nests. Same program, two executables, reference machine:
+Fair question: why build an ahead-of-time (AOT) compiler for a scripting language, especially when LuaJIT exists? The answer lies in the architectural limits of runtime execution, demonstrated by [main.lua](main.lua).
+
+`main.lua` is not a general-purpose benchmark; it is a deliberately constructed stress test designed to isolate the exact boundaries where a Just-In-Time (JIT) compiler mathematically hits a wall, and where AOT static analysis takes over.
+
+For the same program, executed on the same machine:
 
 ```text
 $ unset PHIA_SOURCE
@@ -32,27 +31,158 @@ Summary
   ./target/release/phia >/dev/null ran
    10.01 ± 0.35 times faster than luajit main.lua >/dev/null
 ```
+This 10x performance gap is not because LuaJIT is slow—18 seconds for 8+ billion dynamic iterations is an incredible feat of engineering. The gap exists because trace-based JIT compilers and AOT static analyzers operate under fundamentally different constraints:
 
-## Known Limitations
+1. **Proofs vs. Speculation:** Because Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code. If a loop writes past an array's capacity, the trace must abort, reallocate memory, and resume. **Phia** uses static Scalar Evolution (SCEV) to prove the exact capacity a loop will need *before* it runs, hoisting a single, exact memory allocation into the pre-header and entirely eliminating runtime bounds checks.
+2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions interspersed with bailout guards. Because Phia proves memory safety ahead of time, it emits clean, branchless, unaliased Rust code (using `*mut T` pointers). This allows the LLVM backend to auto-vectorize the innermost loops, processing 4 to 8 array slots simultaneously per CPU cycle via hardware SIMD instructions.
+3. **The Goal:** Phia is not designed to replace Lua for highly dynamic, metatable-heavy logic. Instead, it is an exploration of a specific thesis: **Can we achieve C/Rust-level performance (zero-cost abstractions, static memory guarantees, and SIMD vectorization) while writing purely in Lua syntax?**
 
-A few standard Lua behaviors are currently unsupported:
+Phia exists to prove that the performance tax on scripting languages is not in the syntax, but in the dynamic runtime semantics. By enforcing a strict typed subset and replacing runtime guessing with compile-time mathematical proofs, the engine unlocks an entirely different performance tier.
 
-*   **No Sparse Tables:** Phia does not implement the hash-map half of standard Lua tables. Table storage is strictly dense `Vec`s padded with the element kind's zero (`0`, `0.0`, or `""`). Writing to `t[1000000]` will instantly allocate and zero-fill a million slots.
-*   **No Negative Table Indices:** Because tables are backed strictly by 0-indexed vectors, negative keys (e.g., `t[-1] = 42`) cannot overflow into a hash map like they do in Lua. Attempting to use a negative key is a checked runtime panic. 
-*   **Strings and Heap Traffic:** String concatenation (`..`) emits Rust `format!()` calls, and string table stores emit `.clone()`. Heavy string manipulation in loops *will* hit the global allocator. 
+### Missing Implementations (TODOs)
 
- **Pinned divergences from Lua** (all enforced at build time, all locked by tests): no numeric coercion anywhere — mixed Integer/Float arithmetic and `2 .. "x"` are build errors; integer `/` is truncating (Lua's `/` always yields a Float); no ordering on strings;  
-**Booleans are not storable in tables; negative table keys are a runtime panic (`t[-1]` is forbidden); and tables are strictly dense zero-indexed vectors, meaning sparse inserts like `t[1000000] = 1` will instantly zero-fill a million elements and likely OOM.**
- 
-**nil** is a reserved keyword, not a value. Absence is compiled into the
-element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null
-table handle — and *using* a null handle is a checked `Runtime Error: table
-is nil`, never undefined behavior.
+* **Hash Maps and Sparse Tables:** Phia does not yet implement the hash-map half of standard Lua tables. Currently, table storage is backed by strictly dense, 0-indexed `Vec`s.
+* *Warning:* Because of this, a sparse insert like `t[1000000] = 1` will instantly allocate and zero-fill a million elements, likely causing an OOM. Negative keys (`t[-1] = 42`) are a checked runtime panic, as they cannot currently overflow into a hash map.
 
-`for` loops, `table.entry`, string keys in general and lots of other core lua features are still missing.
+* **Table Dot Notation:** Table property access via dot notation (e.g., `t.field`) and string keys in general are not yet supported.
+* **Globals:** Global variable definitions are missing (all variables must currently be `local`).
+* **Control Flow:** `for` loops and standard library functions are missing.
+* **Optimized String Memory:** String operations currently generate heavy heap traffic. String concatenation (`..`) emits Rust `format!()` calls, and string table stores emit `.clone()`.
+* **Boolean Storage:** Booleans cannot currently be stored in tables.
+
+### Missing Memory Management
+
+Every memory decision is made at build time. Element kinds, storage sides
+(`array` / `farray` / `sarray`), register allocation — scalars compile to pre-declared Rust locals, so there is no stack machine and no heap traffic for **numeric or boolean** values **(strings, however, still rely on the global allocator)**. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
+exactly once at its literal, never moves, never frees. There is no garbage
+collector, no reference counting, no runtime type tags — nothing executes per
+operation except the operation itself.
+
+A table reference is a 1-based arena handle (0 = null, checked at use).
+Because a table never moves and only ever grows, the optimizer can hoist raw
+`(pointer, len)` pairs out of loops and emit `unsafe` direct writes — but only
+behind a static proof; whenever the proof fails (non-affine keys, aliases it
+cannot bound), the store stays on the fully checked dynamic path with nil
+checks, bounds checks and explicit resizes. The `unsafe` blocks you see in
+generated code are paid for by compiler-side proofs, not trusted.
+
+The *result* of a program is its final arena state: for every table ever
+created, `TABLE <id> LEN <n> NZ <n> CHECKSUM <n>` (position-weighted; `SUM`
+additionally for floats — string elements are FNV-1a hashed into the same
+formula), plus a `STATS` line counting fast/dynamic table operations and
+pointer hoists.
+### Current Strict Semantics
+
+To maintain performance and safety during this development phase, a few behaviors currently diverge from standard Lua and are strictly locked by tests:
+
+* **No Numeric Coercion:** Mixed Integer/Float arithmetic and implicit string conversions (e.g., `2 .. "x"`) are strict build errors.
+* **Integer Division:** The `/` operator performs truncating division for integers. In standard Lua, `/` always yields a Float.
+* **No String Ordering:** Relational operators (`<`, `>`, etc.) cannot be used on strings.
+* **The `nil` Keyword:** `nil` is treated as a reserved keyword rather than an actual value. Absence is compiled into the element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null table handle. *Using* a null handle is a checked `Runtime Error: table is nil`, never undefined behavior.
+
+### Optimizer Safety
+
+The compiler relies on strict static analysis to emit unsafe, bare-metal Rust without introducing undefined behavior. The proofs cover notoriously difficult edge cases in ahead-of-time compilation for dynamic semantics, dynamically tiering between zero-cost raw pointer arithmetic and fully bounds-checked memory access.
+* **Lexical Allocation Identity:** While memory is arena-bound and never freed, table literals (`{}`) inside loops do not collapse into a single static handle. The compiler maps loop-scoped literals to an emitted arena `.push()` *inside* the generated Rust `loop {}` block. This guarantees that each iteration receives a fresh, distinct table handle, preserving standard Lua object identity and preventing cross-trip mutation bugs.
+* **Scalar Evolution (SCEV) & Pre-Header Allocation:** The affine analyzer does not just look for simple `t[i] = v` assignments. It statically evaluates linear math on loop induction variables (e.g., `t[i + 10] = v` or `t[i * 13] = v`). By projecting the loop bounds, the optimizer calculates the absolute maximum index the loop will ever touch and emits a single, exact `.resize(max_limit)` in the loop's pre-header. This ensures the backing vector capacity is guaranteed before the loop even starts.
+* **Flow-Sensitive Alias Analysis:** Because tables are pre-sized in the pre-header, the optimizer can confidently hoist raw pointers (`*mut T`) and emit `unsafe { *ptr.add(...) }` direct writes inside the loop. The escape analysis is highly precise: if a table escapes into a parent structure (e.g., `history[i] = snapshot`), the analyzer does *not* automatically revoke the affine proof. It only revokes the proof if a subsequent dynamic write could trigger a `.resize()` *while* the raw pointer is still live. If the pointer's lifetime is cleanly scoped, the emitted `unsafe` block stays.
+* **Data-Dependent Indirection Demotion:** When a loop contains memory-dependent indexing that cannot be solved statically (e.g., `t[other_t[i]] = v`), the optimizer instantly recognizes that the target index is arbitrary at runtime. It explicitly revokes the affine proof for that specific table and demotes its stores to the fully checked dynamic path. The generated Rust natively falls back to bounds-checked `.get_mut()` and on-the-fly `.resize()` calls, guaranteeing memory safety without crashing the generated binary.
 
 ```lua
--- showcase.lua — the entire toolset in one program.
+-- showcase.lua — Pascal's Triangle (Optimizer Tripwire Edition)
+-- This program is deliberately written to lay UB traps.
+
+local pascal = {}
+local n = 6
+local row_idx = 0
+
+while row_idx <= n do
+
+    local row = {}
+    local col_idx = 0
+
+    -- TRIPWIRE: Dynamic Loop Bounds & Strict SCEV
+    -- What could go wrong: A reckless optimizer sees `col_idx` incrementing
+    -- and blindly hoists a raw pointer to skip bounds checks. But the loop limit
+    -- `row_idx` mutates in the outer loop! If the compiler guesses the pre-size
+    -- wrong, the inner loop causes a buffer overflow.
+    -- How Phia handles it: Phia's Scalar Evolution (SCEV) engine detects that
+    -- the inner loop bound is dynamic. Because it cannot mathematically prove
+    -- the absolute maximum limit, it deliberately surrenders the affine proof.
+    -- It emits safe, on-the-fly `.resize()` and `.get_mut()` checks inside
+    -- the inner loop. (Check the STATS: hoists=0, fast_sets=0).
+
+    while col_idx <= row_idx do
+        if col_idx == 0 then
+            row[col_idx] = 1
+        elseif col_idx == row_idx then
+            row[col_idx] = 1
+        else
+            local prev_row = pascal[row_idx - 1]
+            row[col_idx] = prev_row[col_idx - 1] + prev_row[col_idx]
+        end
+        col_idx = col_idx + 1
+    end
+
+    pascal[row_idx] = row
+    row_idx = row_idx + 1
+end
+
+print("pascal_mid", pascal[3][1], pascal[6][3])
+
+-- TRIPWIRE: Data-Dependent Indirection Demotion
+local unprovable_read = pascal[3][1] -- Evaluates to 3 at runtime
+local fallback_table = {}
+
+-- What could go wrong: If a data-dependent read is used as a table key, the
+-- compiler has no way to predict the required memory size.
+-- How Phia handles it: It instantly recognizes the indirection (`fallback_table[x]`).
+-- Because runtime memory dictates the index, it explicitly demotes this store
+-- to the fully checked dynamic path. No panics, no UB—just memory-safe Rust.
+fallback_table[unprovable_read] = 99
+
+print("safe_fallback", fallback_table[3])
+```
+```text
+$ ./target/release/phia
+PROBE pascal_mid: i_r69=3 i_r70=20
+PROBE safe_fallback: i_r70=99
+TABLE 0 LEN 7 NZ 7 CHECKSUM 168
+TABLE 1 LEN 1 NZ 1 CHECKSUM 1
+TABLE 2 LEN 2 NZ 2 CHECKSUM 3
+TABLE 3 LEN 3 NZ 3 CHECKSUM 8
+TABLE 4 LEN 4 NZ 4 CHECKSUM 20
+TABLE 5 LEN 5 NZ 5 CHECKSUM 48
+TABLE 6 LEN 6 NZ 6 CHECKSUM 112
+TABLE 7 LEN 7 NZ 7 CHECKSUM 256
+TABLE 8 LEN 4 NZ 1 CHECKSUM 396
+STATS fast_sets=0;fast_gets=0;dyn_sets=5;dyn_gets=10;hoists=0;hoist_ctx=
+TIME 32.445µs
+```
+### Basic Features
+
+**Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
+Table. A table has Integer keys and a monomorphic element kind decided by the
+checker on first use: Integer, Float, String, or Table (nesting).
+
+**Statements** — `local` (lexically scoped, shadowing allowed), assignment,
+table assignment (`t[i] = v`, nested lvalues like `t[0][j] = v`), `while`,
+`if` / `elseif` / `else`, and `print("tag", e1, e2, ...)` (a debug observation
+point; prints one deterministic line per trip, naming each operand's physical
+register — values, table handles and lengths only, never addresses). The
+keyword is deliberate: `print` is Lua's own, so any Phia source runs as-is
+under a real Lua interpreter — values agree except at the pinned divergences
+(Lua's `/` is float division; `//` and `%` agree), and Lua's stable table
+address across loop trips mirrors Phia's stable arena handle.
+
+**Operators** — `+ - * / // %` on both numeric kinds with Lua semantics
+(`/` truncates on integers, `//` floors, `%` takes the divisor's sign);
+comparisons `< > <= >= == ~=`; `==` / `~=` also work on two Booleans or two
+Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
+fold left); parentheses.
+
+```lua
+-- available_toolset.lua — the entire toolset in one program.
 
 -- scalars: strings (concat), integers, floats, booleans
 local name = "phia" .. "/" .. "lua"
@@ -116,485 +246,77 @@ print("tables", acc, wave, names, grid, row, log)
 print("final", name, grade, row[0] == 99, acc[7] == 49)
 ```
 
-## What works
-
-### Optimizer Proofs & Safety
-
-The compiler relies on strict static analysis to emit unsafe Rust without introducing undefined behavior. The proofs cover two notoriously difficult edge cases in ahead-of-time compilation for dynamic semantics:
-
-*   **Lexical Allocation Identity:** While memory is arena-bound and never freed, table literals (`{}`) inside loops do not collapse into a single static handle. The compiler maps loop-scoped literals to an emitted arena `.push()` *inside* the generated Rust `loop {}` block. This guarantees that each iteration receives a fresh, distinct table handle, preserving standard Lua object identity and preventing cross-trip mutation bugs.
-*   **Alias-Proofed Pointer Hoisting:** The optimizer can hoist raw pointers (`*mut T`) for affine loop inserts (e.g., `t[i] = v`) to bypass bounds checking. However, this is gated by strict escape analysis. If a hoisted table reference escapes into another structure (e.g., `wrap[1] = t`), a dynamic write to that parent (`wrap[1][k] = v`) could trigger a runtime `.resize()`, which would reallocate the backing vector and leave the hoisted pointer dangling. The analyzer detects this containment, explicitly revokes the affine proof, and demotes all stores for that table to the fully checked dynamic path.
-
-**Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
-Table. A table has Integer keys and a monomorphic element kind decided by the
-checker on first use: Integer, Float, String, or Table (nesting).
-
-**Statements** — `local` (lexically scoped, shadowing allowed), assignment,
-table assignment (`t[i] = v`, nested lvalues like `t[0][j] = v`), `while`,
-`if` / `elseif` / `else`, and `print("tag", e1, e2, ...)` (a debug observation
-point; prints one deterministic line per trip, naming each operand's physical
-register — values, table handles and lengths only, never addresses). The
-keyword is deliberate: `print` is Lua's own, so any Phia source runs as-is
-under a real Lua interpreter — values agree except at the pinned divergences
-(Lua's `/` is float division; `//` and `%` agree), and Lua's stable table
-address across loop trips mirrors Phia's stable arena handle.
-
-**Operators** — `+ - * / // %` on both numeric kinds with Lua semantics
-(`/` truncates on integers, `//` floors, `%` takes the divisor's sign);
-comparisons `< > <= >= == ~=`; `==` / `~=` also work on two Booleans or two
-Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
-fold left); parentheses.
-
-## Memory is static
-
-Every memory decision is made at build time. Element kinds, storage sides
-(`array` / `farray` / `sarray`), register allocation — scalars compile to pre-declared Rust locals, so there is no stack machine and no heap traffic for **numeric or boolean** values **(strings, however, still rely on the global allocator)**. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
-exactly once at its literal, never moves, never frees. There is no garbage
-collector, no reference counting, no runtime type tags — nothing executes per
-operation except the operation itself.
-
-A table reference is a 1-based arena handle (0 = null, checked at use).
-Because a table never moves and only ever grows, the optimizer can hoist raw
-`(pointer, len)` pairs out of loops and emit `unsafe` direct writes — but only
-behind a static proof; whenever the proof fails (non-affine keys, aliases it
-cannot bound), the store stays on the fully checked dynamic path with nil
-checks, bounds checks and explicit resizes. The `unsafe` blocks you see in
-generated code are paid for by compiler-side proofs, not trusted.
-
-The *result* of a program is its final arena state: for every table ever
-created, `TABLE <id> LEN <n> NZ <n> CHECKSUM <n>` (position-weighted; `SUM`
-additionally for floats — string elements are FNV-1a hashed into the same
-formula), plus a `STATS` line counting fast/dynamic table operations and
-pointer hoists. Interactive I/O is not part of this development phase.
-
-## The compiled result
-
-```rust
-// target/release/build/phia-*/out/baked_native.rs
-
-use crate::memory::Table;
-
-#[allow(unused_variables, unused_mut, unused_assignments)]
-pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r146 = 0i64;
-    let mut i_r147 = 0i64;
-    let mut i_r148 = 0i64;
-    let mut i_r149 = 0i64;
-    let mut b_r146 = false;
-    let mut b_r147 = false;
-    let mut b_r148 = false;
-    let mut b_r149 = false;
-    let mut f_r157 = 0f64;
-    let mut f_r158 = 0f64;
-    let mut f_r159 = 0f64;
-    let mut f_r160 = 0f64;
-    let mut f_r161 = 0f64;
-    let mut f_r162 = 0f64;
-    let mut s_r146 = String::new();
-    let mut s_r147 = String::new();
-    let mut s_r148 = String::new();
-    let mut t_r146 = 0i64;
-    let mut t_r147 = 0i64;
-    let mut t_r148 = 0i64;
-    let mut p_r148: *mut i64 = std::ptr::null_mut();
-    let mut len_r148 = 0usize;
-    let mut t_r149 = 0i64;
-    let mut t_r172 = 0i64;
-    let mut p_r172: *mut f64 = std::ptr::null_mut();
-    let mut len_r172 = 0usize;
-    let mut t_r173 = 0i64;
-    let mut p_r173: *mut String = std::ptr::null_mut();
-    let mut len_r173 = 0usize;
-    let mut tables = Vec::<Box<Table>>::with_capacity(128);
-
-    s_r146 = "phia".to_string();
-    s_r147 = "/".to_string();
-    s_r148 = format!("{}{}", s_r146, s_r147);
-    s_r147 = "lua".to_string();
-    s_r146 = format!("{}{}", s_r148, s_r147);
-    f_r157 = 0.25;
-    println!(
-        "PROBE scalars: s_r146={:?} i_r5={} f_r157={:?} b_r7={}",
-        s_r146, 1, f_r157, true
-    );
-    i_r146 = 7 / -2;
-    println!(
-        "PROBE int_sem: i_r146={} i_r16={} i_r20={} i_r24={} i_r27={}",
-        i_r146, -4, 2, 5, 9
-    );
-    f_r158 = 1.0;
-    f_r159 = 4.0;
-    f_r160 = f_r158 / f_r159;
-    f_r159 = 0.75;
-    f_r158 = 0.5;
-    f_r161 = (f_r159 / f_r158).floor();
-    f_r158 = 0.75;
-    f_r159 = 0.5;
-    f_r162 = f_r158 - (f_r158 / f_r159).floor() * f_r159;
-    f_r159 = -f_r157;
-    println!(
-        "PROBE float_sem: f_r160={:?} f_r161={:?} f_r162={:?} f_r159={:?}",
-        f_r160, f_r161, f_r162, f_r159
-    );
-    f_r159 = 0.25;
-    b_r146 = f_r157 >= f_r159;
-    s_r147 = "phia/lua".to_string();
-    b_r147 = s_r146 == s_r147;
-    b_r148 = true == false;
-    b_r149 = !b_r148;
-    println!(
-        "PROBE cmp: b_r43={} b_r146={} b_r147={} b_r149={} b_r56={}",
-        true, b_r146, b_r147, b_r149, false
-    );
-    if false {
-        i_r146 = 100;
-    } else {
-        if true {
-            i_r146 = 50;
-        } else {
-            i_r146 = 9;
-        }
-    }
-    tables.push(Box::new(Table::new()));
-    t_r146 = tables.len() as i64;
-    tables.push(Box::new(Table::new()));
-    t_r147 = tables.len() as i64;
-    let k = 0;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r147 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r147 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
-    }
-    unsafe {
-        *t.array.get_unchecked_mut(idx) = 99;
-    }
-    let k = 0;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r146 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r146 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
-    }
-    unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r147;
-    }
-    tables.push(Box::new(Table::new()));
-    t_r148 = tables.len() as i64;
-    tables.push(Box::new(Table::new_float()));
-    t_r172 = tables.len() as i64;
-    tables.push(Box::new(Table::new_string()));
-    t_r173 = tables.len() as i64;
-    f_r159 = 0.0;
-    let lim = 8;
-    if lim > 0 {
-        if t_r148 == 0 {
-            panic!("Runtime Error: table is nil");
-        }
-        let t = match tables.get_mut((t_r148 - 1) as usize) {
-            Some(t) => &mut **t,
-            None => panic!("Runtime Error: table is nil"),
-        };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
-        }
-    }
-    if t_r148 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r148 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    len_r148 = t.array.len();
-    p_r148 = t.array.as_mut_ptr();
-    let lim = 8;
-    if lim > 0 {
-        if t_r172 == 0 {
-            panic!("Runtime Error: table is nil");
-        }
-        let t = match tables.get_mut((t_r172 - 1) as usize) {
-            Some(t) => &mut **t,
-            None => panic!("Runtime Error: table is nil"),
-        };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
-        }
-    }
-    if t_r172 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r172 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    len_r172 = t.farray.len();
-    p_r172 = t.farray.as_mut_ptr();
-    let lim = 8;
-    if lim > 0 {
-        if t_r173 == 0 {
-            panic!("Runtime Error: table is nil");
-        }
-        let t = match tables.get_mut((t_r173 - 1) as usize) {
-            Some(t) => &mut **t,
-            None => panic!("Runtime Error: table is nil"),
-        };
-        if (lim as usize) > t.sarray.len() {
-            t.sarray.resize(lim as usize, String::new());
-        }
-    }
-    if t_r173 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r173 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    len_r173 = t.sarray.len();
-    p_r173 = t.sarray.as_mut_ptr();
-    f_r157 = f_r159;
-    i_r147 = 0;
-    loop {
-        b_r149 = i_r147 < 8;
-        if b_r149 {
-            i_r148 = i_r147 * 100;
-            i_r149 = i_r147 * i_r147;
-            let k = i_r147;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r148 {
-                unsafe {
-                    *p_r148.add(k as usize) = i_r149;
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            let k = i_r147;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r172 {
-                unsafe {
-                    *p_r172.add(k as usize) = f_r157;
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            let k = i_r147;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r173 {
-                unsafe {
-                    *p_r173.add(k as usize) = s_r146.clone();
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            let k = 0;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            if t_r146 == 0 {
-                panic!("Runtime Error: table is nil");
-            }
-            let t = match tables.get((t_r146 - 1) as usize) {
-                Some(t) => &**t,
-                None => panic!("Runtime Error: table is nil"),
-            };
-            t_r149 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
-            } else {
-                0
-            };
-            i_r149 = i_r147 % 3 + i64::from(i_r147 % 3 != 0 && (i_r147 % 3 < 0) != (3 < 0)) * 3;
-            let k = i_r149;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            if t_r149 == 0 {
-                panic!("Runtime Error: table is nil");
-            }
-            let t = match tables.get_mut((t_r149 - 1) as usize) {
-                Some(t) => &mut **t,
-                None => panic!("Runtime Error: table is nil"),
-            };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = i_r148;
-            }
-            let k = i_r147;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r148 {
-                i_r149 = unsafe { *p_r148.add(k as usize) };
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            println!(
-                "PROBE iter: i_r147={} t_r148={} len_r148={} i_r149={}",
-                i_r147,
-                t_r148,
-                match tables.get((t_r148 - 1) as usize) {
-                    Some(t) => t.array.len(),
-                    None => usize::MAX,
-                },
-                i_r149
-            );
-            f_r159 = 0.25;
-            f_r157 = f_r157 + f_r159;
-            i_r147 = i_r147 + 1;
-        } else {
-            break;
-        }
-    }
-    tables.push(Box::new(Table::new()));
-    t_r149 = tables.len() as i64;
-    i_r149 = i_r147 * 13;
-    let k = i_r149;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r149 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get_mut((t_r149 - 1) as usize) {
-        Some(t) => &mut **t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
-    }
-    unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r146;
-    }
-    let k = 999;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r148 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get((t_r148 - 1) as usize) {
-        Some(t) => &**t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    i_r149 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
-    } else {
-        0
-    };
-    let k = 42;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r173 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get((t_r173 - 1) as usize) {
-        Some(t) => &**t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    s_r147 = if idx < t.sarray.len() {
-        unsafe { t.sarray.get_unchecked(idx).clone() }
-    } else {
-        String::new()
-    };
-    println!("PROBE exit: i_r149={} s_r147={:?}", i_r149, s_r147);
-    println!("PROBE tables: t_r148={} len_r148={} t_r172={} len_r172={} t_r173={} len_r173={} t_r146={} len_r146={} t_r147={} len_r147={} t_r149={} len_r149={}", t_r148, match tables.get((t_r148 - 1) as usize) { Some(t) => t.array.len(), None => usize::MAX }, t_r172, match tables.get((t_r172 - 1) as usize) { Some(t) => t.farray.len(), None => usize::MAX }, t_r173, match tables.get((t_r173 - 1) as usize) { Some(t) => t.sarray.len(), None => usize::MAX }, t_r146, match tables.get((t_r146 - 1) as usize) { Some(t) => t.array.len(), None => usize::MAX }, t_r147, match tables.get((t_r147 - 1) as usize) { Some(t) => t.array.len(), None => usize::MAX }, t_r149, match tables.get((t_r149 - 1) as usize) { Some(t) => t.array.len(), None => usize::MAX });
-    let k = 0;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r147 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get((t_r147 - 1) as usize) {
-        Some(t) => &**t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    i_r149 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
-    } else {
-        0
-    };
-    b_r149 = i_r149 == 99;
-    let k = 7;
-    if k < 0 {
-        panic!("Runtime Error: Negative table index");
-    }
-    let idx = k as usize;
-    if t_r148 == 0 {
-        panic!("Runtime Error: table is nil");
-    }
-    let t = match tables.get((t_r148 - 1) as usize) {
-        Some(t) => &**t,
-        None => panic!("Runtime Error: table is nil"),
-    };
-    i_r149 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
-    } else {
-        0
-    };
-    b_r148 = i_r149 == 49;
-    println!(
-        "PROBE final: s_r146={:?} i_r146={} b_r149={} b_r148={}",
-        s_r146, i_r146, b_r149, b_r148
-    );
-    return tables;
-}
-
-pub const STATS: &str = "fast_sets=3;fast_gets=1;dyn_sets=4;dyn_gets=5;hoists=3;hoist_ctx=0,0,0";
-```
-
 ## Build
-
-For v4 architecture, linux packaging symlinks might be missing
-
 ```
+# 1. V4 DISTRO LINKER FIX
+
+# Run this once if building on a v4-optimized Linux distro (CachyOS)
+# fails with: `Error: linker x86_64-linux-gnu-gcc not found`
 sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc
 sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++
-```
 
-```sh
-cargo build --release        # no PHIA_SOURCE (or empty) -> compiles main.lua
+
+# 2. COMPILING PROGRAMS
+
+# If PHIA_SOURCE is unset or empty, it defaults to compiling main.lua
+cargo build --release
 ./target/release/phia
 
-PHIA_SOURCE=showcase.lua cargo build --release   # any other program
+# Compile a specific file (provide the env var on the same line)
+PHIA_SOURCE=showcase.lua cargo build --release
 ./target/release/phia
+
+# BULLETPROOF: 
+# If Cargo refuses to recompile, touch the file first to update the timestamp
+touch showcase.lua && PHIA_SOURCE=showcase.lua cargo build --release
+
+
+# 3. DEBUG & IR DUMPS (Options: mid | final | all)
+
+# Writes IR dumps and the probe_map.txt sidecar directly beside the 
+# generated baked_native.rs file in the target/release/build/... folder.
+PHIA_DEBUG_DUMP=all PHIA_SOURCE=main.lua cargo build --release
+```
+## Known Quirks: `print`
+
+### 1. Strict Tag Requirement
+
+Phia strictly requires a string literal tag as the first argument in a `print` statement (e.g., `print("tag", x)`).  
+A plain `print(x)` is a syntax error.
+
+**Why is the tag required?**
+The compiler relies on this mandatory string to generate `probe_map.txt`.
+
+**Why hijack `print` instead of adding a `probe()` keyword?**
+Compatibility. By keeping the name `print`, you can run the exact same `.lua` script in standard Lua or LuaJIT without modification.
+
+### 2. Ghost Registers (Optimize First, Print Later)
+
+`print` does not act as a liveness barrier. Printing a DCE'd variable lets you watch the register allocator recycle memory in real-time.
+
+**Example:**
+
+```lua
+local ghost = {}
+local ghost_val = ghost[1] -- Dead code: never affects the final arena state
+
+if true then
+    local shadow = 42      -- Reuses ghost_val's physical register (r5)!
+end
+
+print("ghost_test", ghost_val)
+
 ```
 
-`lua tests/run_boss.lua` runs the full invariant analysis (positive / negative
-/ panic tests plus a byte-diff of every generated `baked_native.rs` against
-the frozen baselines in `tests/lock/`); `tests/milestone_lockdown.lua`
-re-issues baselines at milestones. `PHIA_DEBUG_DUMP=mid|final|all` writes IR
-dumps beside `baked_native.rs`, and any program containing `print` statements
-also gets `probe_map.txt` there — the sidecar that joins runtime `PROBE` lines
-to both dumps (tag → runtime line, MID vregs + phi ancestry, FINAL physical
-registers).
+**Execution Comparison:**
+
+```text
+$ luajit ghost_register.lua
+ghost_test    nil
+
+$ ./target/release/phia
+PROBE ghost_test: i_r5=42
+
+```
+
+*(Here, `ghost_val` was optimized away, the allocator gave its physical slot to `shadow`, and the `print` probe blindly read the recycled memory containing `42`.)*
