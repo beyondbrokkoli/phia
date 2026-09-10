@@ -155,7 +155,7 @@ fn main() {
 
     let source = std::fs::read_to_string(&source_path).expect("Failed to read source");
 
-    // CONTENT-HASH STALeness STAMP — deliberately a sidecar file, NOT part
+    // CONTENT-HASH STALENESS STAMP — deliberately a sidecar file, NOT part
     // of baked_native.rs, so the byte-frozen lock baselines never see it.
     // Cargo's rerun triggers are mtime-based: replacing a source file with
     // same-path content carrying an older mtime (the classic `mv`) makes

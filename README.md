@@ -50,7 +50,12 @@ Phia exists to prove that the performance tax on scripting languages is not in t
 * **Optimized String Memory:** String operations currently generate heavy heap traffic. String concatenation (`..`) emits Rust `format!()` calls, and string table stores emit `.clone()`.
 * **Boolean Storage:** Booleans cannot currently be stored in tables.
 
-### Missing Memory Management
+A few behaviors currently diverge from standard Lua:
+
+* **No Numeric Coercion:** Mixed Integer/Float arithmetic and implicit string conversions (e.g., `2 .. "x"`) are strict build errors.
+* **Integer Division:** The `/` operator performs truncating division for integers. In standard Lua, `/` always yields a Float.
+* **No String Ordering:** Relational operators (`<`, `>`, etc.) cannot be used on strings.
+* **The `nil` Keyword:** `nil` is treated as a reserved keyword rather than an actual value. Absence is compiled into the element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null table handle. *Using* a null handle is a checked `Runtime Error: table is nil`, never undefined behavior.
 
 Every memory decision is made at build time. Element kinds, storage sides
 (`array` / `farray` / `sarray`), register allocation — scalars compile to pre-declared Rust locals, so there is no stack machine and no heap traffic for **numeric or boolean** values **(strings, however, still rely on the global allocator)**. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
@@ -58,107 +63,6 @@ exactly once at its literal, never moves, never frees. There is no garbage
 collector, no reference counting, no runtime type tags — nothing executes per
 operation except the operation itself.
 
-A table reference is a 1-based arena handle (0 = null, checked at use).
-Because a table never moves and only ever grows, the optimizer can hoist raw
-`(pointer, len)` pairs out of loops and emit `unsafe` direct writes — but only
-behind a static proof; whenever the proof fails (non-affine keys, aliases it
-cannot bound), the store stays on the fully checked dynamic path with nil
-checks, bounds checks and explicit resizes. The `unsafe` blocks you see in
-generated code are paid for by compiler-side proofs, not trusted.
-
-The *result* of a program is its final arena state: for every table ever
-created, `TABLE <id> LEN <n> NZ <n> CHECKSUM <n>` (position-weighted; `SUM`
-additionally for floats — string elements are FNV-1a hashed into the same
-formula), plus a `STATS` line counting fast/dynamic table operations and
-pointer hoists.
-### Current Strict Semantics
-
-To maintain performance and safety during this development phase, a few behaviors currently diverge from standard Lua and are strictly locked by tests:
-
-* **No Numeric Coercion:** Mixed Integer/Float arithmetic and implicit string conversions (e.g., `2 .. "x"`) are strict build errors.
-* **Integer Division:** The `/` operator performs truncating division for integers. In standard Lua, `/` always yields a Float.
-* **No String Ordering:** Relational operators (`<`, `>`, etc.) cannot be used on strings.
-* **The `nil` Keyword:** `nil` is treated as a reserved keyword rather than an actual value. Absence is compiled into the element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null table handle. *Using* a null handle is a checked `Runtime Error: table is nil`, never undefined behavior.
-
-### Optimizer Safety
-
-The compiler relies on strict static analysis to emit unsafe, bare-metal Rust without introducing undefined behavior. The proofs cover notoriously difficult edge cases in ahead-of-time compilation for dynamic semantics, dynamically tiering between zero-cost raw pointer arithmetic and fully bounds-checked memory access.
-* **Lexical Allocation Identity:** While memory is arena-bound and never freed, table literals (`{}`) inside loops do not collapse into a single static handle. The compiler maps loop-scoped literals to an emitted arena `.push()` *inside* the generated Rust `loop {}` block. This guarantees that each iteration receives a fresh, distinct table handle, preserving standard Lua object identity and preventing cross-trip mutation bugs.
-* **Scalar Evolution (SCEV) & Pre-Header Allocation:** The affine analyzer does not just look for simple `t[i] = v` assignments. It statically evaluates linear math on loop induction variables (e.g., `t[i + 10] = v` or `t[i * 13] = v`). By projecting the loop bounds, the optimizer calculates the absolute maximum index the loop will ever touch and emits a single, exact `.resize(max_limit)` in the loop's pre-header. This ensures the backing vector capacity is guaranteed before the loop even starts.
-* **Flow-Sensitive Alias Analysis:** Because tables are pre-sized in the pre-header, the optimizer can confidently hoist raw pointers (`*mut T`) and emit `unsafe { *ptr.add(...) }` direct writes inside the loop. The escape analysis is highly precise: if a table escapes into a parent structure (e.g., `history[i] = snapshot`), the analyzer does *not* automatically revoke the affine proof. It only revokes the proof if a subsequent dynamic write could trigger a `.resize()` *while* the raw pointer is still live. If the pointer's lifetime is cleanly scoped, the emitted `unsafe` block stays.
-* **Data-Dependent Indirection Demotion:** When a loop contains memory-dependent indexing that cannot be solved statically (e.g., `t[other_t[i]] = v`), the optimizer instantly recognizes that the target index is arbitrary at runtime. It explicitly revokes the affine proof for that specific table and demotes its stores to the fully checked dynamic path. The generated Rust natively falls back to bounds-checked `.get_mut()` and on-the-fly `.resize()` calls, guaranteeing memory safety without crashing the generated binary.
-
-```lua
--- showcase.lua — Pascal's Triangle (Optimizer Tripwire Edition)
--- This program is deliberately written to lay UB traps.
-
-local pascal = {}
-local n = 6
-local row_idx = 0
-
-while row_idx <= n do
-
-    local row = {}
-    local col_idx = 0
-
-    -- TRIPWIRE: Dynamic Loop Bounds & Strict SCEV
-    -- What could go wrong: A reckless optimizer sees `col_idx` incrementing
-    -- and blindly hoists a raw pointer to skip bounds checks. But the loop limit
-    -- `row_idx` mutates in the outer loop! If the compiler guesses the pre-size
-    -- wrong, the inner loop causes a buffer overflow.
-    -- How Phia handles it: Phia's Scalar Evolution (SCEV) engine detects that
-    -- the inner loop bound is dynamic. Because it cannot mathematically prove
-    -- the absolute maximum limit, it deliberately surrenders the affine proof.
-    -- It emits safe, on-the-fly `.resize()` and `.get_mut()` checks inside
-    -- the inner loop. (Check the STATS: hoists=0, fast_sets=0).
-
-    while col_idx <= row_idx do
-        if col_idx == 0 then
-            row[col_idx] = 1
-        elseif col_idx == row_idx then
-            row[col_idx] = 1
-        else
-            local prev_row = pascal[row_idx - 1]
-            row[col_idx] = prev_row[col_idx - 1] + prev_row[col_idx]
-        end
-        col_idx = col_idx + 1
-    end
-
-    pascal[row_idx] = row
-    row_idx = row_idx + 1
-end
-
-print("pascal_mid", pascal[3][1], pascal[6][3])
-
--- TRIPWIRE: Data-Dependent Indirection Demotion
-local unprovable_read = pascal[3][1] -- Evaluates to 3 at runtime
-local fallback_table = {}
-
--- What could go wrong: If a data-dependent read is used as a table key, the
--- compiler has no way to predict the required memory size.
--- How Phia handles it: It instantly recognizes the indirection (`fallback_table[x]`).
--- Because runtime memory dictates the index, it explicitly demotes this store
--- to the fully checked dynamic path. No panics, no UB—just memory-safe Rust.
-fallback_table[unprovable_read] = 99
-
-print("safe_fallback", fallback_table[3])
-```
-```text
-$ ./target/release/phia
-PROBE pascal_mid: i_r69=3 i_r70=20
-PROBE safe_fallback: i_r70=99
-TABLE 0 LEN 7 NZ 7 CHECKSUM 168
-TABLE 1 LEN 1 NZ 1 CHECKSUM 1
-TABLE 2 LEN 2 NZ 2 CHECKSUM 3
-TABLE 3 LEN 3 NZ 3 CHECKSUM 8
-TABLE 4 LEN 4 NZ 4 CHECKSUM 20
-TABLE 5 LEN 5 NZ 5 CHECKSUM 48
-TABLE 6 LEN 6 NZ 6 CHECKSUM 112
-TABLE 7 LEN 7 NZ 7 CHECKSUM 256
-TABLE 8 LEN 4 NZ 1 CHECKSUM 396
-STATS fast_sets=0;fast_gets=0;dyn_sets=5;dyn_gets=10;hoists=0;hoist_ctx=
-TIME 32.445µs
-```
 ### Basic Features
 
 **Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
@@ -182,7 +86,7 @@ Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
 fold left); parentheses.
 
 ```lua
--- available_toolset.lua — the entire toolset in one program.
+-- showcase.lua — the entire toolset in one program.
 
 -- scalars: strings (concat), integers, floats, booleans
 local name = "phia" .. "/" .. "lua"
@@ -236,13 +140,9 @@ while i <= 7 do
     i = i + 1
 end
 
--- taming: a non-affine key declines the fast path — runtime-checked store
-local log = {}
-log[i * 13] = grade
-
 -- absent keys read as the element kind's zero: 0 and ""
 print("exit", acc[999], names[42])
-print("tables", acc, wave, names, grid, row, log)
+print("tables", acc, wave, names, grid, row)
 print("final", name, grade, row[0] == 99, acc[7] == 49)
 ```
 
@@ -267,7 +167,7 @@ PHIA_SOURCE=showcase.lua cargo build --release
 ./target/release/phia
 
 # BULLETPROOF: 
-# If Cargo refuses to recompile, touch the file first to update the timestamp
+# Touch the file first to update the timestamp
 touch showcase.lua && PHIA_SOURCE=showcase.lua cargo build --release
 
 
@@ -275,7 +175,7 @@ touch showcase.lua && PHIA_SOURCE=showcase.lua cargo build --release
 
 # Writes IR dumps and the probe_map.txt sidecar directly beside the 
 # generated baked_native.rs file in the target/release/build/... folder.
-PHIA_DEBUG_DUMP=all PHIA_SOURCE=main.lua cargo build --release
+touch main.lua && PHIA_DEBUG_DUMP=final PHIA_SOURCE=main.lua cargo build --release
 ```
 ## Known Quirks: `print`
 
@@ -297,6 +197,7 @@ Compatibility. By keeping the name `print`, you can run the exact same `.lua` sc
 **Example:**
 
 ```lua
+-- ghost_register.lua
 local ghost = {}
 local ghost_val = ghost[1] -- Dead code: never affects the final arena state
 

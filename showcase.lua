@@ -1,53 +1,58 @@
--- showcase.lua — Pascal's Triangle (Optimizer Tripwire Edition)
--- This program is deliberately written to lay UB traps.
+-- showcase.lua — the entire toolset in one program.
 
-local pascal = {}
-local n = 6
-local row_idx = 0
+-- scalars: strings (concat), integers, floats, booleans
+local name = "phia" .. "/" .. "lua"
+local version = 1
+local ratio = 0.25
+local tuned = true
 
-while row_idx <= n do
+print("scalars", name, version, ratio, tuned)
 
-    local row = {}
-    local col_idx = 0
+-- Lua arithmetic semantics, integer side: trunc /, floor //, sign-of-divisor %
+print("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3)
+-- float side: plain /, floor //, adjusted %
+print("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio)
+-- comparisons and boolean algebra
+print("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned)
 
-    -- TRIPWIRE: Dynamic Loop Bounds & Strict SCEV
-    -- What could go wrong: A reckless optimizer sees `col_idx` incrementing
-    -- and blindly hoists a raw pointer to skip bounds checks. But the loop limit
-    -- `row_idx` mutates in the outer loop! If the compiler guesses the pre-size
-    -- wrong, the inner loop causes a buffer overflow.
-    -- How Phia handles it: Phia's Scalar Evolution (SCEV) engine detects that
-    -- the inner loop bound is dynamic. Because it cannot mathematically prove
-    -- the absolute maximum limit, it deliberately surrenders the affine proof.
-    -- It emits safe, on-the-fly `.resize()` and `.get_mut()` checks inside
-    -- the inner loop. (Check the STATS: hoists=0, fast_sets=0).
-
-    while col_idx <= row_idx do
-        if col_idx == 0 then
-            row[col_idx] = 1
-        elseif col_idx == row_idx then
-            row[col_idx] = 1
-        else
-            local prev_row = pascal[row_idx - 1]
-            row[col_idx] = prev_row[col_idx - 1] + prev_row[col_idx]
-        end
-        col_idx = col_idx + 1
-    end
-
-    pascal[row_idx] = row
-    row_idx = row_idx + 1
+-- structured control: if / elseif / else (grade merges through a join phi)
+local grade = 0
+if version >= 2 then
+    grade = 100
+elseif version == 1 then
+    grade = 50
+else
+    grade = 9
 end
 
-print("pascal_mid", pascal[3][1], pascal[6][3])
+-- nested tables flip the program to arena handles (0 = nil, checked)
+local grid = {}
+local row = {}
+row[0] = 99
+grid[0] = row
 
--- TRIPWIRE: Data-Dependent Indirection Demotion
-local unprovable_read = pascal[3][1] -- Evaluates to 3 at runtime
-local fallback_table = {}
+-- one loop, three element kinds riding the same affine-store proof:
+-- EC sizes all three to the limit in the pre-header, pointers hoist,
+-- stores and the probe's read take the unsafe fast path.
+local acc = {}
+local wave = {}
+local names = {}
+local x = 0.0
+local i = 0
+while i <= 7 do
+    local shadow = i * 100        -- scoped per-trip local
+    acc[i] = i * i                -- integers
+    wave[i] = x                   -- floats
+    names[i] = name               -- strings (stored by clone)
+    grid[0][i % 3] = shadow       -- non-affine key through a child: the
+                                  -- proof declines, the store stays dyn
+                                  -- and checked
+    print("iter", i, acc, acc[i])
+    x = x + 0.25
+    i = i + 1
+end
 
--- What could go wrong: If a data-dependent read is used as a table key, the
--- compiler has no way to predict the required memory size.
--- How Phia handles it: It instantly recognizes the indirection (`fallback_table[x]`).
--- Because runtime memory dictates the index, it explicitly demotes this store
--- to the fully checked dynamic path. No panics, no UB—just memory-safe Rust.
-fallback_table[unprovable_read] = 99
-
-print("safe_fallback", fallback_table[3])
+-- absent keys read as the element kind's zero: 0 and ""
+print("exit", acc[999], names[42])
+print("tables", acc, wave, names, grid, row)
+print("final", name, grade, row[0] == 99, acc[7] == 49)
