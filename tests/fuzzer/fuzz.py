@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import argparse, random, subprocess, sys, os, time
+import argparse, subprocess, sys, os, time
 from pathlib import Path
 
-# Ensure tests/fuzzer is always on the module search path
+# Ensure tests/fuzzer is always resolvable regardless of where the script is called from
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generator import PhiaLuaGenerator
 
@@ -15,17 +15,13 @@ class C:
     RESET = '\033[0m'
     BOLD = '\033[1m'
 
-def generate_phia_code(seed):
-    generator = PhiaLuaGenerator(seed)
-    return generator.generate()
-
-# --- Runner & Verifier ---
 def print_diff(ref_vals, got_vals):
-    """Prints a beautiful side-by-side comparison of outputs."""
-    print(f"\n{C.BOLD}--- Value Mismatch Diff ---{C.RESET}")
-    print(f"{'Idx':<4} | {'Lua (Expected)':<15} | {'Phia (Got)':<15} | {'Status'}")
-    print("-" * 50)
-    for i in range(max(len(ref_vals), len(got_vals))):
+    """Prints a clear side-by-side comparison of Lua vs Phia outputs."""
+    print(f"\n{C.BOLD}--- Output Mismatch Diff ---{C.RESET}")
+    print(f"{'Idx':<4} | {'Lua (Expected)':<16} | {'Phia (Got)':<16} | {'Status'}")
+    print("-" * 52)
+    max_len = max(len(ref_vals), len(got_vals))
+    for i in range(max_len):
         exp = ref_vals[i] if i < len(ref_vals) else "MISSING"
         got = got_vals[i] if i < len(got_vals) else "MISSING"
 
@@ -34,101 +30,125 @@ def print_diff(ref_vals, got_vals):
             is_match = True
         else:
             try:
-                if abs(float(exp) - float(got)) < 1e-9: is_match = True
-            except ValueError: pass
+                if abs(float(exp) - float(got)) < 1e-9:
+                    is_match = True
+            except ValueError:
+                pass
 
         status = f"{C.GREEN}✔ Match{C.RESET}" if is_match else f"{C.RED}✘ Fail{C.RESET}"
-        print(f"{i:<4} | {exp:<15} | {got:<15} | {status}")
+        print(f"{i:<4} | {exp:<16} | {got:<16} | {status}")
 
-def run_seed(seed, mode):
-    src = generate_phia_code(seed)
+def run_seed(seed):
+    generator = PhiaLuaGenerator(seed)
+    src = generator.generate()
 
     os.makedirs("/tmp/adv", exist_ok=True)
-    path = f"/tmp/adv/fuzz_{mode}_{seed}.lua"
+    path = f"/tmp/adv/fuzz_{seed}.lua"
     with open(path, "w") as f:
         f.write(src)
 
-    # Run Lua
+    # 1. Run reference Lua
     ref = subprocess.run(["lua", path], capture_output=True, text=True)
     if ref.returncode != 0:
-        # The original script silently skipped seeds where Lua crashed on nil arithmetic
-        return {"status": "SKIP"}
+        return {"status": "SKIP", "src": src}
 
-    # Build Phia (using dynamic cwd)
+    # 2. Build Phia
     cwd = os.getcwd()
     subprocess.run(["touch", path])
-    build = subprocess.run(["cargo", "build", "--release"], capture_output=True, text=True, env={**os.environ, "PHIA_SOURCE": path}, cwd=cwd)
+    build = subprocess.run(
+        ["cargo", "build", "--release"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PHIA_SOURCE": path},
+        cwd=cwd
+    )
     if build.returncode != 0:
         return {"status": "BUILD_FAIL", "msg": build.stderr[-800:], "src": src}
 
-    # Run Phia
+    # 3. Execute Phia
     got = subprocess.run([os.path.join(cwd, "target/release/phia")], capture_output=True, text=True)
     if got.returncode != 0:
         return {"status": "RUN_FAIL", "msg": got.stderr[-800:], "src": src}
 
-    # Parse & Compare
+    # 4. Parse & Compare Outputs
     ref_tok = ref.stdout.split()
-    ref_vals = ["0" if v == "nil" else v for v in ref_tok[1:]] # Drop 'final', map nil->0
+    ref_vals = ["0" if v == "nil" else v for v in ref_tok[1:]]
 
     try:
         got_line = [l for l in got.stdout.splitlines() if l.startswith("PROBE final")][0]
         got_vals = [t.split("=", 1)[1].strip('"') for t in got_line.split()[2:]]
     except IndexError:
-        return {"status": "PARSE_ERROR", "msg": "Could not find 'PROBE final' in phia output.", "src": src}
+        return {"status": "PARSE_ERROR", "msg": "Could not locate 'PROBE final' in phia output.", "src": src}
 
     if len(ref_vals) != len(got_vals):
         return {"status": "SHAPE_FAIL", "ref": ref_vals, "got": got_vals, "src": src}
 
     for a, b in zip(ref_vals, got_vals):
-        if a == b: continue
+        if a == b:
+            continue
         try:
-            if abs(float(a) - float(b)) < 1e-9: continue
-        except ValueError: pass
+            if abs(float(a) - float(b)) < 1e-9:
+                continue
+        except ValueError:
+            pass
         return {"status": "MISMATCH", "ref": ref_vals, "got": got_vals, "src": src}
 
     return {"status": "PASS"}
 
-# --- Main CLI ---
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Phia Differential Fuzzer")
-    parser.add_argument("--mode", choices=["gen", "cfg", "all"], default="all", help="Which fuzzer to run")
-    parser.add_argument("--seeds", type=int, default=50, help="Number of seeds per mode")
+def main():
+    parser = argparse.ArgumentParser(description="Phia Unified Differential Fuzzer")
+    parser.add_argument("--seeds", "-n", type=int, default=50, help="Number of random tests to execute (default: 50)")
+    parser.add_argument("--seed", "-s", type=int, default=None, help="Target a specific seed to reproduce a bug")
+    parser.add_argument("--max-fails", type=int, default=3, help="Halt after this many failures (default: 3)")
     args = parser.parse_args()
 
-    modes = ["gen", "cfg"] if args.mode == "all" else [args.mode]
+    # Determine seed list
+    seed_list = [args.seed] if args.seed is not None else list(range(args.seeds))
+    total_runs = len(seed_list)
 
-    total_fails = 0
-    for mode in modes:
-        print(f"\n{C.CYAN}{C.BOLD}=== Starting Fuzzer: Mode '{mode.upper()}' ==={C.RESET}")
-        fails_this_mode = 0
-        start_time = time.time()
+    print(f"\n{C.CYAN}{C.BOLD}=== Phia Full-Spectrum Differential Fuzzer ==={C.RESET}")
+    print(f"Targeting {total_runs} run(s) across all language features...\n")
 
-        for seed in range(args.seeds):
-            sys.stdout.write(f"\rTesting seed {seed+1}/{args.seeds}...")
-            sys.stdout.flush()
+    fails = 0
+    passed = 0
+    skipped = 0
+    start_time = time.time()
 
-            res = run_seed(seed, mode)
-            if res["status"] == "SKIP":
-                continue  # Silently skip this seed and move to the next one
+    for idx, seed in enumerate(seed_list):
+        sys.stdout.write(f"\rTesting seed {seed} ({idx + 1}/{total_runs})...")
+        sys.stdout.flush()
 
-            if res["status"] != "PASS":
-                sys.stdout.write("\r" + " " * 30 + "\r") # Clear line
-                fails_this_mode += 1
-                total_fails += 1
-                print(f"{C.RED}❌ FAIL (Seed {seed}){C.RESET} - Reason: {C.BOLD}{res['status']}{C.RESET}")
+        res = run_seed(seed)
 
-                if res["status"] in ["MISMATCH", "SHAPE_FAIL"]:
-                    print_diff(res["ref"], res["got"])
-                else:
-                    print(f"\n{C.YELLOW}Error Output:{C.RESET}\n{res['msg']}")
+        if res["status"] == "SKIP":
+            skipped += 1
+            continue
 
-                print(f"\n{C.YELLOW}Failing Source Code:{C.RESET}\n{res['src']}")
-                if fails_this_mode >= 3:
-                    print(f"{C.RED}Too many failures in '{mode}'. Aborting this mode.{C.RESET}")
-                    break
+        if res["status"] == "PASS":
+            passed += 1
+            continue
 
-        elapsed = time.time() - start_time
-        if fails_this_mode == 0:
-            sys.stdout.write(f"\r{C.GREEN}✔ Mode '{mode}' completed cleanly in {elapsed:.2f}s{C.RESET}\n")
+        # Handle Failure
+        fails += 1
+        sys.stdout.write("\r" + " " * 40 + "\r")
+        print(f"{C.RED}❌ FAIL [Seed {seed}]{C.RESET} - Reason: {C.BOLD}{res['status']}{C.RESET}")
 
-    sys.exit(1 if total_fails > 0 else 0)
+        if res["status"] in ["MISMATCH", "SHAPE_FAIL"]:
+            print_diff(res["ref"], res["got"])
+        else:
+            print(f"\n{C.YELLOW}Error Details:{C.RESET}\n{res.get('msg', '')}")
+
+        print(f"\n{C.YELLOW}Reproducer Script (/tmp/adv/fuzz_{seed}.lua):{C.RESET}\n{res['src']}")
+
+        if fails >= args.max_fails:
+            print(f"\n{C.RED}Reached failure threshold ({args.max_fails}). Halting.{C.RESET}")
+            break
+
+    elapsed = time.time() - start_time
+    print("-" * 52)
+    print(f"Done in {elapsed:.2f}s | {C.GREEN}{passed} Passed{C.RESET} | {C.YELLOW}{skipped} Skipped{C.RESET} | {C.RED if fails else C.GREEN}{fails} Failed{C.RESET}")
+
+    sys.exit(1 if fails > 0 else 0)
+
+if __name__ == "__main__":
+    main()
