@@ -86,6 +86,7 @@ local POSITIVE = {
     "float_09_fast_rw.lua",
     "float_10_handle_mode.lua",
     "float_14_add_store.lua",
+    "float_15_barista_space_cafe.lua",
     "tier4_01_flat_plus_nested.lua",
     "tier4_02_nested_read.lua",
     "tier4_03_rebind_decline.lua",

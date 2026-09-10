@@ -143,9 +143,14 @@ fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
 }
 
 fn main() {
-    // Cargo will re-run build.rs for different test files
+    // Cargo will re-run build.rs for different test files. An empty
+    // PHIA_SOURCE counts as unset: `PHIA_SOURCE= cargo build` must fall
+    // back to the project-root main.lua, not try to read "".
     println!("cargo:rerun-if-env-changed=PHIA_SOURCE");
-    let source_path = env::var("PHIA_SOURCE").unwrap_or_else(|_| "main.lua".to_string());
+    let source_path = env::var("PHIA_SOURCE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "main.lua".to_string());
     println!("cargo:rerun-if-changed={}", source_path);
 
     let source = std::fs::read_to_string(&source_path).expect("Failed to read source");

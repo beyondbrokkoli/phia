@@ -175,14 +175,6 @@ TABLE 5 LEN 105 NZ 1 CHECKSUM 5250
 STATS fast_sets=3;fast_gets=1;dyn_sets=4;dyn_gets=5;hoists=3;hoist_ctx=0,0,0
 ```
 
-# Build Notice
-
-For v4 architecture, link missing /usr/bin/x86_64-linux-gnu-gcc and /usr/bin/x86_64-linux-gnu-g++
-```
-sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc
-sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++
-```
-
 ## The compiled result
 
 The generated Rust, 1:1 from `target/release/build/phia-*/out/baked_native.rs`:
@@ -591,10 +583,20 @@ pub fn run_baked() -> Vec<Box<Table>> {
 pub const STATS: &str = "fast_sets=3;fast_gets=1;dyn_sets=4;dyn_gets=5;hoists=3;hoist_ctx=0,0,0";
 ```
 
-## Building and the harness
+## Build
+
+For v4 architecture, linux packaging symlinks might be missing
+
+```
+sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc
+sudo ln -sf /usr/bin/x86_64_v4-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++
+```
 
 ```sh
-PHIA_SOURCE=showcase.lua cargo build --release
+cargo build --release        # no PHIA_SOURCE (or empty) -> compiles main.lua
+./target/release/phia
+
+PHIA_SOURCE=showcase.lua cargo build --release   # any other program
 ./target/release/phia
 ```
 
@@ -606,3 +608,26 @@ dumps beside `baked_native.rs`, and any program containing `print` statements
 also gets `probe_map.txt` there — the sidecar that joins runtime `PROBE` lines
 to both dumps (tag → runtime line, MID vregs + phi ancestry, FINAL physical
 registers).
+
+## Why bother?
+
+Fair question: why would anyone want a vibecoded Lua compiler? The honest
+answer is pinned at the project root — [main.lua](main.lua), "The Gauntlet".
+It is a deliberately unfair synthetic workload: a strict subset (integers,
+tables, `local`, `while`, `+ - <`) hammered through the patterns the optimizer
+can prove — induction variables, affine keys, aliasing chains, hoist placement
+across loop nests. Same program, two executables, reference machine:
+
+```text
+phia (rustc -O, via build.rs)   ~1.8 s
+luajit main.lua                ~18 s     (about 10x)
+```
+
+The gap is not "faster Lua" — it is the receipt that the compiler's proofs
+are real. A dynamic language pays per operation for everything the Gauntlet
+omits: tagged values, hash lookups, GC barriers, resize-per-store. Phia's
+contract makes the compiler *disprove* those costs statically (monomorphic
+element kinds, arena tables, hoisted raw pointers behind verified bounds) and
+hands rustc loops clean enough to vectorize. Compilation stays a pure,
+byte-reproducible function — the speed is just what determinism looks like
+when nothing is left to check at runtime.
