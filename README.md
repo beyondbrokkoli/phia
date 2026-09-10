@@ -17,10 +17,6 @@ Fair question: why build an ahead-of-time (AOT) compiler for a scripting languag
 For the same program, executed on the same machine:
 
 ```text
-$ unset PHIA_SOURCE
-$ cargo build --release
-   Compiling phia v0.1.0 (/home/halim/phia)
-    Finished `release` profile [optimized] target(s) in 0.35s
 $ hyperfine './target/release/phia >/dev/null' 'luajit main.lua >/dev/null'
 Benchmark 1: ./target/release/phia >/dev/null
   Time (mean ± σ):      1.809 s ±  0.035 s    [User: 1.798 s, System: 0.009 s]
@@ -34,7 +30,7 @@ Summary
   ./target/release/phia >/dev/null ran
    10.01 ± 0.35 times faster than luajit main.lua >/dev/null
 ```
-This 10x performance gap is not because LuaJIT is slow—18 seconds for 8+ billion dynamic iterations is an incredible feat of engineering. The gap exists because trace-based JIT compilers and AOT static analyzers operate under fundamentally different constraints:
+This performance gap is not because LuaJIT is slow, it exists because trace-based JIT compilers and AOT static analyzers operate under fundamentally different constraints:
 
 1. **Proofs vs. Speculation:** Because Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code. If a loop writes past an array's capacity, the trace must abort, reallocate memory, and resume. **Phia** uses static Scalar Evolution (SCEV) to prove the exact capacity a loop will need *before* it runs, hoisting a single, exact memory allocation into the pre-header and entirely eliminating runtime bounds checks.
 2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions interspersed with bailout guards. Because Phia proves memory safety ahead of time, it emits clean, branchless, unaliased Rust code (using `*mut T` pointers). This allows the LLVM backend to auto-vectorize the innermost loops, processing 4 to 8 array slots simultaneously per CPU cycle via hardware SIMD instructions.
@@ -42,31 +38,30 @@ This 10x performance gap is not because LuaJIT is slow—18 seconds for 8+ billi
 
 Phia exists to prove that the performance tax on scripting languages is not in the syntax, but in the dynamic runtime semantics. By enforcing a strict typed subset and replacing runtime guessing with compile-time mathematical proofs, the engine unlocks an entirely different performance tier.
 
-### Missing Implementations (TODOs)
+### Missing Implementations
 
-* **Hash Maps and Sparse Tables:** Phia does not yet implement the hash-map half of standard Lua tables. Currently, table storage is backed by strictly dense, 0-indexed `Vec`s.
-* *Warning:* Because of this, a sparse insert like `t[1000000] = 1` will instantly allocate and zero-fill a million elements, likely causing an OOM. Negative keys (`t[-1] = 42`) are a checked runtime panic, as they cannot currently overflow into a hash map.
+#### Core Language
+* **Functions**: Function definitions and invocations are not yet implemented.
+* **Global Variables**: Global scope is missing; all variables must currently be declared as `local`.
+* **Control Flow**: `for` loops are not yet supported.
+* **Standard Library**: Built-in standard library functions are missing.
+* **The `nil` Keyword** — Explicit assignment (e.g., `local x = nil`) is not yet supported.
 
-* **Table Dot Notation:** Table property access via dot notation (e.g., `t.field`) and string keys in general are not yet supported.
-* **Globals:** Global variable definitions are missing (all variables must currently be `local`).
-* **Control Flow:** `for` loops and standard library functions are missing.
-* **Optimized String Memory:** String operations currently generate heavy heap traffic. String concatenation (`..`) emits Rust `format!()` calls, and string table stores emit `.clone()`.
-* **Boolean Storage:** Booleans cannot currently be stored in tables.
+#### Tables & Data Structures
+* **Hash Maps & Sparse Arrays**: Tables are backed strictly by dense, 0-indexed `Vec`s. Sparse inserts cause Out-Of-Memory (OOM) errors, and negative keys trigger runtime panics.
+* **Dot Notation & String Keys**: Table property access (e.g., `t.field`) and string-based keys are unsupported.
+* **Boolean Storage**: Booleans cannot currently be stored as table values.
 
-A few behaviors currently diverge from standard Lua:
+#### Types & Operators
+* **Numeric Coercion**: Mixed integer/float arithmetic and implicit string-to-number conversions are strict build errors.
+* **Integer Division**: The `/` operator performs truncating division on integers, whereas standard Lua always yields a float.
+* **String Ordering**: Relational operators (`<`, `>`, etc.) cannot be used to compare strings.
 
-* **No Numeric Coercion:** Mixed Integer/Float arithmetic and implicit string conversions (e.g., `2 .. "x"`) are strict build errors.
-* **Integer Division:** The `/` operator performs truncating division for integers. In standard Lua, `/` always yields a Float.
-* **No String Ordering:** Relational operators (`<`, `>`, etc.) cannot be used on strings.
-* **The `nil` Keyword:** `nil` is treated as a reserved keyword rather than an actual value. Absence is compiled into the element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null table handle. *Using* a null handle is a checked `Runtime Error: table is nil`, never undefined behavior.
+#### Memory & Performance
+* **String Optimization**: String concatenation (`..`) and table storage currently generate heavy heap traffic via `format!()` and `.clone()`.
+* **Dynamic Memory Management**: Lacks a garbage collector, reference counting, and runtime type tags. Memory is entirely resolved at build time, meaning tables are statically allocated in a single arena and never freed.
 
-Every memory decision is made at build time. Element kinds, storage sides
-(`array` / `farray` / `sarray`), register allocation — scalars compile to pre-declared Rust locals, so there is no stack machine and no heap traffic for **numeric or boolean** values **(strings, however, still rely on the global allocator)**. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
-exactly once at its literal, never moves, never frees. There is no garbage
-collector, no reference counting, no runtime type tags — nothing executes per
-operation except the operation itself.
-
-### Basic Features
+### Supported Features
 
 **Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
 Table. A table has Integer keys and a monomorphic element kind decided by the
@@ -87,6 +82,8 @@ address across loop trips mirrors Phia's stable arena handle.
 comparisons `< > <= >= == ~=`; `==` / `~=` also work on two Booleans or two
 Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
 fold left); parentheses.
+
+* **Absence & Safety** — Absent table keys safely default to the element kind's zero value (`0`, `0.0`, `""`). Dereferencing a null table handle triggers a checked runtime error (`Runtime Error: table is nil`), matching standard Lua's `attempt to index a nil value`.
 
 ```lua
 -- showcase.lua — the entire toolset in one program.
@@ -220,7 +217,8 @@ ghost_test    nil
 
 $ ./target/release/phia
 PROBE ghost_test: i_r5=42
-
+STATS fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=1;hoists=0;hoist_ctx=
+TIME 14.891µs
 ```
 
 *(Here, `ghost_val` was optimized away, the allocator gave its physical slot to `shadow`, and the `print` probe blindly read the recycled memory containing `42`.)*
