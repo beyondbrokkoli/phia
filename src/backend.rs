@@ -287,11 +287,6 @@ pub struct IrBackend {
     phys_base: RegId, float_base: RegId, ftable_base: RegId, tstr_base: RegId, did_alloc: bool,
     consts_i: HashMap<RegId, i64>,
     consts_b: HashMap<RegId, bool>,
-    // physical reg -> pool, captured by allocate_registers: emission needs
-    // it to pick i_r/f_r renderings for the untyped arith instructions.
-    // Float physicals live in a disjoint id range, so the bare-id lookup
-    // is unambiguous.
-    phys_pools: HashMap<RegId, Pool>,
 }
 
 impl IrBackend {
@@ -302,7 +297,6 @@ impl IrBackend {
             n_table: 0, n_ftable: 0, n_tstr: 0,
             phys_base: 0, float_base: 0, ftable_base: 0, tstr_base: 0, did_alloc: false,
             consts_i: HashMap::new(), consts_b: HashMap::new(),
-            phys_pools: HashMap::new(),
         }
     }
 
@@ -321,20 +315,65 @@ impl IrBackend {
     // Strings likewise: no const folding (float precedent), so a string
     // operand is always a physical register.
     fn sop_str(&self, r: RegId) -> String { format!("s_r{r}") }
+    // Pool membership is answered by the disjoint mint ranges, NOT a
+    // phys-id -> pool map: Int/Bool/Table/String deliberately share one id
+    // range, so such a map is last-writer-wins across those pools and any
+    // future bare-id lookup would silently query whichever pool minted the
+    // id last. The disjoint pools have exact ranges by construction —
+    // Float mints [float_base, float_base + n_float), float_base sits
+    // above the entire shared range, and no other pool mints into it — so
+    // range membership equals "this pool minted this id", and vreg ids
+    // (all < phys_base <= float_base) can never fall inside.
     fn is_float_reg(&self, r: RegId) -> bool {
-        self.phys_pools.get(&r) == Some(&Pool::Float)
+        self.did_alloc
+            && r >= self.float_base
+            && r < self.float_base + self.n_float as RegId
     }
 
     // Storage side of a hoisted/EC'd table physical: float-ELEMENT tables
-    // live in their own pool, so the id alone answers farray vs array
-    // (and *mut f64 vs *mut i64 in the decl block) unambiguously.
+    // live in their own pool ([ftable_base, ftable_base + n_ftable)), so
+    // the id alone answers farray vs array (and *mut f64 vs *mut i64 in
+    // the decl block) unambiguously.
     fn is_ftable_reg(&self, r: RegId) -> bool {
-        self.phys_pools.get(&r) == Some(&Pool::TableFloat)
+        self.did_alloc
+            && r >= self.ftable_base
+            && r < self.ftable_base + self.n_ftable as RegId
     }
 
     // String-ELEMENT tables: same disjoint-range argument, sarray side.
     fn is_tstr_reg(&self, r: RegId) -> bool {
-        self.phys_pools.get(&r) == Some(&Pool::TableString)
+        self.did_alloc
+            && r >= self.tstr_base
+            && r < self.tstr_base + self.n_tstr as RegId
+    }
+
+    // Debug-dump helper: render an allocated register the way emission
+    // would — pool prefix included. The final CFG dump prints raw physical
+    // ids, and Int/Bool/Table/String physicals deliberately share one id
+    // space (i_r49 and t_r49 are distinct variables), so a bare number
+    // reads as a clobber that cannot happen. The operand's static type
+    // disambiguates the shared pools (the same rule Eq/probe emission
+    // uses); Float/TableFloat/TableString live in disjoint id ranges, so
+    // their pool lookups are unambiguous. Const-skipped vregs keep their
+    // vreg id at emission (uses render as literals) — mark those `v` so
+    // the two namespaces are visually distinct in the dump.
+    pub fn pool_prefixed(&self, r: RegId, t: &StaticType) -> String {
+        if self.consts_i.contains_key(&r) || self.consts_b.contains_key(&r) {
+            return format!("v{r}");
+        }
+        if self.is_float_reg(r) {
+            return format!("f_r{r}");
+        }
+        if self.is_ftable_reg(r) || self.is_tstr_reg(r) {
+            return format!("t_r{r}");
+        }
+        match t {
+            StaticType::Integer => format!("i_r{r}"),
+            StaticType::Float => format!("f_r{r}"),
+            StaticType::Boolean => format!("b_r{r}"),
+            StaticType::String => format!("s_r{r}"),
+            StaticType::Table(_) | StaticType::UnknownTable(_) => format!("t_r{r}"),
+        }
     }
 
     fn reg_uses(&self, r: RegId) -> usize {
@@ -704,7 +743,6 @@ impl IrBackend {
         let mut free: HashMap<Pool, Vec<RegId>> = HashMap::new();
         let mut count: HashMap<Pool, usize> = HashMap::new();
         let mut map: HashMap<RegId, RegId> = HashMap::new();
-        let mut phys_pools: HashMap<RegId, Pool> = HashMap::new();
 
         for r in vregs {
             let p = ty[&r];
@@ -730,7 +768,6 @@ impl IrBackend {
             });
             act.push((phys, end));
             map.insert(r, phys);
-            phys_pools.insert(phys, p);
         }
 
         // 4. rewrite references (const vregs stay identity: codegen looks
@@ -759,7 +796,6 @@ impl IrBackend {
         self.float_base = float_base;
         self.ftable_base = ftable_base;
         self.tstr_base = tstr_base;
-        self.phys_pools = phys_pools;
         self.did_alloc = true;
     }
 

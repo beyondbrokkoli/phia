@@ -142,6 +142,113 @@ fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
     lines
 }
 
+// FINAL CFG renderer — like the dispatched renderer, but every register is
+// pool-prefixed (i_r/b_r/f_r/s_r/t_r), naming the exact Rust variable
+// emission generates. Raw physical ids made cross-pool sharing (i_r49 vs
+// t_r49 — distinct variables, one number, by design) read as a register
+// clobber. `v` marks const-skipped vregs: they keep their vreg id and never
+// become Rust variables (their uses render as literals). Unhandled variants
+// fall back to the raw Debug form, so a new IR op cannot break the dump.
+fn render_final_ir(out: &mut String, eng: &backend::IrBackend) {
+    use ast::StaticType;
+    use ir::Instruction as I;
+    let st_i = StaticType::Integer;
+    let st_b = StaticType::Boolean;
+    let st_tbl = || StaticType::Table(Box::new(StaticType::Integer));
+    for b in &eng.program.blocks {
+        let term = match &b.terminator {
+            Some(ir::Terminator::Jump(t)) => format!("Jump(b{t})"),
+            Some(ir::Terminator::Branch { cond, true_block, false_block }) =>
+                format!("Branch {{ cond: {}, true_block: {true_block}, false_block: {false_block} }}",
+                    eng.pool_prefixed(*cond, &StaticType::Boolean)),
+            Some(ir::Terminator::Halt) => "Halt".to_string(),
+            None => "None".to_string(),
+        };
+        out.push_str(&format!("BLOCK {} (depth {}) term=Some({term})\n", b.id, b.depth));
+        for i in &b.instrs {
+            let s = match i {
+                I::LoadInt { target, val } => format!("LoadInt {{ target: {}, val: {val} }}", eng.pool_prefixed(*target, &st_i)),
+                I::LoadFloat { target, val } => format!("LoadFloat {{ target: {}, val: {val:?} }}", eng.pool_prefixed(*target, &StaticType::Float)),
+                I::LoadBool { target, val } => format!("LoadBool {{ target: {}, val: {val} }}", eng.pool_prefixed(*target, &st_b)),
+                I::LoadString { target, val } => format!("LoadString {{ target: {}, val: {val:?} }}", eng.pool_prefixed(*target, &StaticType::String)),
+                I::NewTable { target, ty } => format!("NewTable {{ target: {}, ty: {ty:?} }}", eng.pool_prefixed(*target, ty)),
+                I::SetTable { table, key, val, ty } =>
+                    format!("SetTable {{ table: {}, key: {}, val: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*table, &st_tbl()), eng.pool_prefixed(*key, &st_i), eng.pool_prefixed(*val, ty)),
+                I::SetTableFast { table, key, val, ty } =>
+                    format!("SetTableFast {{ table: {}, key: {}, val: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*table, &st_tbl()), eng.pool_prefixed(*key, &st_i), eng.pool_prefixed(*val, ty)),
+                I::GetTable { target, table, key, ty } =>
+                    format!("GetTable {{ target: {}, table: {}, key: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*target, ty), eng.pool_prefixed(*table, &st_tbl()), eng.pool_prefixed(*key, &st_i)),
+                I::GetTableFast { target, table, key, ty } =>
+                    format!("GetTableFast {{ target: {}, table: {}, key: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*target, ty), eng.pool_prefixed(*table, &st_tbl()), eng.pool_prefixed(*key, &st_i)),
+                I::Move { target, source, ty } =>
+                    format!("Move {{ target: {}, source: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*target, ty), eng.pool_prefixed(*source, ty)),
+                I::Add { target, left, right } => arith(eng, "Add", *target, *left, *right),
+                I::Sub { target, left, right } => arith(eng, "Sub", *target, *left, *right),
+                I::Mul { target, left, right } => arith(eng, "Mul", *target, *left, *right),
+                I::Div { target, left, right } => arith(eng, "Div", *target, *left, *right),
+                I::IntDiv { target, left, right } => arith(eng, "IntDiv", *target, *left, *right),
+                I::Mod { target, left, right } => arith(eng, "Mod", *target, *left, *right),
+                I::Neg { target, source } =>
+                    format!("Neg {{ target: {}, source: {} }}", eng.pool_prefixed(*target, &st_i), eng.pool_prefixed(*source, &st_i)),
+                I::Less { target, left, right } =>
+                    format!("Less {{ target: {}, left: {}, right: {} }}",
+                        eng.pool_prefixed(*target, &st_b), eng.pool_prefixed(*left, &st_i), eng.pool_prefixed(*right, &st_i)),
+                I::Leq { target, left, right } =>
+                    format!("Leq {{ target: {}, left: {}, right: {} }}",
+                        eng.pool_prefixed(*target, &st_b), eng.pool_prefixed(*left, &st_i), eng.pool_prefixed(*right, &st_i)),
+                I::Geq { target, left, right } =>
+                    format!("Geq {{ target: {}, left: {}, right: {} }}",
+                        eng.pool_prefixed(*target, &st_b), eng.pool_prefixed(*left, &st_i), eng.pool_prefixed(*right, &st_i)),
+                I::Eq { target, left, right, ty } =>
+                    format!("Eq {{ target: {}, left: {}, right: {}, ty: {ty:?} }}",
+                        eng.pool_prefixed(*target, &st_b), eng.pool_prefixed(*left, ty), eng.pool_prefixed(*right, ty)),
+                I::Not { target, source } =>
+                    format!("Not {{ target: {}, source: {} }}", eng.pool_prefixed(*target, &st_b), eng.pool_prefixed(*source, &st_b)),
+                I::Concat { target, left, right } =>
+                    format!("Concat {{ target: {}, left: {}, right: {} }}",
+                        eng.pool_prefixed(*target, &StaticType::String),
+                        eng.pool_prefixed(*left, &StaticType::String),
+                        eng.pool_prefixed(*right, &StaticType::String)),
+                I::Phi { target, ty, args } => {
+                    let a: Vec<String> = args.iter()
+                        .map(|(b, r)| format!("b{b}:{}", eng.pool_prefixed(*r, ty)))
+                        .collect();
+                    format!("Phi {{ target: {}, ty: {ty:?}, args: [{}] }}",
+                        eng.pool_prefixed(*target, ty), a.join(", "))
+                }
+                I::EnsureCapacity { table, limit } =>
+                    format!("EnsureCapacity {{ table: {}, limit: {} }}",
+                        eng.pool_prefixed(*table, &st_tbl()), eng.pool_prefixed(*limit, &st_i)),
+                I::HoistRawPtr { table } =>
+                    format!("HoistRawPtr {{ table: {} }}", eng.pool_prefixed(*table, &st_tbl())),
+                I::DebugProbe { tag, operands } => {
+                    let ops: Vec<String> = operands.iter()
+                        .map(|(r, t)| format!("({}, {t:?})", eng.pool_prefixed(*r, t)))
+                        .collect();
+                    format!("DebugProbe {{ tag: {tag:?}, operands: [{}] }}", ops.join(", "))
+                }
+            };
+            out.push_str(&format!("   {s}\n"));
+        }
+    }
+}
+
+fn arith(eng: &backend::IrBackend, name: &str, target: ir::RegId, left: ir::RegId, right: ir::RegId) -> String {
+    // operands inherit the target's pool (Float vs Int) exactly as emission does
+    let t = if eng.pool_prefixed(target, &ast::StaticType::Float).starts_with("f_r") {
+        ast::StaticType::Float
+    } else {
+        ast::StaticType::Integer
+    };
+    format!("{name} {{ target: {}, left: {}, right: {} }}",
+        eng.pool_prefixed(target, &t), eng.pool_prefixed(left, &t), eng.pool_prefixed(right, &t))
+}
+
 fn main() {
     // Cargo will re-run build.rs for different test files. An empty
     // PHIA_SOURCE counts as unset: `PHIA_SOURCE= cargo build` must fall
@@ -249,12 +356,11 @@ fn main() {
 
     if dump_final {
         let mut s = String::from(
-            "== FINAL CFG — post-allocate_registers (physical ids), the structured codegen's input ==\n",
+            "== FINAL CFG — post-allocate_registers (pool-prefixed physical ids), the structured codegen's input ==\n\
+             == i_r/b_r/f_r/s_r/t_r name the exact Rust variable emission generates; pools share ids BY DESIGN ==\n\
+             == (i_r49 and t_r49 are different variables). v marks const-skipped vregs (rendered as literals). ==\n",
         );
-        for b in &backend_engine.program.blocks {
-            s.push_str(&format!("BLOCK {} (depth {}) term={:?}\n", b.id, b.depth, b.terminator));
-            for i in &b.instrs { s.push_str(&format!("   {:?}\n", i)); }
-        }
+        render_final_ir(&mut s, &backend_engine);
         std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();
     }
 
