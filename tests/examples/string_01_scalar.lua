@@ -12,13 +12,13 @@
 local a = "pha"
 local b = "ia"
 local c = a .. b
-probe "concat" a, b, c
+probe("concat", a, b, c)
 local joined = a .. "-" .. b
-probe "chain" joined
+probe("chain", joined)
 local same = a == "pha"
 local diff = a ~= b
-probe "eq" same, diff
+probe("eq", same, diff)
 -- .. binds tighter than == (Lua precedence)
 local gate = (a .. "x") == "phax"
 local neg = not (a == b)
-probe "prec" gate, neg
+probe("prec", gate, neg)

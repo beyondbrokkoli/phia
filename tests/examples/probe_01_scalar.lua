@@ -14,6 +14,6 @@ local f = 2.5
 local flag = true
 local t = {}
 t[0] = 7
-probe "scalars" a, f, flag, t
+probe("scalars", a, f, flag, t)
 t[1] = a + 1
-probe "after" t[0], t[1]
+probe("after", t[0], t[1])

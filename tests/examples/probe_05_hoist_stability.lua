@@ -23,6 +23,6 @@ local i = 0
 while i < 4 do
     a[i] = i + 100
     b[i * 50] = 1
-    probe "iter" i, a, a[i], b
+    probe("iter", i, a, a[i], b)
     i = i + 1
 end

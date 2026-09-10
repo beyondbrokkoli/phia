@@ -22,7 +22,7 @@ local i = 0
 while i < 4 do
     s = s .. "o"
     t[i] = s
-    probe "iter" i, s, t, t[i]
+    probe("iter", i, s, t, t[i])
     i = i + 1
 end
-probe "exit" s, t
+probe("exit", s, t)

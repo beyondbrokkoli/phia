@@ -14,4 +14,4 @@ local row = {}
 row[0] = "alpha"
 row[1] = "beta"
 outer[0] = row
-probe "nested" outer, outer[0], outer[0][1], row
+probe("nested", outer, outer[0], outer[0][1], row)
