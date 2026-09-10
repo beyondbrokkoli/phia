@@ -4,69 +4,52 @@
 > This project would simply not be possible without the `logos` crate.
 
 Phia is an ahead-of-time compiler for a statically typed Lua dialect: source in,
-plain Rust out, `rustc` finishes the job. Compilation is a pure function from
-source to bytes — the same input re-derives the same output, byte for byte,
-which the test harness proves against frozen baselines on every run.
+plain Rust out, `rustc` finishes the job.
 
-## The toolset
+## Why bother?
 
-**Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
-Table. A table has Integer keys and a monomorphic element kind decided by the
-checker on first use: Integer, Float, String, or Table (nesting).
+Fair question: why would anyone want a vibecoded Lua compiler? The honest
+answer is pinned at the project root — [main.lua](main.lua).
+It is a deliberately unfair synthetic workload, hammered through the patterns the optimizer
+can prove — induction variables, affine keys, aliasing chains, hoist placement
+across loop nests. Same program, two executables, reference machine:
 
-**Statements** — `local` (lexically scoped, shadowing allowed), assignment,
-table assignment (`t[i] = v`, nested lvalues like `t[0][j] = v`), `while`,
-`if` / `elseif` / `else`, and `print("tag", e1, e2, ...)` (a debug observation
-point; prints one deterministic line per trip, naming each operand's physical
-register — values, table handles and lengths only, never addresses). The
-keyword is deliberate: `print` is Lua's own, so any Phia source runs as-is
-under a real Lua interpreter — values agree except at the pinned divergences
-(Lua's `/` is float division; `//` and `%` agree), and Lua's stable table
-address across loop trips mirrors Phia's stable arena handle.
+```text
+$ unset PHIA_SOURCE
+$ cargo build --release
+   Compiling phia v0.1.0 (/home/halim/phia)
+    Finished `release` profile [optimized] target(s) in 0.35s
+$ hyperfine './target/release/phia >/dev/null' 'luajit main.lua >/dev/null'
+Benchmark 1: ./target/release/phia >/dev/null
+  Time (mean ± σ):      1.809 s ±  0.035 s    [User: 1.798 s, System: 0.009 s]
+  Range (min … max):    1.775 s …  1.860 s    10 runs
 
-**Operators** — `+ - * / // %` on both numeric kinds with Lua semantics
-(`/` truncates on integers, `//` floors, `%` takes the divisor's sign);
-comparisons `< > <= >= == ~=`; `==` / `~=` also work on two Booleans or two
-Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
-fold left); parentheses.
+Benchmark 2: luajit main.lua >/dev/null
+  Time (mean ± σ):     18.107 s ±  0.524 s    [User: 18.069 s, System: 0.020 s]
+  Range (min … max):   17.536 s … 19.116 s    10 runs
 
-**Pinned divergences from Lua** (all enforced at build time, all locked by
-tests): no numeric coercion anywhere — mixed Integer/Float arithmetic and
-`2 .. "x"` are build errors; integer `/` is truncating (Lua's `/` always
-yields a Float); no ordering on strings; Booleans are not storable in tables.
+Summary
+  ./target/release/phia >/dev/null ran
+   10.01 ± 0.35 times faster than luajit main.lua >/dev/null
+```
 
+## Known Limitations
+
+A few standard Lua behaviors are currently unsupported:
+
+*   **No Sparse Tables:** Phia does not implement the hash-map half of standard Lua tables. Table storage is strictly dense `Vec`s padded with the element kind's zero (`0`, `0.0`, or `""`). Writing to `t[1000000]` will instantly allocate and zero-fill a million slots.
+*   **No Negative Table Indices:** Because tables are backed strictly by 0-indexed vectors, negative keys (e.g., `t[-1] = 42`) cannot overflow into a hash map like they do in Lua. Attempting to use a negative key is a checked runtime panic. 
+*   **Strings and Heap Traffic:** String concatenation (`..`) emits Rust `format!()` calls, and string table stores emit `.clone()`. Heavy string manipulation in loops *will* hit the global allocator. 
+
+ **Pinned divergences from Lua** (all enforced at build time, all locked by tests): no numeric coercion anywhere — mixed Integer/Float arithmetic and `2 .. "x"` are build errors; integer `/` is truncating (Lua's `/` always yields a Float); no ordering on strings;  
+**Booleans are not storable in tables; negative table keys are a runtime panic (`t[-1]` is forbidden); and tables are strictly dense zero-indexed vectors, meaning sparse inserts like `t[1000000] = 1` will instantly zero-fill a million elements and likely OOM.**
+ 
 **nil** is a reserved keyword, not a value. Absence is compiled into the
 element kind's zero: an absent table key reads as `0`, `0.0`, `""`, or a null
 table handle — and *using* a null handle is a checked `Runtime Error: table
 is nil`, never undefined behavior.
 
-## Memory is static
-
-Every memory decision is made at build time. Element kinds, storage sides
-(`array` / `farray` / `sarray`), register allocation — scalars compile to
-pre-declared Rust locals, so there is no stack machine and no heap traffic for
-values. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
-exactly once at its literal, never moves, never frees. There is no garbage
-collector, no reference counting, no runtime type tags — nothing executes per
-operation except the operation itself.
-
-A table reference is a 1-based arena handle (0 = null, checked at use).
-Because a table never moves and only ever grows, the optimizer can hoist raw
-`(pointer, len)` pairs out of loops and emit `unsafe` direct writes — but only
-behind a static proof; whenever the proof fails (non-affine keys, aliases it
-cannot bound), the store stays on the fully checked dynamic path with nil
-checks, bounds checks and explicit resizes. The `unsafe` blocks you see in
-generated code are paid for by compiler-side proofs, not trusted.
-
-The *result* of a program is its final arena state: for every table ever
-created, `TABLE <id> LEN <n> NZ <n> CHECKSUM <n>` (position-weighted; `SUM`
-additionally for floats — string elements are FNV-1a hashed into the same
-formula), plus a `STATS` line counting fast/dynamic table operations and
-pointer hoists. Interactive I/O is not part of this development phase.
-
-## The showcase
-
-One program, every feature at least once ([showcase.lua](showcase.lua)):
+`for` loops, `table.entry`, string keys in general and lots of other core lua features are still missing.
 
 ```lua
 -- showcase.lua — the entire toolset in one program.
@@ -133,51 +116,58 @@ print("tables", acc, wave, names, grid, row, log)
 print("final", name, grade, row[0] == 99, acc[7] == 49)
 ```
 
-What to look for when reading the output below:
+## What works
 
-- `len_r148=8` from the **first** trip: `while i <= 7` desugars to `i < 7+1`
-  and the pre-header `EnsureCapacity` sizes all three tables to 8 *before*
-  iteration zero — integer, float and string storage ride the same proof.
-- The loop body writes `acc`/`wave`/`names` through hoisted raw pointers
-  (`*p_r148.add(k)`, `*p_r172.add(k)`, `*p_r173.add(k)`), but `grid[0][i % 3]`
-  and `log[i * 13]` stay on the fully checked dynamic path — non-affine keys
-  decline the fast path; safety is never traded for speed the compiler cannot
-  prove.
-- `row[0] == 99` prints `false`: `grid[0]` *is* `row`, and the matrix store
-  overwrote slot 0 — aliasing, observable in the program's own output.
-- `acc[999]` reads `0` and `names[42]` reads `""` — absence as the element
-  kind's zero.
+### Optimizer Proofs & Safety
 
-Program output (the `TIME` line is wall clock, the only nondeterministic one):
+The compiler relies on strict static analysis to emit unsafe Rust without introducing undefined behavior. The proofs cover two notoriously difficult edge cases in ahead-of-time compilation for dynamic semantics:
 
-```text
-PROBE scalars: s_r146="phia/lua" i_r5=1 f_r157=0.25 b_r7=true
-PROBE int_sem: i_r146=-3 i_r16=-4 i_r20=2 i_r24=5 i_r27=9
-PROBE float_sem: f_r160=0.25 f_r161=1.0 f_r162=0.25 f_r159=-0.25
-PROBE cmp: b_r43=true b_r146=true b_r147=true b_r149=true b_r56=false
-PROBE iter: i_r147=0 t_r148=3 len_r148=8 i_r149=0
-PROBE iter: i_r147=1 t_r148=3 len_r148=8 i_r149=1
-PROBE iter: i_r147=2 t_r148=3 len_r148=8 i_r149=4
-PROBE iter: i_r147=3 t_r148=3 len_r148=8 i_r149=9
-PROBE iter: i_r147=4 t_r148=3 len_r148=8 i_r149=16
-PROBE iter: i_r147=5 t_r148=3 len_r148=8 i_r149=25
-PROBE iter: i_r147=6 t_r148=3 len_r148=8 i_r149=36
-PROBE iter: i_r147=7 t_r148=3 len_r148=8 i_r149=49
-PROBE exit: i_r149=0 s_r147=""
-PROBE tables: t_r148=3 len_r148=8 t_r172=4 len_r172=8 t_r173=5 len_r173=8 t_r146=1 len_r146=1 t_r147=2 len_r147=3 t_r149=6 len_r149=105
-PROBE final: s_r146="phia/lua" i_r146=50 b_r149=false b_r148=true
-TABLE 0 LEN 1 NZ 1 CHECKSUM 2
-TABLE 1 LEN 3 NZ 3 CHECKSUM 3500
-TABLE 2 LEN 8 NZ 7 CHECKSUM 924
-TABLE 3 LEN 8 NZ 7 CHECKSUM -4760304806130614272 SUM 7
-TABLE 4 LEN 8 NZ 8 CHECKSUM 4463244024491530904
-TABLE 5 LEN 105 NZ 1 CHECKSUM 5250
-STATS fast_sets=3;fast_gets=1;dyn_sets=4;dyn_gets=5;hoists=3;hoist_ctx=0,0,0
-```
+*   **Lexical Allocation Identity:** While memory is arena-bound and never freed, table literals (`{}`) inside loops do not collapse into a single static handle. The compiler maps loop-scoped literals to an emitted arena `.push()` *inside* the generated Rust `loop {}` block. This guarantees that each iteration receives a fresh, distinct table handle, preserving standard Lua object identity and preventing cross-trip mutation bugs.
+*   **Alias-Proofed Pointer Hoisting:** The optimizer can hoist raw pointers (`*mut T`) for affine loop inserts (e.g., `t[i] = v`) to bypass bounds checking. However, this is gated by strict escape analysis. If a hoisted table reference escapes into another structure (e.g., `wrap[1] = t`), a dynamic write to that parent (`wrap[1][k] = v`) could trigger a runtime `.resize()`, which would reallocate the backing vector and leave the hoisted pointer dangling. The analyzer detects this containment, explicitly revokes the affine proof, and demotes all stores for that table to the fully checked dynamic path.
+
+**Types** — Integer (i64, wrapping like Lua), Float (f64), Boolean, String,
+Table. A table has Integer keys and a monomorphic element kind decided by the
+checker on first use: Integer, Float, String, or Table (nesting).
+
+**Statements** — `local` (lexically scoped, shadowing allowed), assignment,
+table assignment (`t[i] = v`, nested lvalues like `t[0][j] = v`), `while`,
+`if` / `elseif` / `else`, and `print("tag", e1, e2, ...)` (a debug observation
+point; prints one deterministic line per trip, naming each operand's physical
+register — values, table handles and lengths only, never addresses). The
+keyword is deliberate: `print` is Lua's own, so any Phia source runs as-is
+under a real Lua interpreter — values agree except at the pinned divergences
+(Lua's `/` is float division; `//` and `%` agree), and Lua's stable table
+address across loop trips mirrors Phia's stable arena handle.
+
+**Operators** — `+ - * / // %` on both numeric kinds with Lua semantics
+(`/` truncates on integers, `//` floors, `%` takes the divisor's sign);
+comparisons `< > <= >= == ~=`; `==` / `~=` also work on two Booleans or two
+Strings; unary `-` and `not`; string concatenation `..` (two Strings, chains
+fold left); parentheses.
+
+## Memory is static
+
+Every memory decision is made at build time. Element kinds, storage sides
+(`array` / `farray` / `sarray`), register allocation — scalars compile to pre-declared Rust locals, so there is no stack machine and no heap traffic for **numeric or boolean** values **(strings, however, still rely on the global allocator)**. Tables live in one arena (`Vec<Box<Table>>`): a table is allocated
+exactly once at its literal, never moves, never frees. There is no garbage
+collector, no reference counting, no runtime type tags — nothing executes per
+operation except the operation itself.
+
+A table reference is a 1-based arena handle (0 = null, checked at use).
+Because a table never moves and only ever grows, the optimizer can hoist raw
+`(pointer, len)` pairs out of loops and emit `unsafe` direct writes — but only
+behind a static proof; whenever the proof fails (non-affine keys, aliases it
+cannot bound), the store stays on the fully checked dynamic path with nil
+checks, bounds checks and explicit resizes. The `unsafe` blocks you see in
+generated code are paid for by compiler-side proofs, not trusted.
+
+The *result* of a program is its final arena state: for every table ever
+created, `TABLE <id> LEN <n> NZ <n> CHECKSUM <n>` (position-weighted; `SUM`
+additionally for floats — string elements are FNV-1a hashed into the same
+formula), plus a `STATS` line counting fast/dynamic table operations and
+pointer hoists. Interactive I/O is not part of this development phase.
 
 ## The compiled result
-
-The generated Rust, 1:1 from `target/release/build/phia-*/out/baked_native.rs`:
 
 ```rust
 // target/release/build/phia-*/out/baked_native.rs
@@ -608,26 +598,3 @@ dumps beside `baked_native.rs`, and any program containing `print` statements
 also gets `probe_map.txt` there — the sidecar that joins runtime `PROBE` lines
 to both dumps (tag → runtime line, MID vregs + phi ancestry, FINAL physical
 registers).
-
-## Why bother?
-
-Fair question: why would anyone want a vibecoded Lua compiler? The honest
-answer is pinned at the project root — [main.lua](main.lua), "The Gauntlet".
-It is a deliberately unfair synthetic workload: a strict subset (integers,
-tables, `local`, `while`, `+ - <`) hammered through the patterns the optimizer
-can prove — induction variables, affine keys, aliasing chains, hoist placement
-across loop nests. Same program, two executables, reference machine:
-
-```text
-phia (rustc -O, via build.rs)   ~1.8 s
-luajit main.lua                ~18 s     (about 10x)
-```
-
-The gap is not "faster Lua" — it is the receipt that the compiler's proofs
-are real. A dynamic language pays per operation for everything the Gauntlet
-omits: tagged values, hash lookups, GC barriers, resize-per-store. Phia's
-contract makes the compiler *disprove* those costs statically (monomorphic
-element kinds, arena tables, hoisted raw pointers behind verified bounds) and
-hands rustc loops clean enough to vectorize. Compilation stays a pure,
-byte-reproducible function — the speed is just what determinism looks like
-when nothing is left to check at runtime.
