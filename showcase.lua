@@ -1,21 +1,28 @@
--- showcase.lua — the entire toolset in one program.
+-- showcase.lua — the entire supported feature set in one program.
 
--- scalars: strings (concat), integers, floats, booleans
-local name = "phia" .. "/" .. "lua"
-local version = 1
-local ratio = 0.25
-local tuned = true
+-- [TYPES] Integer (i64, wrapping), Float (f64), Boolean, String, Table.
+-- Tables use Integer keys and infer a monomorphic element kind on first use
+-- (Integer, Float, String, or nested Table).
+local name = "phia" .. "/" .. "lua"       -- String (concatenation '..' chains fold left)
+local version = 1                         -- Integer (i64, wrapping like Lua)
+local ratio = 0.25                        -- Float (f64)
+local tuned = true                        -- Boolean
 
+-- [STATEMENTS: print] Requires a string literal tag. Acts as a debug probe
+-- printing physical register states (values, handles, lengths; never addresses).
+-- Deliberately named 'print' so this file runs unmodified in standard Lua.
 print("scalars", name, version, ratio, tuned)
 
--- Lua arithmetic semantics, integer side: trunc /, floor //, sign-of-divisor %
-print("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3)
--- float side: plain /, floor //, adjusted %
-print("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio)
--- comparisons and boolean algebra
-print("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned)
+-- [OPERATORS] + - * / // % with Lua semantics.
+-- Integer side: / truncates, // floors, % takes the divisor's sign.
+print("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3) -- parentheses supported
+-- Float side: / is plain division, // floors, % is adjusted.
+print("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio) -- unary minus supported
 
--- structured control: if / elseif / else (grade merges through a join phi)
+-- [OPERATORS] Comparisons (< > <= >= == ~=) on numbers, strings, and booleans.
+print("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned) -- unary 'not' supported
+
+-- [STATEMENTS] Structured control: if / elseif / else
 local grade = 0
 if version >= 2 then
     grade = 100
@@ -25,34 +32,39 @@ else
     grade = 9
 end
 
--- nested tables flip the program to arena handles (0 = nil, checked)
+-- [TYPES & STATEMENTS] Nested tables (arena handles).
+-- Table assignment supports t[i] = v and nested lvalues like t[0][j] = v.
 local grid = {}
 local row = {}
 row[0] = 99
 grid[0] = row
 
--- one loop, three element kinds riding the same affine-store proof:
--- EC sizes all three to the limit in the pre-header, pointers hoist,
--- stores and the probe's read take the unsafe fast path.
+-- [STATEMENTS] while loop, local assignment (lexically scoped, shadowing allowed),
+-- and table assignments (both affine and non-affine).
 local acc = {}
 local wave = {}
 local names = {}
 local x = 0.0
 local i = 0
 while i <= 7 do
-    local shadow = i * 100        -- scoped per-trip local
-    acc[i] = i * i                -- integers
-    wave[i] = x                   -- floats
-    names[i] = name               -- strings (stored by clone)
-    grid[0][i % 3] = shadow       -- non-affine key through a child: the
-                                  -- proof declines, the store stays dyn
-                                  -- and checked
+    local shadow = i * 100        -- lexically scoped per-trip local (shadowing allowed)
+    acc[i] = i * i                -- table assignment: Integer
+    wave[i] = x                   -- table assignment: Float
+    names[i] = name               -- table assignment: String
+    grid[0][i % 3] = shadow       -- nested lvalue table assignment (dynamic/checked)
     print("iter", i, acc, acc[i])
     x = x + 0.25
     i = i + 1
 end
 
--- absent keys read as the element kind's zero: 0 and ""
+-- [ABSENCE & SAFETY] Absent keys safely default to the element kind's zero value (0, 0.0, "").
 print("exit", acc[999], names[42])
 print("tables", acc, wave, names, grid, row)
 print("final", name, grade, row[0] == 99, acc[7] == 49)
+
+-- [SAFETY DEMO] Uncommenting the block below triggers a checked runtime error:
+-- "Runtime Error: table is nil". This perfectly matches Lua's "attempt to index a nil value"
+-- ergonomics while guaranteeing absolutely no Undefined Behavior (UB).
+--
+-- local empty_row = {}
+-- local bad_access = empty_row[0][1]
