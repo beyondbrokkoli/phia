@@ -12,18 +12,18 @@
 -- EXPECT: NTABLES 1
 local x = 1
 local flag = true
-probe("before", x, flag)
+print("before", x, flag)
 if flag then
     x = x + 1
 else
     x = x + 10
 end
-probe("join", x, flag)
+print("join", x, flag)
 local i = 0
 while i < 2 do
     x = x + 100
     i = i + 1
 end
-probe("after", x, i)
+print("after", x, i)
 local w = {}
 w[0] = x

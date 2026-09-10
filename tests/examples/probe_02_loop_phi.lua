@@ -19,7 +19,7 @@ while i < 3 do
     local row = {}
     row[0] = i
     t[i] = row
-    probe("iter", i, t, row)
+    print("iter", i, t, row)
     i = i + 1
 end
-probe("exit", i, t)
+print("exit", i, t)

@@ -17,6 +17,6 @@ local t = {}
 local i = 0
 while i < 3 do
     t[i + 1] = i * 10
-    probe("iter", i, t)
+    print("iter", i, t)
     i = i + 1
 end

@@ -21,6 +21,6 @@ local t = {}
 local i = 0
 while i <= 7 do
     t[i] = i * i
-    probe("iter", i, t)
+    print("iter", i, t)
     i = i + 1
 end

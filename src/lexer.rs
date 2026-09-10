@@ -34,8 +34,8 @@ pub enum Token<'a> {
     False,
     #[token("nil")]
     Nil,
-    #[token("probe")]
-    Probe,
+    #[token("print")]
+    Print,
     #[token("if")]
     If,
     #[token("then")]

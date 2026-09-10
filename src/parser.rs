@@ -88,18 +88,18 @@ impl<'a> Parser<'a> {
 
                 Stmt::If { condition, then_body, else_body }
             }
-            Some(Token::Probe) => {
-                // Lua call syntax, statement position only. probe("tag", e, ...)
+            Some(Token::Print) => {
+                // Lua call syntax, statement position only. print("tag", e, ...)
                 // is NOT a function call — nothing downstream of the parser
                 // ever sees one; the parens are pure surface, consumed HERE
                 // and never entering parse_expr (the expression paren-gate
-                // is untouched). A bare `probe "tag" e` spelling is refused:
+                // is untouched). A bare `print "tag" e` spelling is refused:
                 // it would not parse as Lua.
-                self.tokens.next(); // consume 'probe'
+                self.tokens.next(); // consume 'print'
                 self.expect(Token::LeftParen);
                 let tag = match self.tokens.next() {
                     Some(Token::String(s)) => s.trim_matches('"').to_string(),
-                    _ => panic!("Syntax Error: Expected string tag in probe(...)"),
+                    _ => panic!("Syntax Error: Expected string tag in print(...)"),
                 };
                 let mut exprs = Vec::new();
                 while matches!(self.tokens.peek(), Some(Token::Comma)) {

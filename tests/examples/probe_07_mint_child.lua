@@ -21,7 +21,7 @@ t[0] = seed
 local i = 0
 while i < 3 do
     t[0][i] = i * 7
-    probe("iter", i, t, t[0])
+    print("iter", i, t, t[0])
     i = i + 1
 end
-probe("exit", t)
+print("exit", t)

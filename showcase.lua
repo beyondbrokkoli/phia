@@ -6,14 +6,14 @@ local version = 1
 local ratio = 0.25
 local tuned = true
 
-probe("scalars", name, version, ratio, tuned)
+print("scalars", name, version, ratio, tuned)
 
 -- Lua arithmetic semantics, integer side: trunc /, floor //, sign-of-divisor %
-probe("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3)
+print("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3)
 -- float side: plain /, floor //, adjusted %
-probe("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio)
+print("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio)
 -- comparisons and boolean algebra
-probe("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned)
+print("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned)
 
 -- structured control: if / elseif / else (grade merges through a join phi)
 local grade = 0
@@ -47,7 +47,7 @@ while i <= 7 do
     grid[0][i % 3] = shadow       -- non-affine key through a child: the
                                   -- proof declines, the store stays dyn
                                   -- and checked
-    probe("iter", i, acc, acc[i])
+    print("iter", i, acc, acc[i])
     x = x + 0.25
     i = i + 1
 end
@@ -57,6 +57,6 @@ local log = {}
 log[i * 13] = grade
 
 -- absent keys read as the element kind's zero: 0 and ""
-probe("exit", acc[999], names[42])
-probe("tables", acc, wave, names, grid, row, log)
-probe("final", name, grade, row[0] == 99, acc[7] == 49)
+print("exit", acc[999], names[42])
+print("tables", acc, wave, names, grid, row, log)
+print("final", name, grade, row[0] == 99, acc[7] == 49)
