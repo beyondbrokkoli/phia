@@ -1,5 +1,8 @@
 # Phia 🌙
 
+[![License: MIT/Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![Status: Experimental AOT](https://img.shields.io/badge/status-experimental-orange.svg)]()
+
 > 🌟 **[logos](https://github.com/maciejhirsz/logos)!** 🌟
 > This project would simply not be possible without the `logos` crate.
 
