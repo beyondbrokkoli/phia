@@ -10,30 +10,8 @@ Phia is an ahead-of-time compiler for a statically typed Lua subset.
 
 ### Why bother?
 
-Fair question: why build an ahead-of-time (AOT) compiler for a scripting language, especially when LuaJIT exists? The answer lies in the architectural limits of runtime execution, demonstrated by [main.lua](main.lua).
-
-`main.lua` is not a general-purpose benchmark; it is a deliberately constructed stress test designed to isolate the exact boundaries where a Just-In-Time (JIT) compiler mathematically hits a wall, and where AOT static analysis takes over.
-
-For the same program, executed on the same machine:
-
-```text
-$ hyperfine './target/release/phia >/dev/null' 'luajit main.lua >/dev/null'
-Benchmark 1: ./target/release/phia >/dev/null
-  Time (mean ± σ):      1.809 s ±  0.035 s    [User: 1.798 s, System: 0.009 s]
-  Range (min … max):    1.775 s …  1.860 s    10 runs
-
-Benchmark 2: luajit main.lua >/dev/null
-  Time (mean ± σ):     18.107 s ±  0.524 s    [User: 18.069 s, System: 0.020 s]
-  Range (min … max):   17.536 s … 19.116 s    10 runs
-
-Summary
-  ./target/release/phia >/dev/null ran
-   10.01 ± 0.35 times faster than luajit main.lua >/dev/null
-```
-This performance gap is not because LuaJIT is slow, it exists because trace-based JIT compilers and AOT static analyzers operate under fundamentally different constraints:
-
-1. **Proofs vs. Speculation:** Because Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code.
-2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions. 
+1. **Proofs vs. Speculation:** Because standard Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code.
+2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions, whereas an AOT compiler can optimize memory arenas globally.
 
 ### Currently Missing Language Implementations
 
