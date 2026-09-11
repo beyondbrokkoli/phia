@@ -40,7 +40,7 @@ def print_diff(ref_vals, got_vals):
 
 def run_seed(seed):
     generator = PhiaLuaGenerator(seed)
-    src = generator.generate()
+    src, expected_types = generator.generate() # <-- Grab types here
 
     os.makedirs("/tmp/adv", exist_ok=True)
     path = f"/tmp/adv/fuzz_{seed}.lua"
@@ -70,9 +70,19 @@ def run_seed(seed):
     if got.returncode != 0:
         return {"status": "RUN_FAIL", "msg": got.stderr[-800:], "src": src}
 
-    # 4. Parse & Compare Outputs
+    # 4. Parse & Compare Outputs (NEW LOGIC)
     ref_tok = ref.stdout.split()
-    ref_vals = ["0" if v == "nil" else v for v in ref_tok[1:]]
+
+    # Smart nil mapping!
+    ref_vals = []
+    for v, typ in zip(ref_tok[1:], expected_types):
+        if v == "nil":
+            if typ == 'int': ref_vals.append("0")
+            elif typ == 'float': ref_vals.append("0.0")
+            elif typ == 'str': ref_vals.append("")
+            else: ref_vals.append("false")
+        else:
+            ref_vals.append(v)
 
     try:
         got_line = [l for l in got.stdout.splitlines() if l.startswith("PROBE final")][0]

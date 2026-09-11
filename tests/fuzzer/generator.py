@@ -204,10 +204,19 @@ class PhiaLuaGenerator:
             self.gen_statement()
 
         # 4. Final print sink (take up to 10 top-level variables)
-        sink = ", ".join(self.sink_vars[:10])
+        sink_list = self.sink_vars[:10]
+        sink = ", ".join(sink_list)
         self.emit(f'print("final", {sink})')
 
-        return "\n".join(self.lines) + "\n"
+        # Extract the exact types of our printed variables
+        sink_types = []
+        for v in sink_list:
+            for t in ['int', 'float', 'str', 'bool']:
+                if v in self.scalars[t]:
+                    sink_types.append(t)
+                    break
+
+        return "\n".join(self.lines) + "\n", sink_types
 
 # Quick test if run directly
 if __name__ == "__main__":
