@@ -387,24 +387,46 @@ impl IrBackend {
         n
     }
 
+    // a dominates b iff b is unreachable from the entry once a is removed.
+    // Small structured CFGs: this DFS runs once per back-edge candidate.
+    fn dominates(&self, a: BlockId, b: BlockId) -> bool {
+        if a == b { return true; }
+        let mut seen = HashSet::new();
+        let mut stack = vec![0usize];
+        while let Some(x) = stack.pop() {
+            if x == a || !seen.insert(x) { continue; }
+            match &self.program.blocks[x].terminator {
+                Some(Terminator::Jump(t)) => stack.push(*t),
+                Some(Terminator::Branch { true_block, false_block, .. }) => {
+                    stack.push(*true_block);
+                    stack.push(*false_block);
+                }
+                _ => {}
+            }
+        }
+        !seen.contains(&b)
+    }
+
     fn is_loop_header(&self, h: BlockId) -> bool {
-        // A loop header has a back edge: a LATER block jumping to it, from
-        // inside its own body. The second clause is load-bearing: the
-        // lowerer mints if-arm blocks (including nested ifs' joins) AFTER
-        // the enclosing join, so a nested if's inner join jumps backward
-        // to the outer join — a back edge in id space, but not a loop.
-        // For a real header the back-jumper is reachable from the header's
-        // own branch successors (the body flows to the back edge); an
-        // if-join's jumper sits in a sibling arm nothing downstream
-        // reaches. Found by feat_if_02 (nested if, then another if in the
-        // same join block): the false-positive header hit emit_loop twice.
-        let Some(Terminator::Branch { true_block, false_block, .. }) =
-            &self.program.blocks[h].terminator else { return false; };
-        let mut body_reach = self.reachable_from(*true_block);
-        body_reach.extend(self.reachable_from(*false_block));
+        // A loop header has a back edge: a LATER block jumping to it that
+        // the header DOMINATES — the natural-loop definition (every trip
+        // to the back edge passes through the header). Mere id-space
+        // backwardness is not enough: the lowerer mints if-arm blocks
+        // (including nested ifs' joins) AFTER the enclosing join, so a
+        // nested if's inner join jumps backward to the outer join. The old
+        // reachability guard ("an if-join's jumper sits in a sibling arm
+        // nothing downstream reaches") holds only OUTSIDE loops — inside a
+        // while, a join's successors flow to the latch, around the back
+        // edge, and back through the whole body, so every nested-if join
+        // inside a loop graded as a header and emit_loop wrapped and
+        // re-entered it (differential fuzzer seed 157: "header 15 reached
+        // twice"). Dominance has no such blind spot: a join never
+        // dominates its own then-arm's nested join, while a real while
+        // header dominates its latch.
+        let Some(Terminator::Branch { .. }) = &self.program.blocks[h].terminator else { return false };
         self.program.blocks[h + 1..].iter().enumerate().any(|(i, p)| {
             matches!(&p.terminator, Some(Terminator::Jump(t)) if *t == h)
-                && body_reach.contains(&(h + 1 + i))
+                && self.dominates(h, h + 1 + i)
         })
     }
 
