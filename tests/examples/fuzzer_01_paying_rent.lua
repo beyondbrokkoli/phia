@@ -1,14 +1,39 @@
--- Story of the bug
--- Actual root cause — stale const key / physical id collision:
--- local v12 = v8 lowered to a dead Move, which propagate_constants folded into consts_i[85] = 0.
--- simplify's DCE then deleted that Move — id 85 disappeared from the IR, but its const-map entry survived.
--- allocate_registers computed base from the post-DCE max vreg (83) → base 84, and minted physical 85 for the GetTable target.
--- Physical 85 == stale const key 85 → emit_instr's const early-out silently swallowed the GetTable,
--- and the probe printed the dead constant 0 instead of the register.
--- The fix (in src/backend.rs, allocate_registers): mint from max(max_reg, max consts key) + 1 — i.e.,
--- above the entire id space the emission-side const maps can ever be queried with.
--- Also fixed the dump's arith helper in build.rs, which was mislabeling
--- int Adds as f_r (is_float_reg is now pub for it — that's why the dump showed the bogus Add { target: f_r84 }).
+-- FUZZER-PIN 1/3 · seed 43 · fixed 2026-09-11 · REGISTER ALLOCATOR
+--
+-- SYMPTOM (how this file fails when the bug returns):
+--   A GetTable result prints a stale constant (here: 0 instead of 26, idx 7
+--   of the "final" probe). The load is missing from baked_native.rs
+--   entirely; i_r87=26 below is the pin that catches it.
+--
+-- TRAP (the wrong diagnosis this bug invites):
+--   "The loop optimizer dropped the store." It did not. The store
+--   `v1[5] = 26` is emitted and lands — TABLE 1's checksum pins it. What
+--   vanishes is the READ `local v6 = v1[5]`: swallowed whole, silently.
+--
+-- ROOT CAUSE (stale const key / physical id collision):
+--   `local v12 = v8` lowered to a dead Move; propagate_constants folded it
+--   into consts_i[85]=0; simplify's DCE then deleted the Move. Id 85 left
+--   the IR but its consts entry survived. allocate_registers computed the
+--   physical-id base from the POST-DCE max vreg (83 → base 84) and minted
+--   physical 85 for the GetTable target. Physical 85 == stale const key 85
+--   → emit_instr's const early-out (consts_i.contains_key(&target))
+--   deleted the GetTable, and iop_str rendered the dead constant 0.
+--
+-- FIX (grep handles): src/backend.rs, allocate_registers:
+--   `let base = max_reg.max(max_const) + 1;`
+--   (max_const = max over consts_i/consts_b keys). Physical ids mint above
+--   the ENTIRE id space the emission-side const maps can be queried with,
+--   not just the surviving-IR namespace. Companion fix: build.rs's dump
+--   arith() helper now uses is_float_reg (made pub) instead of a Float-hint
+--   probe that always fell through — the dump had shown a bogus
+--   `Add { target: f_r84 }` on an int Add.
+--
+-- RE-VERIFY IF THIS BREAKS:
+--   touch this file && PHIA_DEBUG_DUMP=final PHIA_SOURCE=tests/examples/fuzzer_01_paying_rent.lua cargo build --release
+--   In ir_final_cfg.txt: a const-marker `v<id>` on a NON-foldable
+--   instruction (GetTable/NewTable/arith on non-consts) = this bug class —
+--   the invariant "physical id never equals a vreg id (const or not)" is
+--   broken again.
 
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0

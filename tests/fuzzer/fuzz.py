@@ -110,10 +110,17 @@ def main():
     parser.add_argument("--seeds", "-n", type=int, default=50, help="Number of random tests to execute (default: 50)")
     parser.add_argument("--seed", "-s", type=int, default=None, help="Target a specific seed to reproduce a bug")
     parser.add_argument("--max-fails", type=int, default=3, help="Halt after this many failures (default: 3)")
+    # Add this new line:
+    parser.add_argument("--blacklist", "-b", type=int, nargs='+', default=[], help="List of seeds to skip manually")
     args = parser.parse_args()
 
     # Determine seed list
     seed_list = [args.seed] if args.seed is not None else list(range(args.seeds))
+
+    # Filter out blacklisted seeds
+    if args.blacklist:
+        seed_list = [s for s in seed_list if s not in args.blacklist]
+
     total_runs = len(seed_list)
 
     print(f"\n{C.CYAN}{C.BOLD}=== Phia Full-Spectrum Differential Fuzzer ==={C.RESET}")
