@@ -35,7 +35,7 @@ This performance gap is not because LuaJIT is slow, it exists because trace-base
 1. **Proofs vs. Speculation:** Because Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code.
 2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions. 
 
-### Missing Implementations
+### Currently Missing Language Implementations
 
 #### Core Language
 * **Functions**: Function definitions and invocations are not yet implemented.

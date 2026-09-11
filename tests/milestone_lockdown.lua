@@ -127,9 +127,9 @@ end
 
 os.execute("mkdir -p " .. LOCK_DIR)
 
--- ADVISORY RECORD (not enforced by anything): lockdown moment, toolchain
--- version, and each test's TIME line — the perf history of every baseline,
--- captured where the baseline is born. Lives as comments in manifest.lua so
+-- ADVISORY RECORD (not enforced by anything):
+-- lockdown moment, toolchain version.
+-- Lives as comments in manifest.lua so
 -- tests/lock/ gains no file the boss would flag as stray.
 local advisory = {}
 local function note(s) table.insert(advisory, s) end
@@ -169,7 +169,8 @@ for _, filename in ipairs(LOCKED_TESTS) do
             local run = io.popen(string.format("timeout 60 %s 2>/dev/null", BIN))
             local out = run:read("*a")
             run:close()
-            note(string.format("TIME %s — %s", out:match("TIME ([^\r\n]+)") or "?", filename))
+            -- note(string.format("TIME %s — %s", out:match("TIME ([^\r\n]+)") or "?", filename))
+            note(string.format(filename))
             print(string.format("\27[32m✓\27[0m locked %s   (from %s)", dest, baked))
         end
     end
