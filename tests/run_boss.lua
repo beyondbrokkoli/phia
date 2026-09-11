@@ -129,6 +129,7 @@ local POSITIVE = {
     "fuzzer_01_paying_rent.lua",
     "fuzzer_02_codegen_panic_1.lua",
     "fuzzer_03_codegen_panic_2.lua",
+    "string_07_concat.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",

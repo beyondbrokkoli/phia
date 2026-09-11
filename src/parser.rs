@@ -97,11 +97,20 @@ impl<'a> Parser<'a> {
                 // it would not parse as Lua.
                 self.tokens.next(); // consume 'print'
                 self.expect(Token::LeftParen);
-                let tag = match self.tokens.next() {
-                    Some(Token::String(s)) => s.trim_matches('"').to_string(),
-                    _ => panic!("Syntax Error: Expected string tag in print(...)"),
+                // Parse the first argument through the expression parser so
+                // concatenation chains and parenthesised expressions are handled
+                // correctly.  A bare string literal becomes the probe tag;
+                // anything else is added to the expression list with an empty
+                // tag (avoids the confusing "Expected RightParen, got Concat"
+                // panic).
+                let first_expr = self.parse_expr();
+                let mut tag = String::new();
+                let mut exprs: Vec<Expr> = if let Expr::String(s) = first_expr {
+                    tag = s;
+                    Vec::new()
+                } else {
+                    vec![first_expr]
                 };
-                let mut exprs = Vec::new();
                 while matches!(self.tokens.peek(), Some(Token::Comma)) {
                     self.tokens.next(); // consume ','
                     exprs.push(self.parse_expr());
