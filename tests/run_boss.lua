@@ -126,6 +126,7 @@ local POSITIVE = {
     "string_01_scalar.lua",
     "string_02_table_loop.lua",
     "string_03_nested.lua",
+    "fuzzer_01_paying_rent.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
