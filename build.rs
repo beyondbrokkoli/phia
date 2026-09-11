@@ -239,8 +239,12 @@ fn render_final_ir(out: &mut String, eng: &backend::IrBackend) {
 }
 
 fn arith(eng: &backend::IrBackend, name: &str, target: ir::RegId, left: ir::RegId, right: ir::RegId) -> String {
-    // operands inherit the target's pool (Float vs Int) exactly as emission does
-    let t = if eng.pool_prefixed(target, &ast::StaticType::Float).starts_with("f_r") {
+    // operands inherit the target's pool (Float vs Int) — the same
+    // is_float_reg(target) test emission applies to the untyped arith ops.
+    // (Probing pool_prefixed with a Float hint does NOT work: for ids
+    // outside the disjoint ranges it falls through to the hint, so every
+    // probe answered f_r.)
+    let t = if eng.is_float_reg(target) {
         ast::StaticType::Float
     } else {
         ast::StaticType::Integer

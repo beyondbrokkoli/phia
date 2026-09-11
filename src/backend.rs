@@ -324,7 +324,7 @@ impl IrBackend {
     // above the entire shared range, and no other pool mints into it — so
     // range membership equals "this pool minted this id", and vreg ids
     // (all < phys_base <= float_base) can never fall inside.
-    fn is_float_reg(&self, r: RegId) -> bool {
+    pub fn is_float_reg(&self, r: RegId) -> bool {
         self.did_alloc
             && r >= self.float_base
             && r < self.float_base + self.n_float as RegId
@@ -711,7 +711,23 @@ impl IrBackend {
                 if *cond > max_reg { max_reg = *cond; }
             }
         }
-        let base = max_reg + 1;
+        // Mint from above the ENTIRE id space the emission-side const maps
+        // can ever be queried with: surviving IR vregs AND consts keys.
+        // propagate_constants runs before simplify's DCE, so a folded def
+        // can be deleted from the IR while its consts_i/consts_b entry
+        // lives on — that id appears in no instruction (invisible to the
+        // scan above) yet the maps still answer for it. A physical minted
+        // onto such a stale key makes emit_instr's const early-out silently
+        // swallow the instruction (a GetTable vanishes wholesale) and
+        // iop_str render the dead constant at every use. Found by the
+        // differential fuzzer, seed 43: `local v12 = v8` DCE'd, its folded
+        // consts_i key numerically equaled the physical minted for a later
+        // GetTable target, and the probe printed the stale 0 instead of 26.
+        let max_const = self.consts_i.keys().copied()
+            .chain(self.consts_b.keys().copied())
+            .max()
+            .unwrap_or(0);
+        let base = max_reg.max(max_const) + 1;
 
         let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
