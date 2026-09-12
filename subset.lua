@@ -97,9 +97,13 @@ local float_div = 1.0 / 4.0    -- Yields 0.25 (Float)
 
 -- 7. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
 -- 'for' loops are missing; you MUST use 'while'.
+-- Standard 'if / elseif / else' logic is FULLY supported.
 -- There is no 'nil' keyword.
 local iterator = 0
 while iterator <= 2 do
+    if iterator == 1 then
+        -- SUCCESS: Standard conditionals work exactly as expected
+    end
     -- local empty = nil       -- ERROR: Explicit 'nil' assignment is unsupported
     iterator = iterator + 1
 end
@@ -113,5 +117,5 @@ local missing_str = string_list[999]    -- Yields ""  (String)
 -- 8. ASCII ARTWORK (String Concatenation Folding)
 -- Chaining string concatenations evaluates safely and pins the register for consistent spacing.
 local line = "-" .. "~" .. "@"
--- PROBE art: s_r92="-~@"
+-- PROBE art: s_r95="-~@"
 print("art", line)
