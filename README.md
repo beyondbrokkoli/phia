@@ -8,11 +8,6 @@
 
 Phia is an ahead-of-time compiler for a statically typed Lua subset.
 
-### Why bother?
-
-1. **Proofs vs. Speculation:** Because standard Lua tables can grow dynamically, a JIT compiler must insert bailout guards and bounds checks into its generated machine code.
-2. **The SIMD Barrier:** A trace JIT operates on sequential, scalar instructions, whereas an AOT compiler can optimize memory arenas globally.
-
 ### Currently Missing Language Implementations
 
 #### Core Language
@@ -32,87 +27,131 @@ Phia is an ahead-of-time compiler for a statically typed Lua subset.
 * **Numeric Coercion**: Mixed integer/float arithmetic and implicit string-to-number conversions are strict build errors.
 * **Integer Division**: The `/` operator performs truncating division on integers, whereas standard Lua always yields a float.
 * **String Ordering**: Relational operators (`<`, `>`, etc.) cannot be used to compare strings.
+* **String Optimization**: String operations currently generate heavy heap traffic via `format!()` and `.clone()`.
 
-#### Memory & Performance
-* **String Optimization**: String concatenation (`..`) and table storage currently generate heavy heap traffic via `format!()` and `.clone()`.
-* **Dynamic Memory Management**: Lacks a garbage collector, reference counting, and runtime type tags. Memory is entirely resolved at build time, meaning tables are statically allocated in a single arena and never freed.
-
-### Supported Features
+### Subset Definition
 
 ```lua
--- showcase.lua — the entire supported feature set in one program.
+-- subset.lua
+-- STRICT LUA SUBSET SPECIFICATION
+-- DO NOT deviate from these typing rules. There is NO implicit conversion.
 
--- [TYPES] Integer (i64, wrapping), Float (f64), Boolean, String, Table.
--- Tables use Integer keys and infer a monomorphic element kind on first use 
--- (Integer, Float, String, or nested Table).
-local name = "phia" .. "/" .. "lua"       -- String (concatenation '..' chains fold left)
-local version = 1                         -- Integer (i64, wrapping like Lua)
-local ratio = 0.25                        -- Float (f64)
-local tuned = true                        -- Boolean
+-- 0. NO GLOBAL SCOPE (LOCAL ONLY)
+-- ALL variables must be declared with the 'local' keyword. Global state does not exist.
+local starting_value = 100
 
--- [STATEMENTS: print] Requires a string literal tag. Acts as a debug probe 
--- printing physical register states (values, handles, lengths; never addresses).
--- Deliberately named 'print' so this file runs unmodified in standard Lua.
-print("scalars", name, version, ratio, tuned)
+-- FAILURE PREVENTED: Missing 'local' keyword!
+-- global_counter = 50 -- ERROR: Global variables are not supported
 
--- [OPERATORS] + - * / // % with Lua semantics. 
--- Integer side: / truncates, // floors, % takes the divisor's sign.
-print("int_sem", 7 / -2, 7 // -2, -7 % 3, 9 - 4, (1 + 2) * 3) -- parentheses supported
--- Float side: / is plain division, // floors, % is adjusted.
-print("float_sem", 1.0 / 4.0, 0.75 // 0.5, 0.75 % 0.5, -ratio) -- unary minus supported
 
--- [OPERATORS] Comparisons (< > <= >= == ~=) on numbers, strings, and booleans.
-print("cmp", version < 2, ratio >= 0.25, name == "phia/lua", tuned ~= false, not tuned) -- unary 'not' supported
+-- 1. STRICT TYPING & BINARY OPERATIONS
+local int_val = 10       -- Integer (i64)
+local float_val = 2.5    -- Float (f64)
 
--- [STATEMENTS] Structured control: if / elseif / else
-local grade = 0
-if version >= 2 then
-    grade = 100
-elseif version == 1 then
-    grade = 50
-else
-    grade = 9
-end
+-- SUCCESS: Matching types
+local pure_int = int_val * 2
+local pure_float = float_val + 1.5
 
--- [TYPES & STATEMENTS] Nested tables (arena handles). 
--- Table assignment supports t[i] = v and nested lvalues like t[0][j] = v.
+-- FAILURE PREVENTED: Do not mix ints and floats!
+-- local crash = int_val + float_val -- ERROR: Mixed Integer and Float
+
+
+-- 2. STRING CONCATENATION
+local prefix = "Value: "
+local suffix = " units"
+
+-- SUCCESS: String .. String ONLY
+local message = prefix .. suffix
+
+-- FAILURE PREVENTED: No implicit tostring()!
+-- local crash_str = prefix .. int_val -- ERROR: Concatenation requires Strings
+
+
+-- 3. TABLES: BIRTH, NESTING & INDEXING
+-- Tables infer their element kind on FIRST USE.
+-- ALL keys at ALL levels strictly require Integers (0-indexed).
+local num_list = {}
+local float_list = {}
+local string_list = {}
 local grid = {}
-local row = {}
-row[0] = 99
-grid[0] = row
+local row_zero = {}
 
--- [STATEMENTS] while loop, local assignment (lexically scoped, shadowing allowed), 
--- and table assignments (both affine and non-affine).
-local acc = {}
-local wave = {}
-local names = {}
-local x = 0.0
-local i = 0
-while i <= 7 do
-    local shadow = i * 100        -- lexically scoped per-trip local (shadowing allowed)
-    acc[i] = i * i                -- table assignment: Integer
-    wave[i] = x                   -- table assignment: Float
-    names[i] = name               -- table assignment: String
-    grid[0][i % 3] = shadow       -- nested lvalue table assignment (dynamic/checked)
-    print("iter", i, acc, acc[i])
-    x = x + 0.25
-    i = i + 1
+-- SUCCESS: 1D Tables (First touch locks in the table's type)
+num_list[0] = pure_int      -- Inferred as Integer table
+num_list[1] = 42
+float_list[0] = pure_float  -- Inferred as Float table
+string_list[0] = message    -- Inferred as String table
+
+-- SUCCESS: Nested Tables (Initialize inner first, all Integer keys)
+row_zero[0] = 99
+row_zero[1] = 100
+grid[0] = row_zero          -- grid is inferred as a Table-of-Tables
+
+-- SUCCESS: Direct nested assignment (inner table grid[0] already exists)
+grid[0][2] = 102
+
+-- FAILURE PREVENTED: No string keys, no float keys ANYWHERE!
+-- num_list["first"] = 100  -- ERROR: Table index must be an Integer
+-- float_list[0.5] = 100    -- ERROR: Table index must be an Integer
+-- grid["top"] = row_zero   -- ERROR: Table index must be an Integer
+-- grid[0]["x"] = 500       -- ERROR: Table index must be an Integer
+
+
+-- 4. PRINT PROBE (Debugging)
+-- 'print' requires a string literal tag as the first argument.
+print("state", pure_int, pure_float, num_list[1])
+
+
+-- 5. COMPARISONS & LOGIC
+-- 'not' is the ONLY supported logical operator.
+local is_active = not false
+
+-- FAILURE PREVENTED: 'and' and 'or' DO NOT EXIST.
+-- local compound = true and false   -- ERROR: 'and'/'or' are not implemented
+
+-- Numbers and Booleans support full comparisons (<, >, <=, >=, ==, ~=).
+local num_cmp = (int_val < 20)
+
+-- Strings ONLY support equality (==, ~=).
+local str_eq = (prefix == "Value: ")
+
+-- FAILURE PREVENTED: No relational comparisons for strings!
+-- local str_cmp = (prefix < suffix) -- ERROR: Relational operators cannot compare strings
+
+
+-- 6. DIVISION SEMANTICS (CRITICAL DEVIATION)
+-- Unlike standard Lua (which yields a float), the '/' operator on Integers truncates.
+local trunc_div = 7 / -2       -- Yields -3 (Integer)
+local floor_div = 7 // -2      -- Yields -4 (Integer)
+local mod_op = -7 % 3          -- Yields 2 (Takes the divisor's sign)
+
+-- Float division behaves normally.
+local float_div = 1.0 / 4.0    -- Yields 0.25 (Float)
+
+
+-- 7. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
+-- 'for' loops are missing; you MUST use 'while'.
+-- There is no 'nil' keyword.
+local iterator = 0
+while iterator <= 2 do
+    -- local empty = nil       -- ERROR: Explicit 'nil' assignment is unsupported
+    iterator = iterator + 1
 end
 
--- [ABSENCE & SAFETY] Absent keys safely default to the element kind's zero value (0, 0.0, "").
-print("exit", acc[999], names[42])
-print("tables", acc, wave, names, grid, row)
-print("final", name, grade, row[0] == 99, acc[7] == 49)
+-- Absent keys safely default to the table's inferred type's zero value.
+local missing_num = num_list[999]       -- Yields 0   (Integer)
+local missing_float = float_list[999]   -- Yields 0.0 (Float)
+local missing_str = string_list[999]    -- Yields ""  (String)
 
--- [SAFETY DEMO] Uncommenting the block below triggers a checked runtime error: 
--- "Runtime Error: table is nil". This perfectly matches Lua's "attempt to index a nil value" 
--- ergonomics while guaranteeing absolutely no Undefined Behavior (UB).
--- 
--- local empty_row = {}
--- local bad_access = empty_row[0][1] 
+
+-- 8. ASCII ARTWORK (String Concatenation Folding)
+-- Chaining string concatenations evaluates safely and pins the register for consistent spacing.
+local line = "-" .. "~" .. "@"
+-- PROBE art: s_r92="-~@"
+print("art", line)
 ```
 
-### Build
+### Quickstart Guide
 ```
 # 1. V4 DISTRO LINKER FIX
 
@@ -132,22 +171,25 @@ cargo build --release
 PHIA_SOURCE=showcase.lua cargo build --release
 ./target/release/phia
 
-# BULLETPROOF: 
+# build.rs prevents stale binaries
 # Touch the file first to update the timestamp
 touch showcase.lua && PHIA_SOURCE=showcase.lua cargo build --release
 
 
 # 3. DEBUG & IR DUMPS (Options: mid | final | all)
 
-# Writes IR dumps and the probe_map.txt sidecar directly beside the 
+# Writes IR dumps and the probe_map.txt sidecar directly beside the
 # generated baked_native.rs file in the target/release/build/... folder.
 touch main.lua && PHIA_DEBUG_DUMP=final PHIA_SOURCE=main.lua cargo build --release
+
+# 4. HAVE FUN
+touch mandelbrot.lua && PHIA_SOURCE=mandelbrot.lua cargo run --release
 ```
-## Known Quirks: `print`
+### Known Quirks
 
-### 1. Strict Tag Requirement
+#### Strict Tag Requirement for `print`
 
-Phia strictly requires a string literal tag as the first argument in a `print` statement (e.g., `print("tag", x)`).  
+Phia strictly requires a string literal tag as the first argument in a `print` statement (e.g., `print("tag", x)`).
 A plain `print(x)` is a syntax error.
 
 **Why is the tag required?**
@@ -156,35 +198,16 @@ The compiler relies on this mandatory string to generate `probe_map.txt`.
 **Why hijack `print` instead of adding a `probe()` keyword?**
 Compatibility. By keeping the name `print`, you can run the exact same `.lua` script in standard Lua or LuaJIT without modification.
 
-### 2. Ghost Registers (Optimize First, Print Later)
+#### About Memory
 
-`print` does not act as a liveness barrier. Printing a DCE'd variable lets you watch the register allocator recycle memory in real-time.
+Every memory decision is made at build time. Element kinds, storage sides (`array` / `farray` / `sarray`), and register allocation are all resolved during compilation — nothing executes per operation except the operation itself.
 
-**Example:**
+**Scalars compile to pre-declared Rust locals.** The register allocator uses live-interval analysis to map virtual registers to physical ones (`i_r0`, `b_r1`, `s_r2`). A dead scalar generates zero runtime overhead — its slot is simply not allocated. Loop-carried values (phi nodes) get intervals that wrap around back edges, so their physical register persists across iterations. Int, Bool, Table, and String scalars deliberately share one physical ID range, disambiguated at codegen time by prefix (`i_`, `b_`, `t_`, `s_`). Float scalars, float-element tables, and string-element tables mint from disjoint ranges to avoid pointer-type ambiguity (`*mut i64` vs `*mut f64` vs `*mut String`).
 
-```lua
--- ghost_register.lua
-local ghost = {}
-local ghost_val = ghost[1] -- Dead code: never affects the final arena state
+**Strings use the global allocator.** Each `LoadString` emits a `String::new()` at runtime. No interning, no compile-time string pooling. String concatenation (`..`) and table storage currently generate heavy heap traffic via `format!()` and `.clone()`.
 
-if true then
-    local shadow = 42      -- Reuses ghost_val's physical register (r5)!
-end
+**Tables live in a single arena** (`Vec<Box<Table>>`). A table is allocated exactly once at its literal via `tables.push(Box::new(Table::new()))`, never moves, never frees. Table references are either 1-based handles (for nested-table programs) or raw pointers (for integer-only fast paths). Inner arrays (`t.array`, `t.farray`, `t.sarray`) resize dynamically through the global allocator — the `Box<Table>` itself never moves.
 
-print("ghost_test", ghost_val)
+**Loop optimizations are compile-time decisions.** `EnsureCapacity` pre-sizes arrays before the loop. `HoistRawPtr` materializes length and a raw pointer as physical registers (`len_r33`, `p_r33`). `SetTableFast` and `GetTableFast` skip arena lookup entirely, using `*p_r33.add(k as usize)` for direct pointer arithmetic. Tier-4 analysis proves which tables can be safely hoisted across loop iterations by tracing handle aliases and detecting storage-hazard roots.
 
-```
-
-**Execution Comparison:**
-
-```text
-$ luajit ghost_register.lua
-ghost_test    nil
-
-$ ./target/release/phia
-PROBE ghost_test: i_r5=42
-STATS fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=1;hoists=0;hoist_ctx=
-TIME 14.891µs
-```
-
-*(Here, `ghost_val` was optimized away, the allocator gave its physical slot to `shadow`, and the `print` probe blindly read the recycled memory containing `42`.)*
+**Zero runtime surprises.** Numeric ops are single-instruction (wrapping). Table access is either a pointer deref (fast path) or an arena lookup with bounds check (dynamic path). No GC pauses, no reference counting overhead, no type dispatch. Every operation's cost is determined at compile time by its operands' types and lifetimes.
