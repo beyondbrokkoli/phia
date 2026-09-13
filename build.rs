@@ -14,7 +14,8 @@ use std::process::Command;
 #[path = "src/type_checker.rs"] pub mod type_checker; // 4. AST Validation
 #[path = "src/ir.rs"] pub mod ir;                     // 5. IR Data Definitions
 #[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
-#[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust (Optimize & Codegen)
+#[path = "src/optimizer.rs"] pub mod optimizer;       // 6.5 IR Optimization pass
+#[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust
 
 // DISPATCHED IR renderer — one arm per block, explicit control flow, in
 // the shape of the archived dispatched codegen's match arms (the `bN:`
@@ -311,12 +312,15 @@ fn main() {
 
     // 3. IR Lowering
     let lowerer = lowerer::IrLowerer::new();
-    let ir_program = lowerer.lower_program(&ast, type_map);
+    let mut ir_program = lowerer.lower_program(&ast, type_map);
 
     // 4. Optimization & De-SSA
-    let mut backend_engine = backend::IrBackend::new(ir_program);
 
-    backend_engine.optimize();
+    // Run the standalone optimizer on the ir_program first
+    optimizer::optimize(&mut ir_program);
+
+    // Then hand the optimized program to the backend
+    let mut backend_engine = backend::IrBackend::new(ir_program);
 
     // DEBUG DUMPS (PHIA_DEBUG_DUMP=<mode>) — written as files into OUT_DIR,
     // beside baked_native.rs, so they survive cargo's build-script stderr
