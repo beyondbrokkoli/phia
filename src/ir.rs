@@ -68,6 +68,91 @@ pub enum Instruction {
     DebugProbe { tag: String, operands: Vec<(RegId, StaticType)> },
 }
 
+impl Instruction {
+    pub fn def_reg(&self) -> Option<RegId> {
+        match self {
+            Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+            | Instruction::LoadBool { target, .. } | Instruction::LoadString { target, .. }
+            | Instruction::NewTable { target, .. }
+            | Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
+            | Instruction::Move { target, .. } | Instruction::Add { target, .. }
+            | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
+            | Instruction::Mul { target, .. } | Instruction::Div { target, .. }
+            | Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. }
+            | Instruction::Neg { target, .. }
+            | Instruction::Leq { target, .. } | Instruction::Geq { target, .. }
+            | Instruction::Eq { target, .. } | Instruction::Not { target, .. }
+            | Instruction::Concat { target, .. }
+            | Instruction::Phi { target, .. } => Some(*target),
+            _ => None,
+        }
+    }
+    pub fn def_type(&self) -> Option<StaticType> {
+        match self {
+            Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. }
+            | Instruction::Mul { .. } | Instruction::Div { .. } | Instruction::IntDiv { .. }
+            | Instruction::Mod { .. } | Instruction::Neg { .. } => Some(StaticType::Integer),
+            Instruction::LoadFloat { .. } => Some(StaticType::Float),
+            Instruction::LoadString { .. } | Instruction::Concat { .. } => Some(StaticType::String),
+            Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
+            Instruction::Less { .. } | Instruction::Leq { .. } | Instruction::Geq { .. }
+            | Instruction::Eq { .. } | Instruction::Not { .. }
+            | Instruction::LoadBool { .. } => Some(StaticType::Boolean),
+            Instruction::NewTable { ty, .. } => Some(ty.clone()),
+            Instruction::Move { ty, .. } | Instruction::Phi { ty, .. } => Some(ty.clone()),
+            _ => None,
+        }
+    }
+    pub fn use_regs(&self) -> Vec<RegId> {
+        match self {
+            Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::LoadBool { .. }
+            | Instruction::LoadString { .. } | Instruction::NewTable { .. } => vec![],
+            Instruction::Move { source, .. } | Instruction::Neg { source, .. } => vec![*source],
+            Instruction::Concat { left, right, .. } => vec![*left, *right],
+            Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
+            | Instruction::Less { left, right, .. } | Instruction::Mul { left, right, .. }
+            | Instruction::Div { left, right, .. } | Instruction::IntDiv { left, right, .. }
+            | Instruction::Mod { left, right, .. }
+            | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. }
+            | Instruction::Eq { left, right, .. } =>
+                vec![*left, *right],
+            Instruction::Not { source, .. } => vec![*source],
+            Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => vec![*table, *key, *val],
+            Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } => vec![*table, *key],
+            Instruction::EnsureCapacity { table, limit } => vec![*table, *limit],
+            Instruction::HoistRawPtr { table } => vec![*table],
+            Instruction::DebugProbe { operands, .. } =>
+                operands.iter().map(|&(r, _)| r).collect(),
+            Instruction::Phi { args, .. } => args.iter().map(|&(_, r)| r).collect(),
+        }
+    }
+    pub fn remap_instr<F: Fn(RegId) -> RegId>(&mut self, f: &F) {
+        let g = |r: &mut RegId| *r = f(*r);
+        match self {
+            Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
+            | Instruction::LoadBool { target, .. } | Instruction::LoadString { target, .. }
+            | Instruction::NewTable { target, .. } => g(target),
+            Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => { g(table); g(key); g(val); }
+            Instruction::GetTable { target, table, key, .. } | Instruction::GetTableFast { target, table, key, .. } => { g(target); g(table); g(key); }
+            Instruction::Move { target, source, .. } => { g(target); g(source); }
+            Instruction::Add { target, left, right } | Instruction::Sub { target, left, right }
+            | Instruction::Less { target, left, right } | Instruction::Mul { target, left, right }
+            | Instruction::Div { target, left, right } | Instruction::IntDiv { target, left, right }
+            | Instruction::Mod { target, left, right }
+            | Instruction::Leq { target, left, right } | Instruction::Geq { target, left, right }
+            | Instruction::Eq { target, left, right, .. } =>
+                { g(target); g(left); g(right); }
+            Instruction::Neg { target, source } | Instruction::Not { target, source } => { g(target); g(source); }
+            Instruction::Concat { target, left, right } => { g(target); g(left); g(right); }
+            Instruction::Phi { target, args, .. } => { g(target); for (_, r) in args.iter_mut() { g(r); } }
+            Instruction::EnsureCapacity { table, limit } => { g(table); g(limit); }
+            Instruction::HoistRawPtr { table } => g(table),
+            Instruction::DebugProbe { operands, .. } =>
+                { for (r, _) in operands.iter_mut() { g(r); } }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub id: BlockId,

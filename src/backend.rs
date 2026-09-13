@@ -25,92 +25,6 @@ fn pool_of(t: &StaticType) -> Pool {
     }
 }
 
-fn def_reg(i: &Instruction) -> Option<RegId> {
-    match i {
-        Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
-        | Instruction::LoadBool { target, .. } | Instruction::LoadString { target, .. }
-        | Instruction::NewTable { target, .. }
-        | Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
-        | Instruction::Move { target, .. } | Instruction::Add { target, .. }
-        | Instruction::Sub { target, .. } | Instruction::Less { target, .. }
-        | Instruction::Mul { target, .. } | Instruction::Div { target, .. }
-        | Instruction::IntDiv { target, .. } | Instruction::Mod { target, .. }
-        | Instruction::Neg { target, .. }
-        | Instruction::Leq { target, .. } | Instruction::Geq { target, .. }
-        | Instruction::Eq { target, .. } | Instruction::Not { target, .. }
-        | Instruction::Concat { target, .. }
-        | Instruction::Phi { target, .. } => Some(*target),
-        _ => None,
-    }
-}
-
-fn def_type(i: &Instruction) -> Option<StaticType> {
-    match i {
-        Instruction::LoadInt { .. } | Instruction::Add { .. } | Instruction::Sub { .. }
-        | Instruction::Mul { .. } | Instruction::Div { .. } | Instruction::IntDiv { .. }
-        | Instruction::Mod { .. } | Instruction::Neg { .. } => Some(StaticType::Integer),
-        Instruction::LoadFloat { .. } => Some(StaticType::Float),
-        Instruction::LoadString { .. } | Instruction::Concat { .. } => Some(StaticType::String),
-        Instruction::GetTable { ty, .. } | Instruction::GetTableFast { ty, .. } => Some(ty.clone()),
-        Instruction::Less { .. } | Instruction::Leq { .. } | Instruction::Geq { .. }
-        | Instruction::Eq { .. } | Instruction::Not { .. }
-        | Instruction::LoadBool { .. } => Some(StaticType::Boolean),
-        Instruction::NewTable { ty, .. } => Some(ty.clone()),
-        Instruction::Move { ty, .. } | Instruction::Phi { ty, .. } => Some(ty.clone()),
-        _ => None,
-    }
-}
-
-fn use_regs(i: &Instruction) -> Vec<RegId> {
-    match i {
-        Instruction::LoadInt { .. } | Instruction::LoadFloat { .. } | Instruction::LoadBool { .. }
-        | Instruction::LoadString { .. } | Instruction::NewTable { .. } => vec![],
-        Instruction::Move { source, .. } | Instruction::Neg { source, .. } => vec![*source],
-        Instruction::Concat { left, right, .. } => vec![*left, *right],
-        Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
-        | Instruction::Less { left, right, .. } | Instruction::Mul { left, right, .. }
-        | Instruction::Div { left, right, .. } | Instruction::IntDiv { left, right, .. }
-        | Instruction::Mod { left, right, .. }
-        | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. }
-        | Instruction::Eq { left, right, .. } =>
-            vec![*left, *right],
-        Instruction::Not { source, .. } => vec![*source],
-        Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => vec![*table, *key, *val],
-        Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } => vec![*table, *key],
-        Instruction::EnsureCapacity { table, limit } => vec![*table, *limit],
-        Instruction::HoistRawPtr { table } => vec![*table],
-        Instruction::DebugProbe { operands, .. } =>
-            operands.iter().map(|&(r, _)| r).collect(),
-        Instruction::Phi { args, .. } => args.iter().map(|&(_, r)| r).collect(),
-    }
-}
-
-fn remap_instr<F: Fn(RegId) -> RegId>(i: &mut Instruction, f: &F) {
-    let g = |r: &mut RegId| *r = f(*r);
-    match i {
-        Instruction::LoadInt { target, .. } | Instruction::LoadFloat { target, .. }
-        | Instruction::LoadBool { target, .. } | Instruction::LoadString { target, .. }
-        | Instruction::NewTable { target, .. } => g(target),
-        Instruction::SetTable { table, key, val, .. } | Instruction::SetTableFast { table, key, val, .. } => { g(table); g(key); g(val); }
-        Instruction::GetTable { target, table, key, .. } | Instruction::GetTableFast { target, table, key, .. } => { g(target); g(table); g(key); }
-        Instruction::Move { target, source, .. } => { g(target); g(source); }
-        Instruction::Add { target, left, right } | Instruction::Sub { target, left, right }
-        | Instruction::Less { target, left, right } | Instruction::Mul { target, left, right }
-        | Instruction::Div { target, left, right } | Instruction::IntDiv { target, left, right }
-        | Instruction::Mod { target, left, right }
-        | Instruction::Leq { target, left, right } | Instruction::Geq { target, left, right }
-        | Instruction::Eq { target, left, right, .. } =>
-            { g(target); g(left); g(right); }
-        Instruction::Neg { target, source } | Instruction::Not { target, source } => { g(target); g(source); }
-        Instruction::Concat { target, left, right } => { g(target); g(left); g(right); }
-        Instruction::Phi { target, args, .. } => { g(target); for (_, r) in args.iter_mut() { g(r); } }
-        Instruction::EnsureCapacity { table, limit } => { g(table); g(limit); }
-        Instruction::HoistRawPtr { table } => g(table),
-        Instruction::DebugProbe { operands, .. } =>
-            { for (r, _) in operands.iter_mut() { g(r); } }
-    }
-}
-
 fn touch(iv: &mut HashMap<RegId, (usize, usize)>, r: RegId, p: usize) {
     let e = iv.entry(r).or_insert((p, p));
     if p < e.0 { e.0 = p; }
@@ -137,8 +51,8 @@ fn compute_liveness(blocks: &[BasicBlock]) -> (Vec<HashSet<RegId>>, Vec<HashSet<
             let mut live = out.clone();
             if let Some(Terminator::Branch { cond, .. }) = &blocks[b].terminator { live.insert(*cond); }
             for i in blocks[b].instrs.iter().rev() {
-                if let Some(d) = def_reg(i) { live.remove(&d); }
-                for u in use_regs(i) { live.insert(u); }
+                if let Some(d) = i.def_reg() { live.remove(&d); }
+                for u in i.use_regs() { live.insert(u); }
             }
             if live != live_in[b] || out != live_out[b] {
                 live_in[b] = live;
@@ -164,10 +78,10 @@ fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap
         for &r in live.iter() { touch(&mut iv, r, base + n); }
         for i in (0..n).rev() {
             let instr = &blocks[b].instrs[i];
-            if let Some(d) = def_reg(instr) { live.remove(&d); }
-            for u in use_regs(instr) { live.insert(u); }
+            if let Some(d) = instr.def_reg() { live.remove(&d); }
+            for u in instr.use_regs() { live.insert(u); }
             for &r in live.iter() { touch(&mut iv, r, base + i); }
-            if let Some(d) = def_reg(instr) { touch(&mut iv, d, base + i); }
+            if let Some(d) = instr.def_reg() { touch(&mut iv, d, base + i); }
         }
         base += n + 1; // one slot for the terminator
     }
@@ -379,7 +293,7 @@ impl IrBackend {
     fn reg_uses(&self, r: RegId) -> usize {
         let mut n = 0;
         for b in &self.program.blocks {
-            for i in &b.instrs { for u in use_regs(i) { if u == r { n += 1; } } }
+            for i in &b.instrs { for u in i.use_regs() { if u == r { n += 1; } } }
             if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
                 if *cond == r { n += 1; }
             }
@@ -437,7 +351,7 @@ impl IrBackend {
     pub fn simplify(&mut self) {
         let mut defs: HashMap<RegId, usize> = HashMap::new();
         for b in &self.program.blocks {
-            for i in &b.instrs { if let Some(d) = def_reg(i) { *defs.entry(d).or_insert(0) += 1; } }
+            for i in &b.instrs { if let Some(d) = i.def_reg() { *defs.entry(d).or_insert(0) += 1; } }
         }
 
         let mut rename: HashMap<RegId, RegId> = HashMap::new();
@@ -462,7 +376,7 @@ impl IrBackend {
                 r
             };
             for b in &mut self.program.blocks {
-                for i in &mut b.instrs { remap_instr(i, &resolve); }
+                for i in &mut b.instrs { i.remap_instr(&resolve); }
                 if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
                     *cond = resolve(*cond);
                 }
@@ -471,7 +385,7 @@ impl IrBackend {
 
         let mut uses: HashMap<RegId, usize> = HashMap::new();
         for b in &self.program.blocks {
-            for i in &b.instrs { for u in use_regs(i) { *uses.entry(u).or_insert(0) += 1; } }
+            for i in &b.instrs { for u in i.use_regs() { *uses.entry(u).or_insert(0) += 1; } }
             if let Some(Terminator::Branch { cond, .. }) = &b.terminator { *uses.entry(*cond).or_insert(0) += 1; }
         }
 
@@ -480,7 +394,7 @@ impl IrBackend {
                 if matches!(i, Instruction::Move { target, source, .. } if target == source) { return false; }
                 // dead PURE defs only: NewTable allocates output, GetTable can
                 // panic on negative keys — neither is ever "dead code" here.
-                let dead = def_reg(i).map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
+                let dead = i.def_reg().map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
                 let pure = matches!(i,
                     Instruction::LoadInt { .. } | Instruction::LoadBool { .. }
                     | Instruction::Move { .. }
@@ -499,7 +413,7 @@ impl IrBackend {
         let mut defs: HashMap<RegId, usize> = HashMap::new();
         for b in &self.program.blocks {
             for i in &b.instrs {
-                if let Some(d) = def_reg(i) { *defs.entry(d).or_insert(0) += 1; }
+                if let Some(d) = i.def_reg() { *defs.entry(d).or_insert(0) += 1; }
             }
         }
 
@@ -633,7 +547,7 @@ impl IrBackend {
         let mut ty: HashMap<RegId, Pool> = HashMap::new();
         for b in blocks {
             for i in &b.instrs {
-                let (Some(d), Some(t)) = (def_reg(i), def_type(i)) else { continue };
+                let (Some(d), Some(t)) = (i.def_reg(), i.def_type()) else { continue };
                 if skip.contains(&d) { continue; }
                 if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }
                     | Instruction::Mul { .. } | Instruction::Div { .. }
@@ -726,8 +640,8 @@ impl IrBackend {
         let mut max_reg: RegId = 0;
         for b in blocks {
             for i in &b.instrs {
-                if let Some(d) = def_reg(i) { if d > max_reg { max_reg = d; } }
-                for u in use_regs(i) { if u > max_reg { max_reg = u; } }
+                if let Some(d) = i.def_reg() { if d > max_reg { max_reg = d; } }
+                for u in i.use_regs() { if u > max_reg { max_reg = u; } }
             }
             if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
                 if *cond > max_reg { max_reg = *cond; }
@@ -811,7 +725,7 @@ impl IrBackend {
         // 4. rewrite references (const vregs stay identity: codegen looks
         //    them up in the const maps and never emits them)
         for b in &mut self.program.blocks {
-            for i in &mut b.instrs { remap_instr(i, &|r| *map.get(&r).unwrap_or(&r)); }
+            for i in &mut b.instrs { i.remap_instr(&|r| *map.get(&r).unwrap_or(&r)); }
             if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
                 if let Some(&p) = map.get(&*cond) { *cond = p; }
             }
@@ -868,8 +782,8 @@ impl IrBackend {
         let mut next_vreg: RegId = self.program.blocks.iter()
             .flat_map(|b| b.instrs.iter())
             .flat_map(|i| {
-                let mut regs = use_regs(i);
-                if let Some(d) = def_reg(i) { regs.push(d); }
+                let mut regs = i.use_regs();
+                if let Some(d) = i.def_reg() { regs.push(d); }
                 regs
             })
             .chain(self.program.blocks.iter().filter_map(|b| match &b.terminator {
@@ -1427,7 +1341,7 @@ impl IrBackend {
                                 let mut uses: HashMap<RegId, usize> = HashMap::new();
                                 for b in &self.program.blocks {
                                     for ins in &b.instrs {
-                                        for u in use_regs(ins) {
+                                        for u in ins.use_regs() {
                                             *uses.entry(u).or_insert(0) += 1;
                                         }
                                     }
@@ -1511,7 +1425,7 @@ impl IrBackend {
         let mut defs: HashMap<RegId, usize> = HashMap::new();
         for b in &self.program.blocks {
             for i in &b.instrs {
-                if let Some(d) = def_reg(i) { *defs.entry(d).or_insert(0) += 1; }
+                if let Some(d) = i.def_reg() { *defs.entry(d).or_insert(0) += 1; }
             }
         }
 
@@ -1577,7 +1491,7 @@ impl IrBackend {
         if !rename.is_empty() {
             for b in &mut self.program.blocks {
                 for i in &mut b.instrs {
-                    remap_instr(i, &|r| resolve_via(&rename, r));
+                    i.remap_instr(&|r| resolve_via(&rename, r));
                 }
                 // A register id can appear in exactly two places: instruction
                 // operands and the Branch condition. `while flag do` lowers
@@ -1613,7 +1527,7 @@ impl IrBackend {
 
     fn emit_instr(&self, out: &mut String, instr: &Instruction, d: usize, uses_handles: bool) {
         // compile-time-computed defs emit nothing: their uses are literals
-        if let Some(t) = def_reg(instr) {
+        if let Some(t) = instr.def_reg() {
             if self.consts_i.contains_key(&t) || self.consts_b.contains_key(&t) {
                 return;
             }
@@ -2273,7 +2187,7 @@ impl IrBackend {
         } else {
             let mut max: RegId = 0;
             for b in &self.program.blocks {
-                for i in &b.instrs { if let Some(dd) = def_reg(i) { if dd > max { max = dd; } } }
+                for i in &b.instrs { if let Some(dd) = i.def_reg() { if dd > max { max = dd; } } }
             }
             let m = max as usize + 1;
             (m, m, m, m, m, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize)
