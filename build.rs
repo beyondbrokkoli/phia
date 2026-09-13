@@ -320,9 +320,6 @@ fn main() {
     // Run the standalone optimizer on the ir_program first
     optimizer::optimize(&mut ir_program);
 
-    // Then hand the optimized program to the backend
-    let mut backend_engine = backend::IrBackend::new(ir_program);
-
     // DEBUG DUMPS (PHIA_DEBUG_DUMP=<mode>) — written as files into OUT_DIR,
     // beside baked_native.rs, so they survive cargo's build-script stderr
     // capture (stderr only surfaces when the build FAILS; files work for
@@ -351,17 +348,18 @@ fn main() {
     let dump_dir = std::env::var("OUT_DIR").unwrap();
     if dump_mid {
         let mut s = String::new();
-        render_dispatched_ir(&mut s, &backend_engine.program.blocks);
+        render_dispatched_ir(&mut s, &ir_program.blocks);
         std::fs::write(Path::new(&dump_dir).join("ir_dispatched.txt"), s).unwrap();
     }
 
     // MID probe scan must run while phis are still intact (pre-resolve_phis).
-    let probe_mid = scan_probes(&backend_engine.program.blocks, true);
+    let probe_mid = scan_probes(&ir_program.blocks, true);
 
     // Phase 6.75
-    de_ssa::resolve_phis(&mut backend_engine.program);
+    de_ssa::resolve_phis(&mut ir_program);
+    let (consts_i, consts_b) = de_ssa::propagate_constants(&mut ir_program);
 
-    let (consts_i, consts_b) = de_ssa::propagate_constants(&mut backend_engine.program);
+    let mut backend_engine = backend::IrBackend::new(ir_program);
     backend_engine.consts_i = consts_i;
     backend_engine.consts_b = consts_b;
 
