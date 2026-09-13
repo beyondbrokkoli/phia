@@ -64,9 +64,7 @@ impl IrBackend {
     // range membership equals "this pool minted this id", and vreg ids
     // (all < phys_base <= float_base) can never fall inside.
     pub fn is_float_reg(&self, r: RegId) -> bool {
-        self.alloc.did_alloc
-            && r >= self.alloc.float_base
-            && r < self.alloc.float_base + self.alloc.n_float as RegId
+        r >= self.alloc.float_base && r < self.alloc.float_base + self.alloc.n_float as RegId
     }
 
     // Storage side of a hoisted/EC'd table physical: float-ELEMENT tables
@@ -74,16 +72,12 @@ impl IrBackend {
     // the id alone answers farray vs array (and *mut f64 vs *mut i64 in
     // the decl block) unambiguously.
     fn is_ftable_reg(&self, r: RegId) -> bool {
-        self.alloc.did_alloc
-            && r >= self.alloc.ftable_base
-            && r < self.alloc.ftable_base + self.alloc.n_ftable as RegId
+        r >= self.alloc.ftable_base && r < self.alloc.ftable_base + self.alloc.n_ftable as RegId
     }
 
     // String-ELEMENT tables: same disjoint-range argument, sarray side.
     fn is_tstr_reg(&self, r: RegId) -> bool {
-        self.alloc.did_alloc
-            && r >= self.alloc.tstr_base
-            && r < self.alloc.tstr_base + self.alloc.n_tstr as RegId
+        r >= self.alloc.tstr_base && r < self.alloc.tstr_base + self.alloc.n_tstr as RegId
     }
 
     // Debug-dump helper: render an allocated register the way emission
@@ -838,19 +832,31 @@ impl IrBackend {
             }
         }
 
-        let (n_i, n_b, n_f, n_s, n_t, n_tf, n_ts, base, fbase, tfbase, tsbase) = if self.alloc.did_alloc {
-            (self.alloc.n_int, self.alloc.n_bool, self.alloc.n_float, self.alloc.n_str, self.alloc.n_table,
-             self.alloc.n_ftable, self.alloc.n_tstr,
-             self.alloc.phys_base as usize, self.alloc.float_base as usize, self.alloc.ftable_base as usize,
-             self.alloc.tstr_base as usize)
-        } else {
-            let mut max: RegId = 0;
-            for b in &self.program.blocks {
-                for i in &b.instrs { if let Some(dd) = i.def_reg() { if dd > max { max = dd; } } }
-            }
-            let m = max as usize + 1;
-            (m, m, m, m, m, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize)
-        };
+        let (
+            n_i,
+            n_b,
+            n_f,
+            n_s,
+            n_t,
+            n_tf,
+            n_ts,
+            base,
+            fbase,
+            tfbase,
+            tsbase
+        ) = (
+            self.alloc.n_int,
+            self.alloc.n_bool,
+            self.alloc.n_float,
+            self.alloc.n_str,
+            self.alloc.n_table,
+            self.alloc.n_ftable,
+            self.alloc.n_tstr,
+            self.alloc.phys_base as usize,
+            self.alloc.float_base as usize,
+            self.alloc.ftable_base as usize,
+            self.alloc.tstr_base as usize
+        );
 
         for r in base..base + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
         for r in base..base + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }

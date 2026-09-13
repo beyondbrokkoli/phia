@@ -91,8 +91,7 @@ fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap
 pub struct AllocInfo {
     pub n_int: usize, pub n_bool: usize, pub n_float: usize, pub n_str: usize,
     pub n_table: usize, pub n_ftable: usize, pub n_tstr: usize,
-    pub phys_base: RegId, pub float_base: RegId, pub ftable_base: RegId, pub tstr_base: RegId,
-    pub did_alloc: bool, // <-- Refactor this later :)
+    pub phys_base: RegId, pub float_base: RegId, pub ftable_base: RegId, pub tstr_base: RegId
 }
 
 pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64>, consts_b: &HashMap<RegId, bool>) -> AllocInfo {
@@ -313,7 +312,6 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
         float_base,
         ftable_base,
         tstr_base,
-        did_alloc: true,
     }
 }
 
