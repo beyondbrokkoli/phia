@@ -15,7 +15,7 @@ use std::process::Command;
 #[path = "src/ir.rs"] pub mod ir;                     // 5. IR Data Definitions
 #[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
 #[path = "src/optimizer.rs"] pub mod optimizer;       // 6.5 IR Optimization pass
-#[path = "src/de_ssa.rs"] pub mod de_ssa;             // 6.75 Resolve Phis / Propagate Constants
+#[path = "src/de_ssa.rs"] pub mod de_ssa;             // 6.75 Resolve Phis / Propagate Constants / Simplify
 #[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust
 
 // DISPATCHED IR renderer — one arm per block, explicit control flow, in
@@ -358,10 +358,10 @@ fn main() {
     // Phase 6.75
     de_ssa::resolve_phis(&mut ir_program);
     let (consts_i, consts_b) = de_ssa::propagate_constants(&mut ir_program);
+    de_ssa::simplify(&mut ir_program);
 
     let mut backend_engine = backend::IrBackend::new(ir_program, consts_i, consts_b);
 
-    backend_engine.simplify();
     backend_engine.allocate_registers();
 
     if dump_final {

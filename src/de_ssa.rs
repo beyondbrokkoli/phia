@@ -228,3 +228,68 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
     }
     (ci, cb)
 }
+
+/// Copy propagation + DCE. Deliberately conservative: a Move is erased
+/// only when BOTH target and source are single-def vregs. Phi targets
+/// are multi-def after resolve_phis, so loop-carried copies are never
+/// touched and the parallel-copy/swap hazard cannot appear.
+pub fn simplify(program: &mut IrProgram) {
+    let mut defs: HashMap<RegId, usize> = HashMap::new();
+    for b in &program.blocks {
+        for i in &b.instrs { if let Some(d) = i.def_reg() { *defs.entry(d).or_insert(0) += 1; } }
+    }
+
+    let mut rename: HashMap<RegId, RegId> = HashMap::new();
+    for b in &program.blocks {
+        for i in &b.instrs {
+            if let Instruction::Move { target, source, .. } = i {
+                if target != source
+                    && defs.get(target) == Some(&1)
+                    && defs.get(source) == Some(&1)
+                { rename.insert(*target, *source); }
+            }
+        }
+    }
+
+    if !rename.is_empty() {
+        let resolve = |mut r: RegId| -> RegId {
+            let mut guard = 0usize;
+            while let Some(&next) = rename.get(&r) {
+                r = next; guard += 1;
+                if guard > 100_000 { panic!("copy-prop: rename cycle"); }
+            }
+            r
+        };
+        for b in &mut program.blocks {
+            for i in &mut b.instrs { i.remap_instr(&resolve); }
+            if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
+                *cond = resolve(*cond);
+            }
+        }
+    }
+
+    let mut uses: HashMap<RegId, usize> = HashMap::new();
+    for b in &program.blocks {
+        for i in &b.instrs { for u in i.use_regs() { *uses.entry(u).or_insert(0) += 1; } }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator { *uses.entry(*cond).or_insert(0) += 1; }
+    }
+
+    for b in &mut program.blocks {
+        b.instrs.retain(|i| {
+            if matches!(i, Instruction::Move { target, source, .. } if target == source) { return false; }
+            // dead PURE defs only: NewTable allocates output, GetTable can
+            // panic on negative keys — neither is ever "dead code" here.
+            let dead = i.def_reg().map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
+            let pure = matches!(i,
+                Instruction::LoadInt { .. } | Instruction::LoadBool { .. }
+                | Instruction::Move { .. }
+                | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. }
+                | Instruction::Mul { .. } | Instruction::Div { .. }
+                | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                | Instruction::Neg { .. }
+                | Instruction::Leq { .. } | Instruction::Geq { .. }
+                | Instruction::Eq { .. } | Instruction::Not { .. });
+            !(dead && pure)
+        });
+    }
+}
