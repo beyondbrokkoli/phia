@@ -359,9 +359,7 @@ fn main() {
     de_ssa::resolve_phis(&mut ir_program);
     let (consts_i, consts_b) = de_ssa::propagate_constants(&mut ir_program);
 
-    let mut backend_engine = backend::IrBackend::new(ir_program);
-    backend_engine.consts_i = consts_i;
-    backend_engine.consts_b = consts_b;
+    let mut backend_engine = backend::IrBackend::new(ir_program, consts_i, consts_b);
 
     backend_engine.simplify();
     backend_engine.allocate_registers();

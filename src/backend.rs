@@ -116,13 +116,13 @@ pub struct IrBackend {
 }
 
 impl IrBackend {
-    pub fn new(program: IrProgram) -> Self {
+    pub fn new(program: IrProgram, consts_i: HashMap<RegId, i64>, consts_b: HashMap<RegId, bool>) -> Self {
         Self {
             program,
             n_int: 0, n_bool: 0, n_float: 0, n_str: 0,
             n_table: 0, n_ftable: 0, n_tstr: 0,
             phys_base: 0, float_base: 0, ftable_base: 0, tstr_base: 0, did_alloc: false,
-            consts_i: HashMap::new(), consts_b: HashMap::new(),
+            consts_i, consts_b,
         }
     }
 
