@@ -15,6 +15,7 @@ use std::process::Command;
 #[path = "src/ir.rs"] pub mod ir;                     // 5. IR Data Definitions
 #[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
 #[path = "src/optimizer.rs"] pub mod optimizer;       // 6.5 IR Optimization pass
+#[path = "src/de_ssa.rs"] pub mod de_ssa;             // 6.75 Resolve Phis / Propagate Constants
 #[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust
 
 // DISPATCHED IR renderer — one arm per block, explicit control flow, in
@@ -357,8 +358,13 @@ fn main() {
     // MID probe scan must run while phis are still intact (pre-resolve_phis).
     let probe_mid = scan_probes(&backend_engine.program.blocks, true);
 
-    backend_engine.resolve_phis();
-    backend_engine.propagate_constants();
+    // Phase 6.75
+    de_ssa::resolve_phis(&mut backend_engine.program);
+
+    let (consts_i, consts_b) = de_ssa::propagate_constants(&mut backend_engine.program);
+    backend_engine.consts_i = consts_i;
+    backend_engine.consts_b = consts_b;
+
     backend_engine.simplify();
     backend_engine.allocate_registers();
 
