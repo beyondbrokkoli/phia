@@ -1,0 +1,2 @@
+-- EXPECT_BUILD_FAIL: Lexer Error
+local big = 99999999999999999999
