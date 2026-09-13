@@ -14,8 +14,9 @@ use std::process::Command;
 #[path = "src/type_checker.rs"] pub mod type_checker; // 4. AST Validation
 #[path = "src/ir.rs"] pub mod ir;                     // 5. IR Data Definitions
 #[path = "src/lowerer.rs"] pub mod lowerer;           // 6. AST to IR
-#[path = "src/optimizer.rs"] pub mod optimizer;       // 6.5 IR Optimization pass
-#[path = "src/de_ssa.rs"] pub mod de_ssa;             // 6.75 Resolve Phis / Propagate Constants / Simplify
+#[path = "src/optimizer.rs"] pub mod optimizer;       // 6.25 IR Optimization pass
+#[path = "src/de_ssa.rs"] pub mod de_ssa;             // 6.5 Resolve Phis / Propagate Constants / Simplify
+#[path = "src/reg_alloc.rs"] pub mod reg_alloc;       // 6.75 Allocate Registers
 #[path = "src/backend.rs"] pub mod backend;           // 7. IR to Rust
 
 // DISPATCHED IR renderer — one arm per block, explicit control flow, in
@@ -315,9 +316,7 @@ fn main() {
     let lowerer = lowerer::IrLowerer::new();
     let mut ir_program = lowerer.lower_program(&ast, type_map);
 
-    // 4. Optimization & De-SSA
-
-    // Run the standalone optimizer on the ir_program first
+    // 4. Optimization
     optimizer::optimize(&mut ir_program);
 
     // DEBUG DUMPS (PHIA_DEBUG_DUMP=<mode>) — written as files into OUT_DIR,
@@ -355,14 +354,15 @@ fn main() {
     // MID probe scan must run while phis are still intact (pre-resolve_phis).
     let probe_mid = scan_probes(&ir_program.blocks, true);
 
-    // Phase 6.75
+    // Phase 6.5
     de_ssa::resolve_phis(&mut ir_program);
     let (consts_i, consts_b) = de_ssa::propagate_constants(&mut ir_program);
     de_ssa::simplify(&mut ir_program);
 
-    let mut backend_engine = backend::IrBackend::new(ir_program, consts_i, consts_b);
+    // Phase 6.75
+    let alloc_info = reg_alloc::allocate_registers(&mut ir_program, &consts_i, &consts_b);
 
-    backend_engine.allocate_registers();
+    let backend_engine = backend::IrBackend::new(ir_program, alloc_info, consts_i, consts_b);
 
     if dump_final {
         let mut s = String::from(

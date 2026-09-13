@@ -2,91 +2,7 @@
 use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, BlockId, RegId};
 use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Pool { Int, Float, Bool, String, Table, TableFloat, TableString }
-
-fn pool_of(t: &StaticType) -> Pool {
-    match t {
-        StaticType::Integer => Pool::Int,
-        StaticType::Float => Pool::Float,
-        StaticType::Boolean => Pool::Bool,
-        StaticType::String => Pool::String,
-        // A table whose ELEMENTS are floats is its own pool: its pointer
-        // pair is *mut f64/farray, and a physical id must never serve
-        // both it and a handle-array table — the per-id pointer decl and
-        // EC/HR field choice would be ambiguous (found by the Float
-        // Gauntlet: fa_tide's slot reused by fd_grid; pinned by
-        // gauntlet_float + float_14). String-element tables get the same
-        // surgery for the same reason: *mut String/sarray.
-        StaticType::Table(inner) if matches!(**inner, StaticType::Float) => Pool::TableFloat,
-        StaticType::Table(inner) if matches!(**inner, StaticType::String) => Pool::TableString,
-        StaticType::Table(_) | StaticType::UnknownTable(_) => Pool::Table,
-    }
-}
-
-fn touch(iv: &mut HashMap<RegId, (usize, usize)>, r: RegId, p: usize) {
-    let e = iv.entry(r).or_insert((p, p));
-    if p < e.0 { e.0 = p; }
-    if p > e.1 { e.1 = p; }
-}
-
-fn compute_liveness(blocks: &[BasicBlock]) -> (Vec<HashSet<RegId>>, Vec<HashSet<RegId>>) {
-    let n = blocks.len();
-    let mut live_in  = vec![HashSet::<RegId>::new(); n];
-    let mut live_out = vec![HashSet::<RegId>::new(); n];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for b in (0..n).rev() {
-            let mut out = HashSet::new();
-            match &blocks[b].terminator {
-                Some(Terminator::Jump(t)) => out.extend(live_in[*t].iter().copied()),
-                Some(Terminator::Branch { true_block, false_block, .. }) => {
-                    out.extend(live_in[*true_block].iter().copied());
-                    out.extend(live_in[*false_block].iter().copied());
-                }
-                _ => {}
-            }
-            let mut live = out.clone();
-            if let Some(Terminator::Branch { cond, .. }) = &blocks[b].terminator { live.insert(*cond); }
-            for i in blocks[b].instrs.iter().rev() {
-                if let Some(d) = i.def_reg() { live.remove(&d); }
-                for u in i.use_regs() { live.insert(u); }
-            }
-            if live != live_in[b] || out != live_out[b] {
-                live_in[b] = live;
-                live_out[b] = out;
-                changed = true;
-            }
-        }
-    }
-    (live_in, live_out)
-}
-
-fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap<RegId, (usize, usize)> {
-    let mut iv = HashMap::new();
-    let mut base = 0usize;
-    for b in 0..blocks.len() {
-        let n = blocks[b].instrs.len();
-        let mut live = live_out[b].clone();
-        if let Some(Terminator::Branch { cond, .. }) = &blocks[b].terminator { live.insert(*cond); }
-        // Values live at block END keep their interval wrapped around loop
-        // back edges. This is the load-bearing line: without it, loop-carried
-        // values get intervals that stop at their last textual use, and the
-        // allocator happily hands their slot to a temp inside the loop.
-        for &r in live.iter() { touch(&mut iv, r, base + n); }
-        for i in (0..n).rev() {
-            let instr = &blocks[b].instrs[i];
-            if let Some(d) = instr.def_reg() { live.remove(&d); }
-            for u in instr.use_regs() { live.insert(u); }
-            for &r in live.iter() { touch(&mut iv, r, base + i); }
-            if let Some(d) = instr.def_reg() { touch(&mut iv, d, base + i); }
-        }
-        base += n + 1; // one slot for the terminator
-    }
-    iv
-}
+use crate::reg_alloc::{AllocInfo};
 
 fn indent(d: usize) -> String { "    ".repeat(d) }
 
@@ -108,22 +24,19 @@ pub fn program_uses_handles(blocks: &[BasicBlock]) -> bool {
 
 pub struct IrBackend {
     pub program: IrProgram,
-    n_int: usize, n_bool: usize, n_float: usize, n_str: usize,
-    n_table: usize, n_ftable: usize, n_tstr: usize,
-    phys_base: RegId, float_base: RegId, ftable_base: RegId, tstr_base: RegId, did_alloc: bool,
-    pub consts_i: HashMap<RegId, i64>,
-    pub consts_b: HashMap<RegId, bool>,
+    alloc: AllocInfo,
+    consts_i: HashMap<RegId, i64>,
+    consts_b: HashMap<RegId, bool>,
 }
 
 impl IrBackend {
-    pub fn new(program: IrProgram, consts_i: HashMap<RegId, i64>, consts_b: HashMap<RegId, bool>) -> Self {
-        Self {
-            program,
-            n_int: 0, n_bool: 0, n_float: 0, n_str: 0,
-            n_table: 0, n_ftable: 0, n_tstr: 0,
-            phys_base: 0, float_base: 0, ftable_base: 0, tstr_base: 0, did_alloc: false,
-            consts_i, consts_b,
-        }
+    pub fn new(
+        program: IrProgram,
+        alloc: AllocInfo,
+        consts_i: HashMap<RegId, i64>,
+        consts_b: HashMap<RegId, bool>
+    ) -> Self {
+        Self { program, alloc, consts_i, consts_b }
     }
 
     fn iop_str(&self, r: RegId) -> String {
@@ -151,9 +64,9 @@ impl IrBackend {
     // range membership equals "this pool minted this id", and vreg ids
     // (all < phys_base <= float_base) can never fall inside.
     pub fn is_float_reg(&self, r: RegId) -> bool {
-        self.did_alloc
-            && r >= self.float_base
-            && r < self.float_base + self.n_float as RegId
+        self.alloc.did_alloc
+            && r >= self.alloc.float_base
+            && r < self.alloc.float_base + self.alloc.n_float as RegId
     }
 
     // Storage side of a hoisted/EC'd table physical: float-ELEMENT tables
@@ -161,16 +74,16 @@ impl IrBackend {
     // the id alone answers farray vs array (and *mut f64 vs *mut i64 in
     // the decl block) unambiguously.
     fn is_ftable_reg(&self, r: RegId) -> bool {
-        self.did_alloc
-            && r >= self.ftable_base
-            && r < self.ftable_base + self.n_ftable as RegId
+        self.alloc.did_alloc
+            && r >= self.alloc.ftable_base
+            && r < self.alloc.ftable_base + self.alloc.n_ftable as RegId
     }
 
     // String-ELEMENT tables: same disjoint-range argument, sarray side.
     fn is_tstr_reg(&self, r: RegId) -> bool {
-        self.did_alloc
-            && r >= self.tstr_base
-            && r < self.tstr_base + self.n_tstr as RegId
+        self.alloc.did_alloc
+            && r >= self.alloc.tstr_base
+            && r < self.alloc.tstr_base + self.alloc.n_tstr as RegId
     }
 
     // Debug-dump helper: render an allocated register the way emission
@@ -254,226 +167,6 @@ impl IrBackend {
             matches!(&p.terminator, Some(Terminator::Jump(t)) if *t == h)
                 && self.dominates(h, h + 1 + i)
         })
-    }
-
-    pub fn allocate_registers(&mut self) {
-        let blocks = &self.program.blocks;
-
-        // Const vregs never get a physical slot: all their uses render as
-        // literals. Excluded so a vreg id can never be confused with a
-        // physical id at codegen time.
-        let skip: HashSet<RegId> = self.consts_i.keys().copied()
-            .chain(self.consts_b.keys().copied()).collect();
-
-        // 1. types
-        // The arithmetic ops are untyped in the IR: their targets inherit
-        // the operand pool (Integer or Float) — pass 2 fixpoints that
-        // through chains (`y = x + 1` needs x's pool first).
-        let mut ty: HashMap<RegId, Pool> = HashMap::new();
-        for b in blocks {
-            for i in &b.instrs {
-                let (Some(d), Some(t)) = (i.def_reg(), i.def_type()) else { continue };
-                if skip.contains(&d) { continue; }
-                if matches!(i, Instruction::Add { .. } | Instruction::Sub { .. }
-                    | Instruction::Mul { .. } | Instruction::Div { .. }
-                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }
-                    | Instruction::Neg { .. }) { continue; }
-                let p = pool_of(&t);
-                match ty.insert(d, p) {
-                    Some(old) if old != p => panic!("reg {d} has conflicting types"),
-                    _ => {}
-                }
-            }
-        }
-        loop {
-            let mut changed = false;
-            for b in blocks {
-                for i in &b.instrs {
-                    let (target, src_pools) = match i {
-                        Instruction::Add { target, left, right, .. }
-                        | Instruction::Sub { target, left, right, .. }
-                        | Instruction::Mul { target, left, right, .. }
-                        | Instruction::Div { target, left, right, .. }
-                        | Instruction::IntDiv { target, left, right, .. }
-                        | Instruction::Mod { target, left, right, .. } =>
-                            (*target, [ty.get(left).copied(), ty.get(right).copied()]),
-                        Instruction::Neg { target, source, .. } =>
-                            (*target, [ty.get(source).copied(), None]),
-                        _ => continue,
-                    };
-                    if skip.contains(&target) || ty.contains_key(&target) { continue; }
-                    if let Some(p) = src_pools.into_iter().flatten().next() {
-                        ty.insert(target, p);
-                        changed = true;
-                    }
-                }
-            }
-            if !changed { break; }
-        }
-        for b in blocks {
-            for i in &b.instrs {
-                let ops: Vec<(RegId, StaticType)> = match i {
-                    Instruction::SetTable { table, key, val, ty } | Instruction::SetTableFast { table, key, val, ty } =>
-                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*key, StaticType::Integer), (*val, ty.clone())],
-                    Instruction::GetTable { table, key, .. } | Instruction::GetTableFast { table, key, .. } =>
-                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*key, StaticType::Integer)],
-                    Instruction::Add { left, right, .. } | Instruction::Sub { left, right, .. }
-                    | Instruction::Mul { left, right, .. } | Instruction::Div { left, right, .. }
-                    | Instruction::IntDiv { left, right, .. } | Instruction::Mod { left, right, .. }
-                    | Instruction::Less { left, right, .. }
-                    | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. } =>
-                        vec![(*left, StaticType::Integer), (*right, StaticType::Integer)],
-                    // Eq's operands are polymorphic: the instruction's ty is
-                    // the only reliable pool source (Int and Bool physicals
-                    // share one id range, so nothing else disambiguates).
-                    Instruction::Eq { left, right, ty, .. } =>
-                        vec![(*left, ty.clone()), (*right, ty.clone())],
-                    // Concat is monomorphic String — no ambiguity to carry.
-                    Instruction::Concat { left, right, .. } =>
-                        vec![(*left, StaticType::String), (*right, StaticType::String)],
-                    Instruction::Neg { source, .. } => vec![(*source, StaticType::Integer)],
-                    Instruction::Not { source, .. } => vec![(*source, StaticType::Boolean)],
-                    Instruction::Move { source, ty: t, .. } => vec![(*source, t.clone())],
-                    Instruction::EnsureCapacity { table, limit } =>
-                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*limit, StaticType::Integer)],
-                    Instruction::HoistRawPtr { table } =>
-                        vec![(*table, StaticType::Table(Box::new(StaticType::Integer)))],
-                    // The probe's operand list IS its kind carrier. Without
-                    // this arm the operands never enter the ty map, never
-                    // get physical ids, and emission renders undeclared
-                    // registers — the polymorphic-operand rule, enforced.
-                    Instruction::DebugProbe { operands, .. } =>
-                        operands.iter().map(|(r, t)| (*r, t.clone())).collect(),
-                    _ => vec![],
-                };
-                for (r, t) in ops {
-                    if skip.contains(&r) { continue; }
-                    ty.entry(r).or_insert(pool_of(&t));
-                }
-            }
-            if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-                if !skip.contains(cond) { ty.entry(*cond).or_insert(Pool::Bool); }
-            }
-        }
-
-        // 2. liveness + intervals (unchanged)
-        let (_, live_out) = compute_liveness(blocks);
-        let iv = live_intervals(blocks, &live_out);
-
-        // 3. mint physical ids from ABOVE the whole vreg namespace —
-        //    a physical id must never equal a vreg id (const or not).
-        let mut max_reg: RegId = 0;
-        for b in blocks {
-            for i in &b.instrs {
-                if let Some(d) = i.def_reg() { if d > max_reg { max_reg = d; } }
-                for u in i.use_regs() { if u > max_reg { max_reg = u; } }
-            }
-            if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-                if *cond > max_reg { max_reg = *cond; }
-            }
-        }
-        // Mint from above the ENTIRE id space the emission-side const maps
-        // can ever be queried with: surviving IR vregs AND consts keys.
-        // propagate_constants runs before simplify's DCE, so a folded def
-        // can be deleted from the IR while its consts_i/consts_b entry
-        // lives on — that id appears in no instruction (invisible to the
-        // scan above) yet the maps still answer for it. A physical minted
-        // onto such a stale key makes emit_instr's const early-out silently
-        // swallow the instruction (a GetTable vanishes wholesale) and
-        // iop_str render the dead constant at every use. Found by the
-        // differential fuzzer, seed 43: `local v12 = v8` DCE'd, its folded
-        // consts_i key numerically equaled the physical minted for a later
-        // GetTable target, and the probe printed the stale 0 instead of 26.
-        let max_const = self.consts_i.keys().copied()
-            .chain(self.consts_b.keys().copied())
-            .max()
-            .unwrap_or(0);
-        let base = max_reg.max(max_const) + 1;
-
-        let mut vregs: Vec<RegId> = ty.keys().copied().collect();
-
-        // Int/Bool/Table/String scalars deliberately SHARE the physical id
-        // space (i_r12, b_r12, t_r12, s_r12 coexist — the prefix
-        // disambiguates; that layout is what every integer lock freezes).
-        // Float scalars mint from a disjoint range (emission asks "is reg
-        // N float?" from N alone), float-ELEMENT tables from a second
-        // disjoint range on top, string-ELEMENT tables from a third: the
-        // per-id pointer decls and EC/HR field choices (*mut f64/farray,
-        // *mut String/sarray) must never serve the wrong table kind.
-        // Pure-integer programs mint none of these: integer ids, integer
-        // bytes, byte-for-byte.
-        let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
-        let max_other = pool_count(Pool::Int)
-            .max(pool_count(Pool::Bool))
-            .max(pool_count(Pool::Table))
-            .max(pool_count(Pool::String));
-        let float_base = base + max_other as RegId;
-        let ftable_base = float_base + pool_count(Pool::Float) as RegId;
-        let tstr_base = ftable_base + pool_count(Pool::TableFloat) as RegId;
-
-        // LOAD-BEARING: the `r` tiebreak makes this a total order. Without it,
-        // equal-interval regs fall back to HashMap iteration order (random per
-        // process) and allocation becomes non-deterministic.
-        vregs.sort_by_key(|&r| (iv.get(&r).copied().unwrap_or((0, 0)), r));
-
-        let mut active: HashMap<Pool, Vec<(RegId, usize)>> = HashMap::new();
-        let mut free: HashMap<Pool, Vec<RegId>> = HashMap::new();
-        let mut count: HashMap<Pool, usize> = HashMap::new();
-        let mut map: HashMap<RegId, RegId> = HashMap::new();
-
-        for r in vregs {
-            let p = ty[&r];
-            let (start, end) = iv.get(&r).copied().unwrap_or((0, 0));
-            let act = active.entry(p).or_default();
-
-            let mut keep: Vec<(RegId, usize)> = Vec::new();
-            for &(phys, e) in act.iter() {
-                if e < start { free.entry(p).or_default().push(phys); }
-                else { keep.push((phys, e)); }
-            }
-            *act = keep;
-
-            let phys = free.entry(p).or_default().pop().unwrap_or_else(|| {
-                let c = count.entry(p).or_insert(0);
-                let n = *c; *c += 1;
-                match p {
-                    Pool::Float => float_base + n as RegId,
-                    Pool::TableFloat => ftable_base + n as RegId,
-                    Pool::TableString => tstr_base + n as RegId,
-                    _ => base + n as RegId,
-                }
-            });
-            act.push((phys, end));
-            map.insert(r, phys);
-        }
-
-        // 4. rewrite references (const vregs stay identity: codegen looks
-        //    them up in the const maps and never emits them)
-        for b in &mut self.program.blocks {
-            for i in &mut b.instrs { i.remap_instr(&|r| *map.get(&r).unwrap_or(&r)); }
-            if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
-                if let Some(&p) = map.get(&*cond) { *cond = p; }
-            }
-        }
-
-        // 5. self-copies are no-ops
-        for b in &mut self.program.blocks {
-            b.instrs.retain(|i|
-                !matches!(i, Instruction::Move { target, source, .. } if target == source));
-        }
-
-        self.n_int   = *count.entry(Pool::Int).or_insert(0);
-        self.n_bool  = *count.entry(Pool::Bool).or_insert(0);
-        self.n_float = *count.entry(Pool::Float).or_insert(0);
-        self.n_str   = *count.entry(Pool::String).or_insert(0);
-        self.n_table = *count.entry(Pool::Table).or_insert(0);
-        self.n_ftable = *count.entry(Pool::TableFloat).or_insert(0);
-        self.n_tstr = *count.entry(Pool::TableString).or_insert(0);
-        self.phys_base = base;
-        self.float_base = float_base;
-        self.ftable_base = ftable_base;
-        self.tstr_base = tstr_base;
-        self.did_alloc = true;
     }
 
     fn emit_table_decl(&self, out: &mut String, r: RegId, uses_handles: bool, fast_phys: &HashSet<RegId>) {
@@ -1145,11 +838,11 @@ impl IrBackend {
             }
         }
 
-        let (n_i, n_b, n_f, n_s, n_t, n_tf, n_ts, base, fbase, tfbase, tsbase) = if self.did_alloc {
-            (self.n_int, self.n_bool, self.n_float, self.n_str, self.n_table,
-             self.n_ftable, self.n_tstr,
-             self.phys_base as usize, self.float_base as usize, self.ftable_base as usize,
-             self.tstr_base as usize)
+        let (n_i, n_b, n_f, n_s, n_t, n_tf, n_ts, base, fbase, tfbase, tsbase) = if self.alloc.did_alloc {
+            (self.alloc.n_int, self.alloc.n_bool, self.alloc.n_float, self.alloc.n_str, self.alloc.n_table,
+             self.alloc.n_ftable, self.alloc.n_tstr,
+             self.alloc.phys_base as usize, self.alloc.float_base as usize, self.alloc.ftable_base as usize,
+             self.alloc.tstr_base as usize)
         } else {
             let mut max: RegId = 0;
             for b in &self.program.blocks {
