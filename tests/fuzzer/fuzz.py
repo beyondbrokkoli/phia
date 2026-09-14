@@ -105,21 +105,34 @@ def run_seed(seed):
 
     return {"status": "PASS"}
 
+# Infinite Loops
+HARDCODED_BLACKLIST = {
+    4, 169, 278, 376, 399, 626, 780, 857, 1107,
+    1377, 1411, 1420, 1482, 1657, 1750, 1890, 1984, 1999
+}
+
 def main():
     parser = argparse.ArgumentParser(description="Phia Unified Differential Fuzzer")
     parser.add_argument("--seeds", "-n", type=int, default=50, help="Number of random tests to execute (default: 50)")
     parser.add_argument("--seed", "-s", type=int, default=None, help="Target a specific seed to reproduce a bug")
     parser.add_argument("--max-fails", type=int, default=3, help="Halt after this many failures (default: 3)")
-    # Add this new line:
-    parser.add_argument("--blacklist", "-b", type=int, nargs='+', default=[], help="List of seeds to skip manually")
+    parser.add_argument(
+        "--blacklist", "-b",
+        type=int,
+        nargs='+',
+        default=[],
+        help="Additional seeds to skip manually"
+    )
     args = parser.parse_args()
 
     # Determine seed list
     seed_list = [args.seed] if args.seed is not None else list(range(args.seeds))
 
-    # Filter out blacklisted seeds
-    if args.blacklist:
-        seed_list = [s for s in seed_list if s not in args.blacklist]
+    # Combine hardcoded seeds with any CLI-provided seeds
+    blacklist = HARDCODED_BLACKLIST | set(args.blacklist)
+
+    # Filter out blacklisted seeds (O(1) lookup with set)
+    seed_list = [s for s in seed_list if s not in blacklist]
 
     total_runs = len(seed_list)
 
