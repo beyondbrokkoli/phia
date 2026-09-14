@@ -8,3 +8,9 @@ logos = "0.16.1"
 
 [build-dependencies]
 logos = "0.16.1"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1   # Single unit of compilation, matching g++ on a single .cpp file
+panic = "abort"     # Strips landing pads and stack unwind bookkeeping
+debug = 1           # equivalent to g++ -g1
