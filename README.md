@@ -98,7 +98,7 @@ grid[0][2] = 102
 
 
 -- 4. PRINT PROBE (Debugging)
--- 'print' requires a string literal tag as the first argument.
+-- 'print' takes an optional string literal tag as its first argument.
 print("state", pure_int, pure_float, num_list[1])
 
 
@@ -153,6 +153,11 @@ local missing_str = string_list[999]    -- Yields ""  (String)
 local line = "-" .. "~" .. "@"
 -- PROBE art: s_r95="-~@"
 print("art", line)
+
+
+-- 9. EMPTY PRINT
+-- A bare print() outputs an empty line, exactly like standard Lua.
+print()
 ```
 
 ### Quickstart
@@ -189,18 +194,6 @@ touch main.lua && PHIA_DEBUG_DUMP=final PHIA_SOURCE=main.lua cargo build --relea
 # 4. HAVE FUN
 touch mandelbrot.lua && PHIA_SOURCE=mandelbrot.lua cargo run --release
 ```
-### Known Quirks
-
-#### Strict Tag Requirement for `print`
-
-Phia strictly requires a string literal tag as the first argument in a `print` statement (e.g., `print("tag", x)`).
-A plain `print(x)` is a syntax error.
-
-**Why is the tag required?**
-The compiler relies on this mandatory string to generate `probe_map.txt`.
-
-**Why hijack `print` instead of adding a `probe()` keyword?**
-Compatibility. By keeping the name `print`, you can run the exact same `.lua` script in standard Lua or LuaJIT without modification.
 
 ### Benchmark: `race`
 
@@ -402,12 +395,12 @@ Summary
 
 * **Build-Time Memory Resolution:** Every memory decision—including data types, array storage models, and register assignments—is strictly calculated during compilation. The final program completely skips the overhead of figuring out data types or managing memory allocation on the fly.
 * **Scalar Variables & Register Packing:** Standard variables (scalars) compile directly into Rust local variables. The compiler analyzes exactly when variables are created and last used, packing them efficiently into a limited number of physical hardware registers.
-* **Zero-Cost Dead Code:** If a variable is assigned but never read, the compiler completely eliminates it. It is never allocated, resulting in zero runtime memory cost.
+* **Zero-Cost Dead Code:** If an integer or boolean variable is assigned but never read, the compiler completely eliminates it: the value is constant-folded at compile time, never becomes a Rust variable, and costs zero runtime memory. (Dead float and string variables are not yet eliminated — their loads and concatenations still emit.)
 * **Efficient Loop Variables (Phi Nodes):** For variables that update across loop iterations, the compiler assigns the same physical hardware register to the input and the output. This ensures the data is already in the correct slot for the next iteration without moving it around.
-* **Strict Type Boundaries:** The compiler places integers, booleans, and floats into completely separate register ranges. This prevents the generated Rust code from accidentally mixing up memory addresses (like treating a float pointer as an integer pointer), which guarantees memory safety.
+* **Strict Type Boundaries:** Every value's type is known at compile time, so each value lives in a type-specific pool of Rust variables (`i_r*`, `b_r*`, `f_r*`, `s_r*`, `t_r*`), with floats occupying a register range fully disjoint from the integer range. This prevents the generated Rust code from accidentally mixing up memory addresses (like treating a float pointer as an integer pointer), which guarantees memory safety.
 * **Direct String Allocation:** Strings completely rely on Rust's standard heap allocator. There is no background system trying to save space by reusing identical text (no interning or pooling). Operations like string concatenation create entirely new memory allocations, meaning heavy text processing will generate significant heap traffic.
-* **Permanent Table Storage (Arena):** Tables are stored in a single, contiguous memory structure (an arena). Once a table is created, its core structure never moves and is never deleted. Because its memory address is permanent, the transpiler can safely hand out direct raw pointers for instant access.
-* **Dynamic Internal Arrays:** While a table's core address never changes, the internal arrays holding its actual data are allowed to dynamically resize via the global memory allocator as elements are added or removed.
+* **Permanent Table Storage (Arena):** Tables live for the entire program in an arena (a vector of individually boxed tables). Once a table is created, its core structure never moves and is never deleted. Because its memory address is permanent, the transpiler can safely hand out direct raw pointers for instant access.
+* **Dynamic Internal Arrays:** While a table's core address never changes, the internal arrays holding its actual data are allowed to dynamically resize via the global memory allocator as elements are added.
 * **Aggressive Loop Optimization:** To make loops fast, the compiler requests all necessary memory before the loop begins. It also calculates a table's raw memory address once and stores it in a register (hoisting), so the loop doesn't have to look up the table's location on every single iteration.
 * **Direct Pointer Arithmetic:** Inside loops, table accesses skip standard lookups entirely. The code uses direct math on the raw memory pointers to jump straight to the data, provided the compiler's safety checks (Tier-4 analysis) confirm this shortcut won't cause errors.
-* **Predictable Runtime Performance:** Because memory and types are entirely resolved at compile time, the final execution has no unpredictable background tasks. There are no garbage collection pauses, no reference counting, and no runtime type checking. Mathematical operations map to single CPU instructions, and memory access is instant and direct.
+* **Predictable Runtime Performance:** Because memory and types are entirely resolved at compile time, the final execution has no unpredictable background tasks. There are no garbage collection pauses, no reference counting, and no runtime type checking. Basic arithmetic and comparisons map to single CPU instructions (the floor-division and modulo sign corrections expand into short branch-free instruction sequences, which LLVM frequently strength-reduces into multiply-shift code containing no division instruction at all), and memory access is instant and direct.

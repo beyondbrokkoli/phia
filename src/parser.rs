@@ -95,9 +95,15 @@ impl<'a> Parser<'a> {
                 // and never entering parse_expr (the expression paren-gate
                 // is untouched). A bare `print "tag" e` spelling is refused:
                 // it would not parse as Lua.
-                self.tokens.next(); // consume 'print'
-                self.expect(Token::LeftParen);
-                // Parse the first argument through the expression parser so
+            self.tokens.next(); // consume 'print'
+            self.expect(Token::LeftParen);
+            // print(): an empty probe — Lua's bare newline. No tag, no
+            // operands; emission renders it as a plain println!().
+            if matches!(self.tokens.peek(), Some(Token::RightParen)) {
+                self.tokens.next(); // consume ')'
+                return Stmt::Probe { tag: String::new(), exprs: Vec::new() };
+            }
+            // Parse the first argument through the expression parser so
                 // concatenation chains and parenthesised expressions are handled
                 // correctly.  A bare string literal becomes the probe tag;
                 // anything else is added to the expression list with an empty

@@ -486,8 +486,13 @@ fn emit_instr(
             // a brace in the user tag would be a format directive
             let safe_tag = tag.replace('{', "{{").replace('}', "}}");
             if operands.is_empty() {
-                // probe("tag") with no operands: no {} placeholder, no args
-                out.push_str(&format!("{ind}println!(\"PROBE {safe_tag}:\");\n"));
+                if safe_tag.is_empty() {
+                    // print() — no tag, no operands: Lua's bare newline
+                    out.push_str(&format!("{ind}println!();\n"));
+                } else {
+                    // probe("tag") with no operands: no {} placeholder, no args
+                    out.push_str(&format!("{ind}println!(\"PROBE {safe_tag}:\");\n"));
+                }
                 return;
             }
             out.push_str(&format!(

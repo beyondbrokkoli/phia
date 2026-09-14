@@ -64,7 +64,7 @@ grid[0][2] = 102
 
 
 -- 4. PRINT PROBE (Debugging)
--- 'print' requires a string literal tag as the first argument.
+-- 'print' takes an optional string literal tag as its first argument.
 print("state", pure_int, pure_float, num_list[1])
 
 
@@ -119,3 +119,8 @@ local missing_str = string_list[999]    -- Yields ""  (String)
 local line = "-" .. "~" .. "@"
 -- PROBE art: s_r95="-~@"
 print("art", line)
+
+
+-- 9. EMPTY PRINT
+-- A bare print() outputs an empty line, exactly like standard Lua.
+print()
