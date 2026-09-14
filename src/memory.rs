@@ -8,8 +8,13 @@ pub struct Table {
     pub farray: Vec<f64>,
     // String-element side, same monomorphism argument.
     pub sarray: Vec<String>,
+    // Boolean-element side, same monomorphism argument. Vec<bool> is
+    // bit-packed by the stdlib (one bit per element) — the "bitmap table"
+    // representation comes for free.
+    pub barray: Vec<bool>,
     pub is_float: bool,
     pub is_string: bool,
+    pub is_bool: bool,
 }
 
 impl Table {
@@ -20,8 +25,10 @@ impl Table {
             array: Vec::with_capacity(256),
             farray: Vec::new(),
             sarray: Vec::new(),
+            barray: Vec::new(),
             is_float: false,
             is_string: false,
+            is_bool: false,
         }
     }
 
@@ -31,8 +38,10 @@ impl Table {
             array: Vec::new(),
             farray: Vec::with_capacity(256),
             sarray: Vec::new(),
+            barray: Vec::new(),
             is_float: true,
             is_string: false,
+            is_bool: false,
         }
     }
 
@@ -42,8 +51,23 @@ impl Table {
             array: Vec::new(),
             farray: Vec::new(),
             sarray: Vec::with_capacity(256),
+            barray: Vec::new(),
             is_float: false,
             is_string: true,
+            is_bool: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn new_bool() -> Self {
+        Self {
+            array: Vec::new(),
+            farray: Vec::new(),
+            sarray: Vec::new(),
+            barray: Vec::with_capacity(256),
+            is_float: false,
+            is_string: false,
+            is_bool: true,
         }
     }
 }

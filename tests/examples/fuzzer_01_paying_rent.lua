@@ -43,7 +43,7 @@
 -- EXPECT: hoists=0
 -- the current formatting scheme makes it impossible to define empty hoist_ctx because it compares against nil
 -- EXPECT_PRINT: final	0	-8.56	beta	false	-36	true	6	26	-12.99	0
--- EXPECT_PROBE: #0 tag="final" b3 depth0 i_r86 f_r91 s_r86 b_r5 i_r18 b_r86 i_r50 i_r87 f_r90 i_r73
+-- EXPECT_PROBE: #0 tag="final" b3 depth0 i_r86 f_r91 s_r86 b_r5 i_r18 b_r86 i_r50 i_r87 f_r93 i_r73
 -- EXPECT: TABLE 0 LEN 6 NZ 3 CHECKSUM -9129967380583111719 SUM -12.120000000000001
 -- EXPECT: TABLE 1 LEN 6 NZ 2 CHECKSUM 192
 -- EXPECT: TABLE 2 LEN 1 NZ 1 CHECKSUM -4599869698905074565 SUM -12.99

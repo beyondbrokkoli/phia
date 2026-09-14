@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Pool { Int, Float, Bool, String, Table, TableFloat, TableString }
+enum Pool { Int, Float, Bool, String, Table, TableFloat, TableString, TableBool }
 
 fn pool_of(t: &StaticType) -> Pool {
     match t {
@@ -17,10 +17,12 @@ fn pool_of(t: &StaticType) -> Pool {
         // both it and a handle-array table — the per-id pointer decl and
         // EC/HR field choice would be ambiguous (found by the Float
         // Gauntlet: fa_tide's slot reused by fd_grid; pinned by
-        // gauntlet_float + float_14). String-element tables get the same
-        // surgery for the same reason: *mut String/sarray.
+        // gauntlet_float + float_14). String-element and bool-element
+        // tables get the same surgery for the same reason: *mut
+        // String/sarray, *mut bool/barray.
         StaticType::Table(inner) if matches!(**inner, StaticType::Float) => Pool::TableFloat,
         StaticType::Table(inner) if matches!(**inner, StaticType::String) => Pool::TableString,
+        StaticType::Table(inner) if matches!(**inner, StaticType::Boolean) => Pool::TableBool,
         StaticType::Table(_) | StaticType::UnknownTable(_) => Pool::Table,
     }
 }
@@ -90,8 +92,9 @@ fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap
 
 pub struct AllocInfo {
     pub n_int: usize, pub n_bool: usize, pub n_float: usize, pub n_str: usize,
-    pub n_table: usize, pub n_ftable: usize, pub n_tstr: usize,
-    pub phys_base: RegId, pub float_base: RegId, pub ftable_base: RegId, pub tstr_base: RegId
+    pub n_table: usize, pub n_ftable: usize, pub n_tstr: usize, pub n_btable: usize,
+    pub phys_base: RegId, pub float_base: RegId, pub ftable_base: RegId,
+    pub tstr_base: RegId, pub btable_base: RegId
 }
 
 pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64>, consts_b: &HashMap<RegId, bool>) -> AllocInfo {
@@ -235,9 +238,10 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
     // disambiguates; that layout is what every integer lock freezes).
     // Float scalars mint from a disjoint range (emission asks "is reg
     // N float?" from N alone), float-ELEMENT tables from a second
-    // disjoint range on top, string-ELEMENT tables from a third: the
-    // per-id pointer decls and EC/HR field choices (*mut f64/farray,
-    // *mut String/sarray) must never serve the wrong table kind.
+    // disjoint range on top, string-ELEMENT tables from a third,
+    // bool-ELEMENT tables from a fourth: the per-id pointer decls and
+    // EC/HR field choices (*mut f64/farray, *mut String/sarray, *mut
+    // bool/barray) must never serve the wrong table kind.
     // Pure-integer programs mint none of these: integer ids, integer
     // bytes, byte-for-byte.
     let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
@@ -248,6 +252,7 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
     let float_base = base + max_other as RegId;
     let ftable_base = float_base + pool_count(Pool::Float) as RegId;
     let tstr_base = ftable_base + pool_count(Pool::TableFloat) as RegId;
+    let btable_base = tstr_base + pool_count(Pool::TableString) as RegId;
 
     // LOAD-BEARING: the `r` tiebreak makes this a total order. Without it,
     // equal-interval regs fall back to HashMap iteration order (random per
@@ -278,6 +283,7 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
                 Pool::Float => float_base + n as RegId,
                 Pool::TableFloat => ftable_base + n as RegId,
                 Pool::TableString => tstr_base + n as RegId,
+                Pool::TableBool => btable_base + n as RegId,
                 _ => base + n as RegId,
             }
         });
@@ -308,10 +314,12 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
         n_table: *count.entry(Pool::Table).or_insert(0),
         n_ftable: *count.entry(Pool::TableFloat).or_insert(0),
         n_tstr: *count.entry(Pool::TableString).or_insert(0),
+        n_btable: *count.entry(Pool::TableBool).or_insert(0),
         phys_base: base,
         float_base,
         ftable_base,
         tstr_base,
+        btable_base,
     }
 }
 

@@ -33,7 +33,7 @@
 --   does not dominate) yet got classified as a header — dominance broke.
 --
 -- EXPECT_PRINT: final	19	2.0	echo	true	false	betaecho	betaechobetaecho	9	4.0	-2
--- EXPECT_PROBE: #0 tag="final" b3 depth0 i_r0 f_r184 s_r172 b_r4 b_r126 s_r170 s_r171 i_r143 f_r187 i_r154
+-- EXPECT_PROBE: #0 tag="final" b3 depth0 i_r0 f_r180 s_r170 b_r4 b_r126 s_r172 s_r171 i_r143 f_r183 i_r154
 -- EXPECT: TABLE 0 LEN 6 NZ 1 CHECKSUM 38
 -- EXPECT: TABLE 1 LEN 4 NZ 3 CHECKSUM 66
 -- EXPECT: TABLE 2 LEN 1 NZ 0 CHECKSUM 0 SUM 0

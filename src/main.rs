@@ -63,6 +63,16 @@ fn main() {
                 sum += v;
             }
             println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck} SUM {sum}", t.farray.len());
+        } else if t.is_bool {
+            // Bool tables: the integer template with true as 1 — NZ counts
+            // true elements (false is the pool's zero, exactly like 0,
+            // 0.0 and "").
+            let (mut nz, mut ck) = (0u64, 0i64);
+            for (i, v) in t.barray.iter().enumerate() {
+                if *v { nz += 1; }
+                ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v as i64));
+            }
+            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.barray.len());
         } else {
             let (mut nz, mut ck) = (0u64, 0i64);
             for (i, v) in t.array.iter().enumerate() {

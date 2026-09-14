@@ -13,14 +13,14 @@ use crate::ast::{Expr, Stmt, StaticType, BinOp, UnOp};
 // resolves everything. Aliases share variables by construction — the old
 // write-once-resolution-by-identity rule IS variable identity. Element
 // variables bind only the codegenable element kinds (Integer, Float,
-// String, Table — Boolean alone is rejected in bind()).
+// String, Table, Boolean — each has its own table storage side).
 //
 // Consequence map, pinned by sentinels: statement order is not part of
 // validity (nested_06/07; nested_02's build-error -> nil-panic flip);
 // `a[0] = {}` legal, resolves jointly (nested_08/15); aliases constrain
-// the same variable (nested_04/10); Boolean rejected up front
-// (nested_14); occurs check (nested_13); arithmetic USE, not the read,
-// fixes the type (float_13).
+// the same variable (nested_04/10); Boolean elements bind like any other
+// kind (bool_01..05); occurs check (nested_13); arithmetic USE, not the
+// read, fixes the type (float_13).
 #[derive(Debug, Clone, PartialEq)]
 enum Ty {
     Integer,
@@ -127,13 +127,9 @@ impl TypeChecker {
     }
 
     // Bind variable v to term. v must currently be unbound (callers only
-    // bind deref'd vars). Two rejections live here because they apply to
-    // EVERY binding site: Boolean (not a codegenable element kind —
-    // nested_14) and occurs (an infinite element type — nested_13).
+    // bind deref'd vars). The one rejection that applies to EVERY binding
+    // site lives here: occurs (an infinite element type — nested_13).
     fn bind(&mut self, v: usize, term: &Ty) {
-        if matches!(term, Ty::Boolean) {
-            panic!("Type Error: table elements cannot be Boolean");
-        }
         if self.occurs(v, term) {
             panic!("Type Error: recursive table type (a table cannot contain itself)");
         }
@@ -188,9 +184,7 @@ impl TypeChecker {
             Ty::Integer => StaticType::Integer,
             Ty::Float => StaticType::Float,
             Ty::String => StaticType::String,
-            // bind() rejects Boolean bindings, so this is a checker bug,
-            // not a program error — fail loudly instead of mis-lowering.
-            Ty::Boolean => panic!("checker bug: Boolean leaked into a table type"),
+            Ty::Boolean => StaticType::Boolean,
             Ty::Var(_) => StaticType::Integer,
             Ty::Table(inner) => StaticType::Table(Box::new(self.resolve_static(&inner))),
         }
@@ -327,9 +321,9 @@ impl TypeChecker {
         match cond_type {
             Ty::Boolean => {}
             Ty::Var(v) => {
-                // Only a table-element read can still be deferred
-                // here, and Boolean is not a legal element type.
-                self.bind(v, &Ty::Boolean); // always rejects
+                // Only a table-element read can still be deferred here;
+                // binding it to Boolean makes the table a bool table.
+                self.bind(v, &Ty::Boolean);
             }
             _ => panic!("Type Error: '{}' condition must be a Boolean", kw),
         }
@@ -402,6 +396,18 @@ impl TypeChecker {
                         self.unify(&l, &r);
                         l
                     }
+                    // == / ~= with one deferred operand: the only
+                    // Boolean-valued binary op, so the op guard belongs on
+                    // the arm — an arith op with a (Var, Boolean) pairing
+                    // must still fall through to the rejections below.
+                    (Ty::Var(_), Ty::Boolean) if matches!(op, BinOp::Equal | BinOp::NotEqual) => {
+                        if let Ty::Var(v) = left_type { self.bind(v, &Ty::Boolean); }
+                        Ty::Boolean
+                    }
+                    (Ty::Boolean, Ty::Var(_)) if matches!(op, BinOp::Equal | BinOp::NotEqual) => {
+                        if let Ty::Var(v) = right_type { self.bind(v, &Ty::Boolean); }
+                        Ty::Boolean
+                    }
                     // == / ~= on two Booleans: the only non-numeric binary op
                     // besides string concat/eq
                     (Ty::Boolean, Ty::Boolean) if matches!(op, BinOp::Equal | BinOp::NotEqual) =>
@@ -448,7 +454,9 @@ impl TypeChecker {
                     UnOp::Not => match operand {
                         Ty::Boolean => Ty::Boolean,
                         Ty::Var(v) => {
-                            self.bind(v, &Ty::Boolean); // always rejects
+                            // `not t[0]` is a Boolean-valued use: the
+                            // deferred element binds Boolean (bool table)
+                            self.bind(v, &Ty::Boolean);
                             Ty::Boolean
                         }
                         _ => panic!("Type Error: 'not' requires a Boolean operand"),

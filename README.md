@@ -20,7 +20,7 @@ Phia is an ahead-of-time compiler for a statically typed Lua subset.
 #### Tables & Data Structures
 * **Hash Maps & Sparse Arrays**: Tables are backed strictly by dense, 0-indexed `Vec`s. Sparse inserts cause Out-Of-Memory (OOM) errors, and negative keys trigger runtime panics.
 * **Dot Notation & String Keys**: Table property access (e.g., `t.field`) and string-based keys are unsupported.
-* **Boolean Storage**: Booleans cannot currently be stored as table values.
+* **Mixed-Type Tables**: Every table is monomorphic (i64, f64, string, boolean, or table elements — never a mix).
 
 #### Types & Operators
 * **Logical Operators**: The `and` and `or` keywords are not yet implemented.
@@ -57,19 +57,21 @@ local message = prefix .. suffix
 
 
 -- [3] TABLES: Inferred on first touch. Keys MUST be 0-indexed i64.
-local num_list, float_list, string_list, grid, row_zero = {}, {}, {}, {}, {}
+local num_list, float_list, string_list, bool_list, grid, row_zero = {}, {}, {}, {}, {}, {}
 
 num_list[0] = pure_int      -- Inferred i64 table
 num_list[1] = 42
 float_list[0] = pure_float  -- Inferred f64 table
 string_list[0] = message    -- Inferred string table
-
+bool_list[0] = int_val < 50 -- Inferred boolean table (bit-packed storage)
+bool_list[1] = true
 row_zero[0] = 99
 row_zero[1] = 100
 grid[0] = row_zero          -- Inferred table-of-tables
 grid[0][2] = 102
 -- ERR: String keys forbidden: grid["top"] = row_zero
 -- ERR: Float keys forbidden: num_list[0.5] = 10
+-- ERR: Mixed element types forbidden: bool_list[2] = 42
 
 
 -- [4] LOGIC: 'not' only. No 'and'/'or'.
@@ -101,6 +103,7 @@ end
 local missing_num = num_list[999]     -- Yields 0
 local missing_float = float_list[999] -- Yields 0.0
 local missing_str = string_list[999]  -- Yields ""
+local missing_bool = bool_list[999]   -- Yields false
 
 
 -- [7] COMPREHENSIVE OUTPUT
@@ -112,7 +115,9 @@ print(
     prefix .. suffix,
     grid[0][2],
     missing_num,
-    missing_str
+    missing_str,
+    bool_list[1],
+    missing_bool
 )
 ```
 
@@ -349,7 +354,7 @@ Summary
 
 * **Build-Time Memory Resolution:** Every memory decision—including data types, array storage models, and register assignments—is strictly calculated during compilation. The final program completely skips the overhead of figuring out data types or managing memory allocation on the fly.
 * **Scalar Variables & Register Packing:** Standard variables (scalars) compile directly into Rust local variables. The compiler analyzes exactly when variables are created and last used, packing them efficiently into a limited number of physical hardware registers.
-* **Zero-Cost Dead Code:** If an integer or boolean variable is assigned but never read, the compiler completely eliminates it: the value is constant-folded at compile time, never becomes a Rust variable, and costs zero runtime memory. (Dead float and string variables are not yet eliminated — their loads and concatenations still emit.)
+* **Zero-Cost Dead Code:** If a scalar variable — integer, boolean, float, or string — is assigned but never read, the compiler completely eliminates it: it never becomes a Rust variable and costs zero runtime memory. Integer and boolean values are additionally constant-folded into their uses at compile time; dead float loads and string concatenations are removed outright, along with their heap allocations.
 * **Efficient Loop Variables (Phi Nodes):** For variables that update across loop iterations, the compiler assigns the same physical hardware register to the input and the output. This ensures the data is already in the correct slot for the next iteration without moving it around.
 * **Strict Type Boundaries:** Every value's type is known at compile time, so each value lives in a type-specific pool of Rust variables (`i_r*`, `b_r*`, `f_r*`, `s_r*`, `t_r*`), with floats occupying a register range fully disjoint from the integer range. This prevents the generated Rust code from accidentally mixing up memory addresses (like treating a float pointer as an integer pointer), which guarantees memory safety.
 * **Direct String Allocation:** Strings completely rely on Rust's standard heap allocator. There is no background system trying to save space by reusing identical text (no interning or pooling). Operations like string concatenation create entirely new memory allocations, meaning heavy text processing will generate significant heap traffic.

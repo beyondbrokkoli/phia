@@ -14,14 +14,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut f_r93 = 0f64;
     let mut s_r86 = String::new();
     let mut t_r86: *mut Table = std::ptr::null_mut();
-    let mut t_r111: *mut Table = std::ptr::null_mut();
+    let mut t_r109: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     f_r90 = 8.56;
     f_r91 = -f_r90;
     s_r86 = "beta".to_string();
     let mut new_table = Box::new(Table::new_float());
-    t_r111 = &mut *new_table as *mut Table;
+    t_r109 = &mut *new_table as *mut Table;
     tables.push(new_table);
     f_r90 = 1.87;
     f_r92 = -f_r90;
@@ -33,7 +33,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r111 };
+    let t = unsafe { &mut *t_r109 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
@@ -64,7 +64,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 panic!("Runtime Error: Negative table index");
             }
             let idx = k as usize;
-            let t = unsafe { &mut *t_r111 };
+            let t = unsafe { &mut *t_r109 };
             if idx >= t.farray.len() {
                 t.farray.resize(idx + 1, 0.0);
             }
@@ -80,7 +80,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 panic!("Runtime Error: Negative table index");
             }
             let idx = k as usize;
-            let t = unsafe { &mut *t_r111 };
+            let t = unsafe { &mut *t_r109 };
             if idx >= t.farray.len() {
                 t.farray.resize(idx + 1, 0.0);
             }
@@ -114,15 +114,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r111 };
+    let t = unsafe { &mut *t_r109 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
         *t.farray.get_unchecked_mut(idx) = f_r93;
     }
-    f_r93 = 16.65;
-    f_r90 = -f_r93;
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
@@ -163,30 +161,30 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r111 };
+    let t = unsafe { &mut *t_r109 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
         *t.farray.get_unchecked_mut(idx) = f_r91;
     }
-    f_r90 = 4.43;
-    f_r93 = -f_r90;
-    f_r90 = f_r93 + f_r91;
+    f_r93 = 4.43;
+    f_r90 = -f_r93;
+    f_r93 = f_r90 + f_r91;
     let mut new_table = Box::new(Table::new_float());
-    t_r111 = &mut *new_table as *mut Table;
+    t_r109 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r111 };
+    let t = unsafe { &mut *t_r109 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r90;
+        *t.farray.get_unchecked_mut(idx) = f_r93;
     }
     let k = 0;
     if k < 0 {
@@ -200,14 +198,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
         0
     };
     let mut new_table = Box::new(Table::new_float());
-    t_r111 = &mut *new_table as *mut Table;
+    t_r109 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r111 };
+    let t = unsafe { &mut *t_r109 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
@@ -216,7 +214,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     println!(
         "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
-        "final", i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r90, 0
+        "final", i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r93, 0
     );
     return tables;
 }

@@ -48,6 +48,11 @@ fn is_tstr_reg(r: RegId, alloc: &AllocInfo) -> bool {
     r >= alloc.tstr_base && r < alloc.tstr_base + alloc.n_tstr as RegId
 }
 
+// Bool-ELEMENT tables: same disjoint-range argument, barray side.
+fn is_btable_reg(r: RegId, alloc: &AllocInfo) -> bool {
+    r >= alloc.btable_base && r < alloc.btable_base + alloc.n_btable as RegId
+}
+
 // A const-folded vreg renders as its literal; everything else renders
 // as its pool-prefixed physical register. Renderers are MACROS, not
 // functions: each expansion defines a tiny block-local Display wrapper
@@ -136,7 +141,7 @@ pub fn pool_prefixed(
     if is_float_reg(r, alloc) {
         return format!("f_r{r}");
     }
-    if is_ftable_reg(r, alloc) || is_tstr_reg(r, alloc) {
+    if is_ftable_reg(r, alloc) || is_tstr_reg(r, alloc) || is_btable_reg(r, alloc) {
         return format!("t_r{r}");
     }
     match t {
@@ -211,6 +216,7 @@ fn emit_table_decl(out: &mut String, alloc: &AllocInfo, r: RegId, uses_handles: 
     if fast_phys.contains(&r) {
         let ptr_ty = if is_ftable_reg(r, alloc) { "*mut f64" }
             else if is_tstr_reg(r, alloc) { "*mut String" }
+            else if is_btable_reg(r, alloc) { "*mut bool" }
             else { "*mut i64" };
         out.push_str(&format!("    let mut p_r{r}: {ptr_ty} = std::ptr::null_mut();\n"));
         out.push_str(&format!("    let mut len_r{r} = 0usize;\n"));
@@ -271,6 +277,7 @@ fn emit_instr(
             // storage side at construction and it never changes.
             let float_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::Float));
             let str_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::String));
+            let bool_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::Boolean));
             if uses_handles {
                 // 1-based arena handle; 0 stays reserved for null
                 if float_tbl {
@@ -281,6 +288,11 @@ fn emit_instr(
                 } else if str_tbl {
                     out.push_str(&format!(
                         "{ind}tables.push(Box::new(Table::new_string()));\n\
+                         {ind}t_r{target} = tables.len() as i64;\n"
+                    ));
+                } else if bool_tbl {
+                    out.push_str(&format!(
+                        "{ind}tables.push(Box::new(Table::new_bool()));\n\
                          {ind}t_r{target} = tables.len() as i64;\n"
                     ));
                 } else {
@@ -298,6 +310,12 @@ fn emit_instr(
             } else if str_tbl {
                 out.push_str(&format!(
                     "{ind}let mut new_table = Box::new(Table::new_string());\n\
+                     {ind}t_r{target} = &mut *new_table as *mut Table;\n\
+                     {ind}tables.push(new_table);\n"
+                ));
+            } else if bool_tbl {
+                out.push_str(&format!(
+                    "{ind}let mut new_table = Box::new(Table::new_bool());\n\
                      {ind}t_r{target} = &mut *new_table as *mut Table;\n\
                      {ind}tables.push(new_table);\n"
                 ));
@@ -479,6 +497,7 @@ fn emit_instr(
                     StaticType::Table(_) | StaticType::UnknownTable(_) => {
                         let fld = if is_ftable_reg(r, alloc) { "farray" }
                             else if is_tstr_reg(r, alloc) { "sarray" }
+                            else if is_btable_reg(r, alloc) { "barray" }
                             else { "array" };
                         if uses_handles {
                             fields.push("{}".to_string());
@@ -516,13 +535,16 @@ fn emit_instr(
         Instruction::EnsureCapacity { table, limit } => {
             // Storage side comes from the table's pool: float-element
             // tables resize the farray with 0.0 zeros, string-element
-            // tables the sarray with empty strings, handle tables the
-            // frozen integer template. Monomorphism guarantees the
-            // fast ops riding this EC agree with the pool.
+            // tables the sarray with empty strings, bool-element tables
+            // the barray with false, handle tables the frozen integer
+            // template. Monomorphism guarantees the fast ops riding this
+            // EC agree with the pool.
             let (fld, zero) = if is_ftable_reg(*table, alloc) {
                 ("farray", "0.0")
             } else if is_tstr_reg(*table, alloc) {
                 ("sarray", "String::new()")
+            } else if is_btable_reg(*table, alloc) {
+                ("barray", "false")
             } else {
                 ("array", "0")
             };
@@ -554,6 +576,7 @@ fn emit_instr(
         Instruction::HoistRawPtr { table } => {
             let fld = if is_ftable_reg(*table, alloc) { "farray" }
                 else if is_tstr_reg(*table, alloc) { "sarray" }
+                else if is_btable_reg(*table, alloc) { "barray" }
                 else { "array" };
             if uses_handles {
                 out.push_str(&format!(
@@ -585,6 +608,8 @@ fn emit_instr(
                     // checker rejects it at build time, and the source
                     // is exactly what a loop-carried string is)
                     ("sarray", "String::new()", format!("s_r{val}.clone()"))
+                } else if matches!(ty, StaticType::Boolean) {
+                    ("barray", "false", bop_str!(*val, consts_b).to_string())
                 } else {
                     ("array", "0", iop_str!(*val, consts_i).to_string())
                 };
@@ -603,6 +628,8 @@ fn emit_instr(
                     ("farray", "0.0", fop_str!(*val).to_string())
                 } else if matches!(ty, StaticType::String) {
                     ("sarray", "String::new()", format!("{}.clone()", sop_str!(*val)))
+                } else if matches!(ty, StaticType::Boolean) {
+                    ("barray", "false", bop_str!(*val, consts_b).to_string())
                 } else {
                     ("array", "0", iop_str!(*val, consts_i).to_string())
                 };
@@ -648,6 +675,8 @@ fn emit_instr(
                     ("array", "0", format!("t_r{target}"))
                 } else if matches!(ty, StaticType::Float) {
                     ("farray", "0.0", format!("f_r{target}"))
+                } else if matches!(ty, StaticType::Boolean) {
+                    ("barray", "false", format!("b_r{target}"))
                 } else {
                     ("array", "0", format!("i_r{target}"))
                 };
@@ -669,6 +698,15 @@ fn emit_instr(
                      {ind}f_r{target} = if idx < t.farray.len() {{ unsafe {{ *t.farray.get_unchecked(idx) }} }} else {{ 0.0 }};\n",
                     key = iop_str!(*key, consts_i)
                 ));
+            } else if matches!(ty, StaticType::Boolean) {
+                out.push_str(&format!(
+                    "{ind}let k = {key};\n\
+                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     {ind}let idx = k as usize;\n\
+                     {ind}let t = unsafe {{ &*t_r{table} }};\n\
+                     {ind}b_r{target} = if idx < t.barray.len() {{ unsafe {{ *t.barray.get_unchecked(idx) }} }} else {{ false }};\n",
+                    key = iop_str!(*key, consts_i)
+                ));
             } else {
                 out.push_str(&format!(
                     "{ind}let k = {key};\n\
@@ -688,6 +726,8 @@ fn emit_instr(
             } else if matches!(ty, StaticType::String) {
                 // clone — same immutable-copy semantics as the dyn store
                 format!("{}.clone()", sop_str!(*val))
+            } else if matches!(ty, StaticType::Boolean) {
+                bop_str!(*val, consts_b).to_string()
             } else {
                 iop_str!(*val, consts_i).to_string()
             };
@@ -722,6 +762,8 @@ fn emit_instr(
                     format!("t_r{target}")
                 } else if matches!(ty, StaticType::Float) {
                     format!("f_r{target}")
+                } else if matches!(ty, StaticType::Boolean) {
+                    format!("b_r{target}")
                 } else {
                     format!("i_r{target}")
                 };
@@ -915,11 +957,12 @@ pub fn generate_rust_code(
     // every value once up front; emission below only reads these.
     let AllocInfo {
         n_int: n_i, n_bool: n_b, n_float: n_f, n_str: n_s, n_table: n_t,
-        n_ftable: n_tf, n_tstr: n_ts,
-        phys_base: base, float_base: fbase, ftable_base: tfbase, tstr_base: tsbase,
+        n_ftable: n_tf, n_tstr: n_ts, n_btable: n_tb,
+        phys_base: base, float_base: fbase, ftable_base: tfbase,
+        tstr_base: tsbase, btable_base: tbbase,
     } = *alloc;
-    let (base, fbase, tfbase, tsbase) =
-        (base as usize, fbase as usize, tfbase as usize, tsbase as usize);
+    let (base, fbase, tfbase, tsbase, tbbase) =
+        (base as usize, fbase as usize, tfbase as usize, tsbase as usize, tbbase as usize);
 
     let uses_handles = program_uses_handles(&program.blocks);
 
@@ -945,11 +988,12 @@ pub fn generate_rust_code(
     for r in fbase..fbase + n_f { out.push_str(&format!("    let mut f_r{r} = 0f64;\n")); }
     for r in base..base + n_s { out.push_str(&format!("    let mut s_r{r} = String::new();\n")); }
     // handle tables: the shared id range first, then the disjoint
-    // float-table and string-table ranges — same decl shape, pointer
-    // type from the pool
+    // float-table, string-table and bool-table ranges — same decl shape,
+    // pointer type from the pool
     for r in base..base + n_t { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     for r in tfbase..tfbase + n_tf { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     for r in tsbase..tsbase + n_ts { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
+    for r in tbbase..tbbase + n_tb { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
     let env: EmitEnv = (program, alloc, consts_i, consts_b, uses_handles);

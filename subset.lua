@@ -23,12 +23,14 @@ local message = prefix .. suffix
 
 
 -- [3] TABLES: Inferred on first touch. Keys MUST be 0-indexed i64.
-local num_list, float_list, string_list, grid, row_zero = {}, {}, {}, {}, {}
+local num_list, float_list, string_list, bool_list, grid, row_zero = {}, {}, {}, {}, {}, {}
 
 num_list[0] = pure_int      -- Inferred i64 table
 num_list[1] = 42
 float_list[0] = pure_float  -- Inferred f64 table
 string_list[0] = message    -- Inferred string table
+bool_list[0] = int_val < 50 -- Inferred boolean table (bit-packed storage)
+bool_list[1] = true
 
 row_zero[0] = 99
 row_zero[1] = 100
@@ -36,6 +38,7 @@ grid[0] = row_zero          -- Inferred table-of-tables
 grid[0][2] = 102
 -- ERR: String keys forbidden: grid["top"] = row_zero
 -- ERR: Float keys forbidden: num_list[0.5] = 10
+-- ERR: Mixed element types forbidden: bool_list[2] = 42
 
 
 -- [4] LOGIC: 'not' only. No 'and'/'or'.
@@ -67,6 +70,7 @@ end
 local missing_num = num_list[999]     -- Yields 0
 local missing_float = float_list[999] -- Yields 0.0
 local missing_str = string_list[999]  -- Yields ""
+local missing_bool = bool_list[999]   -- Yields false
 
 
 -- [7] COMPREHENSIVE OUTPUT
@@ -78,5 +82,7 @@ print(
     prefix .. suffix,
     grid[0][2],
     missing_num,
-    missing_str
+    missing_str,
+    bool_list[1],
+    missing_bool
 )

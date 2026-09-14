@@ -27,15 +27,15 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut t_r268: *mut Table = std::ptr::null_mut();
     let mut t_r269: *mut Table = std::ptr::null_mut();
     let mut t_r270: *mut Table = std::ptr::null_mut();
-    let mut t_r336: *mut Table = std::ptr::null_mut();
-    let mut t_r337: *mut Table = std::ptr::null_mut();
+    let mut t_r326: *mut Table = std::ptr::null_mut();
+    let mut t_r327: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     f_r290 = 2.85;
     f_r291 = -f_r290;
     s_r268 = "alpha".to_string();
     let mut new_table = Box::new(Table::new_float());
-    t_r336 = &mut *new_table as *mut Table;
+    t_r326 = &mut *new_table as *mut Table;
     tables.push(new_table);
     f_r290 = 18.13;
     f_r292 = -f_r290;
@@ -45,7 +45,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r336 };
+    let t = unsafe { &mut *t_r326 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
@@ -123,8 +123,6 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     if false {
                         b_r269 = 16 >= i_r268;
                         if b_r269 {
-                            s_r271 = "beta".to_string();
-                            s_r271 = "echo".to_string();
                             i_r269 = 0;
                             loop {
                                 b_r271 = i_r269 < 5;
@@ -146,8 +144,6 @@ pub fn run_baked() -> Vec<Box<Table>> {
                                     break;
                                 }
                             }
-                            f_r293 = 1.86;
-                            f_r294 = -f_r293;
                             b_r269 = b_r268;
                         } else {
                             f_r292 = f_r290 + f_r290;
@@ -156,7 +152,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
                             if b_r271 {
                                 b_r271 = b_r268;
                                 s_r271 = s_r269.clone();
-                                f_r294 = f_r291;
+                                f_r293 = f_r291;
                             } else {
                                 let k = 5;
                                 if k < 0 {
@@ -169,31 +165,31 @@ pub fn run_baked() -> Vec<Box<Table>> {
                                 } else {
                                     0
                                 };
-                                f_r293 = 16.98;
-                                b_r270 = f_r293 < f_r292;
+                                f_r294 = 16.98;
+                                b_r270 = f_r294 < f_r292;
                                 b_r272 = i_r269 < 16;
                                 if b_r272 {
-                                    f_r293 = 19.61;
-                                    f_r295 = -f_r293;
+                                    f_r294 = 19.61;
+                                    f_r295 = -f_r294;
                                     b_r272 = f_r292 == f_r295;
                                     b_r273 = !b_r272;
                                     f_r295 = 17.98;
-                                    f_r293 = -f_r295;
-                                    f_r295 = f_r293 * f_r290;
+                                    f_r294 = -f_r295;
+                                    f_r295 = f_r294 * f_r290;
                                     s_r272 = "echo".to_string();
                                     s_r273 = format!("{}{}", s_r272, s_r269);
                                     s_r271 = s_r273.clone();
-                                    f_r294 = f_r295;
+                                    f_r293 = f_r295;
                                     b_r271 = b_r273;
                                 } else {
                                     s_r271 = s_r269.clone();
-                                    f_r294 = f_r291;
+                                    f_r293 = f_r291;
                                     b_r271 = b_r270;
                                 }
                             }
                             b_r269 = b_r271;
                             s_r269 = s_r271.clone();
-                            f_r291 = f_r294;
+                            f_r291 = f_r293;
                         }
                     } else {
                         b_r269 = b_r268;
@@ -203,9 +199,6 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     if b_r270 {
                         b_r273 = !b_r269;
                         if b_r273 {
-                            f_r295 = 19.59;
-                            f_r293 = -f_r295;
-                            f_r293 = 3.0;
                             b_r268 = b_r269;
                         } else {
                             let k = 0;
@@ -213,15 +206,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
                                 panic!("Runtime Error: Negative table index");
                             }
                             let idx = k as usize;
-                            let t = unsafe { &*t_r336 };
-                            f_r293 = if idx < t.farray.len() {
+                            let t = unsafe { &*t_r326 };
+                            f_r295 = if idx < t.farray.len() {
                                 unsafe { *t.farray.get_unchecked(idx) }
                             } else {
                                 0.0
                             };
-                            f_r293 = 9.42;
-                            f_r295 = -f_r293;
-                            f_r295 = 2.0;
                             b_r273 = b_r269 == b_r269;
                             b_r269 = !b_r273;
                             b_r268 = b_r269;
@@ -275,9 +265,6 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     } else {
                         b_r268 = b_r269;
                     }
-                } else {
-                    f_r292 = 1.9;
-                    f_r292 = 9.67;
                 }
             }
             let k = 5;
@@ -325,22 +312,22 @@ pub fn run_baked() -> Vec<Box<Table>> {
     if b_r269 {
         b_r269 = s_r269 == s_r269;
         if b_r269 {
-            f_r294 = 16.98;
-            f_r293 = f_r290 + f_r294;
-            f_r294 = 3.42;
-            f_r295 = -f_r294;
-            f_r294 = f_r293 + f_r295;
+            f_r293 = 16.98;
+            f_r294 = f_r290 + f_r293;
+            f_r293 = 3.42;
+            f_r295 = -f_r293;
+            f_r293 = f_r294 + f_r295;
             let k = 4;
             if k < 0 {
                 panic!("Runtime Error: Negative table index");
             }
             let idx = k as usize;
-            let t = unsafe { &mut *t_r336 };
+            let t = unsafe { &mut *t_r326 };
             if idx >= t.farray.len() {
                 t.farray.resize(idx + 1, 0.0);
             }
             unsafe {
-                *t.farray.get_unchecked_mut(idx) = f_r294;
+                *t.farray.get_unchecked_mut(idx) = f_r293;
             }
             if false {
                 let k = 0;
@@ -406,7 +393,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             }
         }
         let mut new_table = Box::new(Table::new_string());
-        t_r337 = &mut *new_table as *mut Table;
+        t_r327 = &mut *new_table as *mut Table;
         tables.push(new_table);
         s_r272 = "beta".to_string();
         s_r273 = format!("{}{}", s_r272, s_r269);
@@ -415,7 +402,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r337 };
+        let t = unsafe { &mut *t_r327 };
         if idx >= t.sarray.len() {
             t.sarray.resize(idx + 1, String::new());
         }
@@ -440,39 +427,39 @@ pub fn run_baked() -> Vec<Box<Table>> {
         *t.array.get_unchecked_mut(idx) = -18;
     }
     f_r295 = 17.14;
-    f_r293 = 5.0;
-    f_r294 = f_r295 / f_r293;
+    f_r294 = 5.0;
+    f_r293 = f_r295 / f_r294;
     let k = 4;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r336 };
+    let t = unsafe { &mut *t_r326 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r294;
+        *t.farray.get_unchecked_mut(idx) = f_r293;
     }
     i_r269 = 0;
     loop {
         b_r269 = i_r269 < 4;
         if b_r269 {
-            f_r294 = 11.74;
-            f_r295 = -f_r294;
-            f_r294 = 3.0;
-            f_r293 = f_r295 / f_r294;
+            f_r293 = 11.74;
+            f_r295 = -f_r293;
+            f_r293 = 3.0;
+            f_r294 = f_r295 / f_r293;
             let k = 5;
             if k < 0 {
                 panic!("Runtime Error: Negative table index");
             }
             let idx = k as usize;
-            let t = unsafe { &mut *t_r336 };
+            let t = unsafe { &mut *t_r326 };
             if idx >= t.farray.len() {
                 t.farray.resize(idx + 1, 0.0);
             }
             unsafe {
-                *t.farray.get_unchecked_mut(idx) = f_r293;
+                *t.farray.get_unchecked_mut(idx) = f_r294;
             }
             let k = 4;
             if k < 0 {

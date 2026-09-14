@@ -268,28 +268,48 @@ pub fn simplify(program: &mut IrProgram) {
         }
     }
 
-    let mut uses: HashMap<RegId, usize> = HashMap::new();
-    for b in &program.blocks {
-        for i in &b.instrs { for u in i.use_regs() { *uses.entry(u).or_insert(0) += 1; } }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator { *uses.entry(*cond).or_insert(0) += 1; }
-    }
+    // DCE sweeps to a FIXPOINT: a removed instruction was its operands'
+    // last use, so each sweep can expose one more layer of dead defs. Int
+    // and bool chains mostly ride the const maps instead (a folded def
+    // costs nothing whether or not it lingers in the IR), but floats and
+    // strings have no const map — a dead Concat's LoadString operands die
+    // only on the next sweep, and the chain head on the sweep after that.
+    loop {
+        let mut uses: HashMap<RegId, usize> = HashMap::new();
+        for b in &program.blocks {
+            for i in &b.instrs { for u in i.use_regs() { *uses.entry(u).or_insert(0) += 1; } }
+            if let Some(Terminator::Branch { cond, .. }) = &b.terminator { *uses.entry(*cond).or_insert(0) += 1; }
+        }
 
-    for b in &mut program.blocks {
-        b.instrs.retain(|i| {
-            if matches!(i, Instruction::Move { target, source, .. } if target == source) { return false; }
-            // dead PURE defs only: NewTable allocates output, GetTable can
-            // panic on negative keys — neither is ever "dead code" here.
-            let dead = i.def_reg().map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
-            let pure = matches!(i,
-                Instruction::LoadInt { .. } | Instruction::LoadBool { .. }
-                | Instruction::Move { .. }
-                | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. }
-                | Instruction::Mul { .. } | Instruction::Div { .. }
-                | Instruction::IntDiv { .. } | Instruction::Mod { .. }
-                | Instruction::Neg { .. }
-                | Instruction::Leq { .. } | Instruction::Geq { .. }
-                | Instruction::Eq { .. } | Instruction::Not { .. });
-            !(dead && pure)
-        });
+        let mut removed = false;
+        for b in &mut program.blocks {
+            b.instrs.retain(|i| {
+                if matches!(i, Instruction::Move { target, source, .. } if target == source) {
+                    removed = true;
+                    return false;
+                }
+                // dead PURE defs only: NewTable allocates output, GetTable can
+                // panic on negative keys — neither is ever "dead code" here.
+                // LoadFloat/LoadString/Concat join the pure set despite their
+                // heap traffic: their only hazard is OOM, a hazard class the
+                // dead Div already establishes (a dead `x = a / b` loses its
+                // /0 panic the same way).
+                let dead = i.def_reg().map(|d| uses.get(&d).copied().unwrap_or(0) == 0).unwrap_or(false);
+                let pure = matches!(i,
+                    Instruction::LoadInt { .. } | Instruction::LoadBool { .. }
+                    | Instruction::LoadFloat { .. } | Instruction::LoadString { .. }
+                    | Instruction::Concat { .. } | Instruction::Move { .. }
+                    | Instruction::Add { .. } | Instruction::Sub { .. } | Instruction::Less { .. }
+                    | Instruction::Mul { .. } | Instruction::Div { .. }
+                    | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                    | Instruction::Neg { .. }
+                    | Instruction::Leq { .. } | Instruction::Geq { .. }
+                    | Instruction::Eq { .. } | Instruction::Not { .. });
+                let drop = dead && pure;
+                if drop { removed = true; }
+                !drop
+            });
+        }
+        if !removed { break; }
     }
 }
