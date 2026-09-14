@@ -134,6 +134,7 @@ local POSITIVE = {
     "fuzzer_03_codegen_panic_2.lua",
     "string_07_concat.lua",
     "string_08_tag_escaping.lua",
+    "feat_local_multi.lua",
 }
 local NEGATIVE = {
     "bug_10a.lua",
@@ -163,6 +164,9 @@ local NEGATIVE = {
     "string_neg_mixed_concat.lua",
     "string_neg_cmp.lua",
     "string_neg_element_conflict.lua",
+    "feat_local_neg_arity_short.lua",
+    "feat_local_neg_arity_long.lua",
+    "feat_local_neg_dup_name.lua",
 }
 local PANIC = {
     "bug_05a.lua",

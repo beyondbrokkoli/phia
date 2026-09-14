@@ -213,9 +213,21 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::LocalDecl { name, expr } => {
-                let expr_type = self.check_expr(expr);
-                self.declare_var(name.clone(), expr_type);
+            Stmt::LocalDecl { names, exprs } => {
+                // Lua's evaluate-then-bind order: every RHS is checked
+                // against the scope as it was BEFORE the statement —
+                // none of the new names is visible to any of them
+                // (`local a, b = b, a` swaps; a RHS naming a fresh
+                // variable still means the outer one). Only after all
+                // expressions type-check do the names enter the scope,
+                // positionally paired.
+                let mut expr_types = Vec::with_capacity(exprs.len());
+                for expr in exprs {
+                    expr_types.push(self.check_expr(expr));
+                }
+                for (name, ty) in names.iter().zip(expr_types) {
+                    self.declare_var(name.clone(), ty);
+                }
             }
             Stmt::Assignment { name, expr } => {
                 let expected_type = self.deref(&self.get_var_type(name));

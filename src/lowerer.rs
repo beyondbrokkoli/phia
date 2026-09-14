@@ -182,10 +182,23 @@ impl IrLowerer {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::LocalDecl { name, expr } => {
-                let target_reg = self.next_reg();
-                let (_, ty) = self.lower_expr(expr, Some(target_reg));
-                self.declare_var(name.clone(), target_reg, ty);
+            Stmt::LocalDecl { names, exprs } => {
+                // Evaluate-then-bind, mirroring the checker: every RHS
+                // lowers under the OLD bindings before any name becomes
+                // visible, so `local a, b = b, a` swaps and a RHS naming
+                // a fresh variable reads the outer one — Lua's scoping
+                // for the multi-binding form, not sequential decls.
+                // Single-pair statements mint and lower exactly as they
+                // always did: one target reg, then the declare.
+                let mut bindings = Vec::with_capacity(exprs.len());
+                for expr in exprs {
+                    let target_reg = self.next_reg();
+                    let (_, ty) = self.lower_expr(expr, Some(target_reg));
+                    bindings.push((target_reg, ty));
+                }
+                for (name, (reg, ty)) in names.iter().zip(bindings) {
+                    self.declare_var(name.clone(), reg, ty);
+                }
             }
             Stmt::Assignment { name, expr } => {
                 let new_reg = self.next_reg();

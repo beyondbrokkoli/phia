@@ -59,8 +59,11 @@ pub enum Expr {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     LocalDecl {
-        name: String,
-        expr: Expr,
+        // One name per binding, positionally paired with `exprs`:
+        // `local a, b = x, y`. Counts always match (the parser enforces
+        // exact arity — there is no nil to pad a short list with).
+        names: Vec<String>,
+        exprs: Vec<Expr>,
     },
     Assignment {
         name: String,

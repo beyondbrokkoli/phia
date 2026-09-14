@@ -36,13 +36,37 @@ impl<'a> Parser<'a> {
         match self.tokens.peek().cloned() {
             Some(Token::Local) => {
                 self.tokens.next(); // consume 'local'
-                let name = match self.tokens.next() {
-                    Some(Token::Identifier(n)) => n.to_string(),
-                    _ => panic!("Syntax Error: Expected variable name after 'local'"),
-                };
+                // Comma-separated binding list: `local a, b = x, y`.
+                // The names pair positionally with the values below; the
+                // arity check at the end keeps that pairing total (Lua
+                // pads short lists with nil / drops extras — there is no
+                // nil here, so a count mismatch is a syntax error).
+                let mut names = Vec::new();
+                loop {
+                    let name = match self.tokens.next() {
+                        Some(Token::Identifier(n)) => n.to_string(),
+                        _ => panic!("Syntax Error: Expected variable name after 'local'"),
+                    };
+                    names.push(name);
+                    if matches!(self.tokens.peek(), Some(Token::Comma)) {
+                        self.tokens.next(); // consume ','
+                    } else {
+                        break;
+                    }
+                }
                 self.expect(Token::Assign);
-                let expr = self.parse_expr();
-                Stmt::LocalDecl { name, expr }
+                let mut exprs = vec![self.parse_expr()];
+                while matches!(self.tokens.peek(), Some(Token::Comma)) {
+                    self.tokens.next(); // consume ','
+                    exprs.push(self.parse_expr());
+                }
+                if exprs.len() != names.len() {
+                    panic!(
+                        "Syntax Error: 'local' binds {} names to {} values — counts must match",
+                        names.len(), exprs.len()
+                    );
+                }
+                Stmt::LocalDecl { names, exprs }
             }
             Some(Token::While) => {
                 self.tokens.next(); // consume 'while'
