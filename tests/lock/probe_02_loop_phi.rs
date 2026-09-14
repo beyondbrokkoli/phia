@@ -72,7 +72,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
             println!(
-                "iter\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
+                "iter",
                 i_r17,
                 match tables.get((t_r17 - 1) as usize) {
                     Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),
@@ -89,7 +90,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
     }
     println!(
-        "exit\t{}\t{}",
+        "{}\t{}\t{}",
+        "exit",
         i_r17,
         match tables.get((t_r17 - 1) as usize) {
             Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),

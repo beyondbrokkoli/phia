@@ -61,9 +61,7 @@ end
 
 
 -- Witness.
---
--- This makes the result observable and prevents the benchmark
--- from being considered dead computation.
+
 local witness = 0
 
 i = 0

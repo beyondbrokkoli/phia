@@ -42,7 +42,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             } else {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
-            println!("iter\t{}\ttable(len={})", i_r18, unsafe {
+            println!("{}\t{}\ttable(len={})", "iter", i_r18, unsafe {
                 (*t_r18).array.len()
             });
             i_r18 = i_r18 + 1;

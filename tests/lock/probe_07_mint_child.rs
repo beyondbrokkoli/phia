@@ -109,7 +109,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 0
             };
             println!(
-                "iter\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
+                "iter",
                 i_r26,
                 match tables.get((t_r26 - 1) as usize) {
                     Some(t) => format!("table#{}(len={})", t_r26, t.array.len()),
@@ -126,7 +127,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
     }
     println!(
-        "exit\t{}",
+        "{}\t{}",
+        "exit",
         match tables.get((t_r26 - 1) as usize) {
             Some(t) => format!("table#{}(len={})", t_r26, t.array.len()),
             None => "nil".to_string(),

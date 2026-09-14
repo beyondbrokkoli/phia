@@ -57,11 +57,13 @@ local pure_float = float_val + 1.5
 
 
 -- 2. STRING CONCATENATION
-local prefix = "Value: "
+local prefix = "value:"
 local suffix = " units"
 
 -- SUCCESS: String .. String ONLY
 local message = prefix .. suffix
+local extra = " + extra"
+print(message .. extra)
 
 -- FAILURE PREVENTED: No implicit tostring()!
 -- local crash_str = prefix .. int_val -- ERROR: Concatenation requires Strings
@@ -97,16 +99,7 @@ grid[0][2] = 102
 -- grid[0]["x"] = 500       -- ERROR: Table index must be an Integer
 
 
--- 4. PRINT (Output & Debugging)
--- 'print' works like standard Lua: one tab-separated line per call,
--- values printed as-is (strings unquoted, booleans as true/false).
--- An optional string literal first argument doubles as the probe tag
--- naming the line in the probe_map.txt build sidecar, where every
--- print's physical registers are recorded for debugging.
-print("state", pure_int, pure_float, num_list[1])
-
-
--- 5. COMPARISONS & LOGIC
+-- 4. COMPARISONS & LOGIC
 -- 'not' is the ONLY supported logical operator.
 local is_active = not false
 
@@ -123,7 +116,7 @@ local str_eq = (prefix == "Value: ")
 -- local str_cmp = (prefix < suffix) -- ERROR: Relational operators cannot compare strings
 
 
--- 6. DIVISION SEMANTICS (CRITICAL DEVIATION)
+-- 5. DIVISION SEMANTICS (CRITICAL DEVIATION)
 -- Unlike standard Lua (which yields a float), the '/' operator on Integers truncates.
 local trunc_div = 7 / -2       -- Yields -3 (Integer)
 local floor_div = 7 // -2      -- Yields -4 (Integer)
@@ -133,7 +126,7 @@ local mod_op = -7 % 3          -- Yields 2 (Takes the divisor's sign)
 local float_div = 1.0 / 4.0    -- Yields 0.25 (Float)
 
 
--- 7. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
+-- 6. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
 -- 'for' loops are missing; you MUST use 'while'.
 -- Standard 'if / elseif / else' logic is FULLY supported.
 -- There is no 'nil' keyword.
@@ -150,18 +143,6 @@ end
 local missing_num = num_list[999]       -- Yields 0   (Integer)
 local missing_float = float_list[999]   -- Yields 0.0 (Float)
 local missing_str = string_list[999]    -- Yields ""  (String)
-
-
--- 8. ASCII ARTWORK (String Concatenation Folding)
--- Chaining string concatenations evaluates safely and pins the register for consistent spacing.
-local line = "-" .. "~" .. "@"
--- stdout: art, a tab, then -~@ (probe_map FINAL pins its register: s_r95)
-print("art", line)
-
-
--- 9. EMPTY PRINT
--- A bare print() outputs an empty line, exactly like standard Lua.
-print()
 ```
 
 ### Quickstart
@@ -273,9 +254,7 @@ end
 
 
 -- Witness.
---
--- This makes the result observable and prevents the benchmark
--- from being considered dead computation.
+
 local witness = 0
 
 i = 0
@@ -370,29 +349,29 @@ TABLE 0 LEN 10000000 NZ 10000000 CHECKSUM 4649550937620586046
 TABLE 1 LEN 10000000 NZ 10000000 CHECKSUM 4621099214076745768
 TABLE 2 LEN 10000000 NZ 10000000 CHECKSUM 4655222127977869585
 STATS fast_sets=6;fast_gets=6;dyn_sets=0;dyn_gets=0;hoists=9;hoist_ctx=0,0,0,1,1,1,0,0,0
-TIME 5.303506499s
+TIME 4.958683467s
 
-real	0m5,329s
-user	0m5,310s
-sys	0m0,010s
+real	0m4,982s
+user	0m4,964s
+sys	0m0,011s
 $ time tests/benchmark/race
 witness 160355959
 
-real	0m5,732s
-user	0m5,704s
-sys	0m0,011s
-$ hyperfine --warmup 1 'target/release/phia > /dev/null' 'tests/benchmark/race > /dev/null'
-Benchmark 1: target/release/phia > /dev/null
-  Time (mean ± σ):      5.214 s ±  0.126 s    [User: 5.195 s, System: 0.008 s]
-  Range (min … max):    5.021 s …  5.490 s    10 runs
+real	0m5,435s
+user	0m5,410s
+sys	0m0,017s
+$ hyperfine --warmup 1 'target/release/phia>/dev/null' 'tests/benchmark/race>/dev/null'
+Benchmark 1: target/release/phia>/dev/null
+  Time (mean ± σ):      5.108 s ±  0.129 s    [User: 5.088 s, System: 0.009 s]
+  Range (min … max):    4.991 s …  5.300 s    10 runs
 
-Benchmark 2: tests/benchmark/race > /dev/null
-  Time (mean ± σ):      5.681 s ±  0.095 s    [User: 5.662 s, System: 0.008 s]
-  Range (min … max):    5.568 s …  5.910 s    10 runs
+Benchmark 2: tests/benchmark/race>/dev/null
+  Time (mean ± σ):      5.808 s ±  0.135 s    [User: 5.782 s, System: 0.011 s]
+  Range (min … max):    5.627 s …  5.967 s    10 runs
 
 Summary
-  target/release/phia > /dev/null ran
-    1.09 ± 0.03 times faster than tests/benchmark/race > /dev/null
+  target/release/phia>/dev/null ran
+    1.14 ± 0.04 times faster than tests/benchmark/race>/dev/null
 ```
 
 ### About Memory

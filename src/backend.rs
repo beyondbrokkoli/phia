@@ -446,9 +446,18 @@ fn emit_instr(
         Instruction::DebugProbe { tag, operands } => {
             let mut fields: Vec<String> = Vec::new();
             let mut args: Vec<String> = Vec::new();
-            // a brace in the user tag would be a format directive
-            let safe_tag = tag.replace('{', "{{").replace('}', "}}");
-            if !safe_tag.is_empty() { fields.push(safe_tag); }
+            // The tag is RAW user text (the lexer does no escape
+            // processing), so it can never sit in format-template
+            // position: a backslash there is re-read as a Rust escape —
+            // an invalid one (\p) breaks the build, a valid one (\n)
+            // silently corrupts the output. It rides as the first
+            // println! ARGUMENT, embedded with {:?} — the LoadString
+            // invariant: Debug escaping always renders a valid Rust
+            // literal, and runtime {} prints it byte-for-byte.
+            if !tag.is_empty() {
+                fields.push("{}".to_string());
+                args.push(format!("{:?}", tag));
+            }
             for &(r, ref t) in operands {
                 match t {
                     StaticType::Integer => {
@@ -495,11 +504,8 @@ fn emit_instr(
                 out.push_str(&format!("{ind}println!();\n"));
                 return;
             }
-            if args.is_empty() {
-                // print("tag"): the literal is the whole line
-                out.push_str(&format!("{ind}println!(\"{}\");\n", fields.join("\\t")));
-                return;
-            }
+            // print("tag") needs no special case: the tag is an argument
+            // like any operand, so a non-empty fields list always has one
             out.push_str(&format!(
                 "{ind}println!(\"{}\", {});\n",
                 fields.join("\\t"),

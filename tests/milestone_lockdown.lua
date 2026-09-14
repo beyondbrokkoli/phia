@@ -117,6 +117,7 @@ local LOCKED_TESTS = {
     "fuzzer_02_codegen_panic_1.lua",
     "fuzzer_03_codegen_panic_2.lua",
     "string_07_concat.lua",
+    "string_08_tag_escaping.lua",
 }
 
 local LOCK_DIR = "tests/lock"

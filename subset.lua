@@ -23,11 +23,13 @@ local pure_float = float_val + 1.5
 
 
 -- 2. STRING CONCATENATION
-local prefix = "Value: "
+local prefix = "value:"
 local suffix = " units"
 
 -- SUCCESS: String .. String ONLY
 local message = prefix .. suffix
+local extra = " + extra"
+print(message .. extra)
 
 -- FAILURE PREVENTED: No implicit tostring()!
 -- local crash_str = prefix .. int_val -- ERROR: Concatenation requires Strings
@@ -63,16 +65,7 @@ grid[0][2] = 102
 -- grid[0]["x"] = 500       -- ERROR: Table index must be an Integer
 
 
--- 4. PRINT (Output & Debugging)
--- 'print' works like standard Lua: one tab-separated line per call,
--- values printed as-is (strings unquoted, booleans as true/false).
--- An optional string literal first argument doubles as the probe tag
--- naming the line in the probe_map.txt build sidecar, where every
--- print's physical registers are recorded for debugging.
-print("state", pure_int, pure_float, num_list[1])
-
-
--- 5. COMPARISONS & LOGIC
+-- 4. COMPARISONS & LOGIC
 -- 'not' is the ONLY supported logical operator.
 local is_active = not false
 
@@ -89,7 +82,7 @@ local str_eq = (prefix == "Value: ")
 -- local str_cmp = (prefix < suffix) -- ERROR: Relational operators cannot compare strings
 
 
--- 6. DIVISION SEMANTICS (CRITICAL DEVIATION)
+-- 5. DIVISION SEMANTICS (CRITICAL DEVIATION)
 -- Unlike standard Lua (which yields a float), the '/' operator on Integers truncates.
 local trunc_div = 7 / -2       -- Yields -3 (Integer)
 local floor_div = 7 // -2      -- Yields -4 (Integer)
@@ -99,7 +92,7 @@ local mod_op = -7 % 3          -- Yields 2 (Takes the divisor's sign)
 local float_div = 1.0 / 4.0    -- Yields 0.25 (Float)
 
 
--- 7. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
+-- 6. CONTROL FLOW & ABSENT KEYS (TYPE-SPECIFIC ZERO VALUES)
 -- 'for' loops are missing; you MUST use 'while'.
 -- Standard 'if / elseif / else' logic is FULLY supported.
 -- There is no 'nil' keyword.
@@ -116,15 +109,3 @@ end
 local missing_num = num_list[999]       -- Yields 0   (Integer)
 local missing_float = float_list[999]   -- Yields 0.0 (Float)
 local missing_str = string_list[999]    -- Yields ""  (String)
-
-
--- 8. ASCII ARTWORK (String Concatenation Folding)
--- Chaining string concatenations evaluates safely and pins the register for consistent spacing.
-local line = "-" .. "~" .. "@"
--- stdout: art, a tab, then -~@ (probe_map FINAL pins its register: s_r95)
-print("art", line)
-
-
--- 9. EMPTY PRINT
--- A bare print() outputs an empty line, exactly like standard Lua.
-print()

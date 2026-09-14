@@ -338,8 +338,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         *t.sarray.get_unchecked_mut(idx) = s_r173.clone();
     }
     println!(
-        "final\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
-        19, f_r184, s_r172, true, false, s_r170, s_r171, 9, f_r187, -2
+        "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
+        "final", 19, f_r184, s_r172, true, false, s_r170, s_r171, 9, f_r187, -2
     );
     return tables;
 }

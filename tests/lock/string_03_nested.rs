@@ -123,7 +123,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         String::new()
     };
     println!(
-        "nested\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}",
+        "nested",
         match tables.get((t_r17 - 1) as usize) {
             Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),
             None => "nil".to_string(),

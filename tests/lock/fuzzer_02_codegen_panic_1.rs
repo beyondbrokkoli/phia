@@ -507,8 +507,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     s_r272 = "beta".to_string();
     s_r271 = format!("{}{}", s_r273, s_r272);
     println!(
-        "final\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}\t{}",
-        16, f_r291, s_r271, b_r273, s_r269, -2, s_r268, f_r290, 11, 1
+        "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}\t{}",
+        "final", 16, f_r291, s_r271, b_r273, s_r269, -2, s_r268, f_r290, 11, 1
     );
     return tables;
 }

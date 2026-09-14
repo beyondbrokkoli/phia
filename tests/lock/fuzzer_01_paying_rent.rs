@@ -215,8 +215,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         *t.farray.get_unchecked_mut(idx) = f_r91;
     }
     println!(
-        "final\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
-        i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r90, 0
+        "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
+        "final", i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r90, 0
     );
     return tables;
 }
