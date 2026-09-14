@@ -430,34 +430,41 @@ fn emit_instr(
         Instruction::Not { target, source } =>
             out.push_str(&format!("{ind}b_r{target} = !{};\n", bop_str!(*source, consts_b))),
 
-        // Runtime observation. One line per trip, naming each operand's
-        // physical slot: the runtime line names the exact register
-        // ir_final_cfg.txt shows, which is what joins a run back to its
-        // dump. Determinism contract: values, handles and arena-derived
-        // lengths only — never addresses — so PROBE lines stay
-        // re-derivable pins. A table operand prints its handle (0 is
-        // the one observable nil in the language) plus its materialized
-        // length; a nil handle's len renders as MAX, a sentinel no real
-        // table can collide with.
+        // Runtime observation, Lua-style: the line prints exactly what
+        // print received — the literal tag (first argument, when present)
+        // as the first tab-separated field, then each operand's value,
+        // strings raw and unquoted. No PROBE prefix, no register names:
+        // the register mapping lives in the probe_map.txt sidecar
+        // (build.rs scan_probes), which pins each probe site's
+        // pool-prefixed physical registers, block, and depth; the tag and
+        // line order join the two. Determinism contract unchanged:
+        // values, handles and arena-derived lengths only — never
+        // addresses. A null table handle (handle mode) prints `nil` —
+        // the one observable nil in the language; a live table prints
+        // its 1-based arena handle and materialized length (pointer
+        // mode has no handle: `table(len=N)`).
         Instruction::DebugProbe { tag, operands } => {
-            let mut fmt_parts: Vec<String> = Vec::new();
+            let mut fields: Vec<String> = Vec::new();
             let mut args: Vec<String> = Vec::new();
+            // a brace in the user tag would be a format directive
+            let safe_tag = tag.replace('{', "{{").replace('}', "}}");
+            if !safe_tag.is_empty() { fields.push(safe_tag); }
             for &(r, ref t) in operands {
                 match t {
                     StaticType::Integer => {
-                        fmt_parts.push(format!("i_r{r}={{}}"));
+                        fields.push("{}".to_string());
                         args.push(iop_str!(r, consts_i).to_string());
                     }
                     StaticType::Float => {
-                        fmt_parts.push(format!("f_r{r}={{:?}}"));
+                        fields.push("{:?}".to_string());
                         args.push(fop_str!(r).to_string());
                     }
                     StaticType::Boolean => {
-                        fmt_parts.push(format!("b_r{r}={{}}"));
+                        fields.push("{}".to_string());
                         args.push(bop_str!(r, consts_b).to_string());
                     }
                     StaticType::String => {
-                        fmt_parts.push(format!("s_r{r}={{:?}}"));
+                        fields.push("{}".to_string());
                         args.push(sop_str!(r).to_string());
                     }
                     StaticType::Table(_) | StaticType::UnknownTable(_) => {
@@ -465,11 +472,11 @@ fn emit_instr(
                             else if is_tstr_reg(r, alloc) { "sarray" }
                             else { "array" };
                         if uses_handles {
-                            fmt_parts.push(format!("t_r{r}={{}} len_r{r}={{}}"));
-                            args.push(format!("t_r{r}"));
+                            fields.push("{}".to_string());
                             args.push(format!(
                                 "match tables.get((t_r{r} - 1) as usize) \
-                                 {{ Some(t) => t.{fld}.len(), None => usize::MAX }}"
+                                 {{ Some(t) => format!(\"table#{{}}(len={{}})\", t_r{r}, t.{fld}.len()), \
+                                 None => \"nil\".to_string() }}"
                             ));
                         } else {
                             // pointer mode: a table-typed operand is
@@ -477,27 +484,25 @@ fn emit_instr(
                             // nested programs read tables out of tables,
                             // and those render handle mode), so the
                             // deref cannot see null
-                            fmt_parts.push(format!("len_r{r}={{}}"));
+                            fields.push("table(len={})".to_string());
                             args.push(format!("unsafe {{ (*t_r{r}).{fld}.len() }}"));
                         }
                     }
                 }
             }
-            // a brace in the user tag would be a format directive
-            let safe_tag = tag.replace('{', "{{").replace('}', "}}");
-            if operands.is_empty() {
-                if safe_tag.is_empty() {
-                    // print() — no tag, no operands: Lua's bare newline
-                    out.push_str(&format!("{ind}println!();\n"));
-                } else {
-                    // probe("tag") with no operands: no {} placeholder, no args
-                    out.push_str(&format!("{ind}println!(\"PROBE {safe_tag}:\");\n"));
-                }
+            if fields.is_empty() {
+                // print(): a bare newline, exactly like Lua
+                out.push_str(&format!("{ind}println!();\n"));
+                return;
+            }
+            if args.is_empty() {
+                // print("tag"): the literal is the whole line
+                out.push_str(&format!("{ind}println!(\"{}\");\n", fields.join("\\t")));
                 return;
             }
             out.push_str(&format!(
-                "{ind}println!(\"PROBE {safe_tag}: {}\", {});\n",
-                fmt_parts.join(" "),
+                "{ind}println!(\"{}\", {});\n",
+                fields.join("\\t"),
                 args.join(", ")
             ));
         }

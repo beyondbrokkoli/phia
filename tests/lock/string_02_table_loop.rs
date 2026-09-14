@@ -54,7 +54,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
             println!(
-                "PROBE iter: i_r22={} s_r23={:?} len_r26={} s_r22={:?}",
+                "iter\t{}\t{}\ttable(len={})\t{}",
                 i_r22,
                 s_r23,
                 unsafe { (*t_r26).sarray.len() },
@@ -65,7 +65,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             break;
         }
     }
-    println!("PROBE exit: s_r23={:?} len_r26={}", s_r23, unsafe {
+    println!("exit\t{}\ttable(len={})", s_r23, unsafe {
         (*t_r26).sarray.len()
     });
     return tables;

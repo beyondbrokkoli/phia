@@ -1,16 +1,19 @@
 -- probe_02_loop_phi.lua  [POSITIVE — in-loop probe: phi trajectory + arena growth]
 -- Nested program (table-valued stores) => handle mode: table operands print
--- their 1-based arena handle and materialized length. The per-iteration
--- probe shows the induction variable's coalesced phi slot, t's len growth,
--- and the fresh row handles the arena mints each trip.
--- Observables pinned below: len_r17=3 on the FIRST trip is tier4's
+-- their 1-based arena handle and materialized length (table#H(len=N)). The
+-- per-iteration print shows t's len growth and the fresh row handles the
+-- arena mints each trip; the induction variable's coalesced phi slot is
+-- pinned by EXPECT_PROBE (probe_map names it i_r17).
+-- Observables pinned below: table#1(len=3) on the FIRST trip is tier4's
 -- pre-header EnsureCapacity sizing t to the limit before iteration 1;
--- t_r18 walking 2,3,4 is the arena's monotone growth.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE iter: i_r17=0 t_r17=1 len_r17=3 t_r18=2 len_r18=1
--- EXPECT: PROBE iter: i_r17=1 t_r17=1 len_r17=3 t_r18=3 len_r18=1
--- EXPECT: PROBE iter: i_r17=2 t_r17=1 len_r17=3 t_r18=4 len_r18=1
--- EXPECT: PROBE exit: i_r17=3 t_r17=1 len_r17=3
+-- table#2..#4 walking is the arena's monotone growth.
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: iter	0	table#1(len=3)	table#2(len=1)
+-- EXPECT_PRINT: iter	1	table#1(len=3)	table#3(len=1)
+-- EXPECT_PRINT: iter	2	table#1(len=3)	table#4(len=1)
+-- EXPECT_PRINT: exit	3	table#1(len=3)
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r17 t_r17 len_r17 t_r18 len_r18
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 i_r17 t_r17 len_r17
 -- EXPECT: NTABLES 4
 -- EXPECT: TABLE 0 LEN 3 NZ 3 CHECKSUM 20
 local t = {}

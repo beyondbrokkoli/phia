@@ -10,13 +10,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut t_r30: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    println!("PROBE before: i_r0={} b_r1={}", 1, true);
+    println!("before\t{}\t{}", 1, true);
     if true {
         i_r30 = 2;
     } else {
         i_r30 = 11;
     }
-    println!("PROBE join: i_r30={} b_r1={}", i_r30, true);
+    println!("join\t{}\t{}", i_r30, true);
     i_r31 = i_r30;
     i_r30 = 0;
     loop {
@@ -28,7 +28,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             break;
         }
     }
-    println!("PROBE after: i_r31={} i_r30={}", i_r31, i_r30);
+    println!("after\t{}\t{}", i_r31, i_r30);
     let mut new_table = Box::new(Table::new());
     t_r30 = &mut *new_table as *mut Table;
     tables.push(new_table);

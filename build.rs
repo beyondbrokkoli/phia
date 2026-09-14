@@ -89,10 +89,12 @@ fn render_dispatched_ir(out: &mut String, blocks: &[ir::BasicBlock]) {
 // PROBE MAP scan — one line per DebugProbe in stable emission order.
 // Probes are never DCE'd and blocks are never reordered, so the ordinal
 // joins the MID and FINAL scans of one build, and the tag joins the
-// runtime `PROBE <tag>:` lines. MID renders vreg ids and annotates an
-// operand whose def is a (still intact) phi with its incoming edges;
-// FINAL renders the exact value tokens the runtime line prints
-// (pool-prefixed physical names, matching emission).
+// runtime print lines (the tag is the line's first tab-separated field
+// when the first argument was a string literal). MID renders vreg ids
+// and annotates an operand whose def is a (still intact) phi with its
+// incoming edges; FINAL renders the pool-prefixed physical registers
+// of each probe site — the register half of the join, since the
+// runtime line itself now prints clean values only (Lua-style print).
 fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
     use ir::Instruction as I;
     // vreg -> its defining Phi. One hop only (direct phi defs) — the
@@ -401,12 +403,13 @@ fn main() {
     let probe_final = scan_probes(&ir_program.blocks, false);
     if !probe_final.is_empty() {
         let mut s = String::from(
-            "== PROBE MAP — joins runtime PROBE lines to both IR dumps ==\n\
+            "== PROBE MAP — joins runtime print lines to both IR dumps ==\n\
              == MID: vreg ids, phis intact (pairs with ir_dispatched.txt); [phi <- ...] marks an operand whose def is that phi ==\n",
         );
         for l in &probe_mid { s.push_str(l); s.push('\n'); }
         s.push_str(
-            "== FINAL: the exact value tokens the runtime PROBE line prints (pairs with ir_final_cfg.txt) ==\n",
+            "== FINAL: the pool-prefixed physical registers of each probe site (pairs with ir_final_cfg.txt) ==\n\
+             == the runtime line prints clean values only — the registers live HERE ==\n",
         );
         for l in &probe_final { s.push_str(l); s.push('\n'); }
         std::fs::write(Path::new(&dump_dir).join("probe_map.txt"), s).unwrap();

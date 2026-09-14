@@ -14,7 +14,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     s_r8 = format!("{}{}", s_r7, s_r6);
     s_r7 = "|".to_string();
     s_r6 = format!("{}{}", s_r8, s_r7);
-    println!("PROBE concat: s_r6={:?}", s_r6);
+    println!("concat\t{}", s_r6);
     return tables;
 }
 

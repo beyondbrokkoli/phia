@@ -27,7 +27,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         *t.array.get_unchecked_mut(idx) = 7;
     }
     println!(
-        "PROBE scalars: i_r0={} f_r22={:?} b_r2={} len_r20={}",
+        "scalars\t{}\t{:?}\t{}\ttable(len={})",
         5,
         f_r22,
         true,
@@ -67,7 +67,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
     } else {
         0
     };
-    println!("PROBE after: i_r20={} i_r21={}", i_r20, i_r21);
+    println!("after\t{}\t{}", i_r20, i_r21);
     return tables;
 }
 

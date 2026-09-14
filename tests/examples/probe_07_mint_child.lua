@@ -5,11 +5,13 @@
 -- dyn read t[0] (non-affine key, no interference) shows the child handle
 -- with len=3 from the FIRST line, frozen across trips. Outer t: handle 1
 -- len 1; seed child: handle 2, values {0, 7, 14} CHECKSUM 56.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE iter: i_r26=0 t_r26=1 len_r26=1 t_r28=2 len_r28=3
--- EXPECT: PROBE iter: i_r26=1 t_r26=1 len_r26=1 t_r28=2 len_r28=3
--- EXPECT: PROBE iter: i_r26=2 t_r26=1 len_r26=1 t_r28=2 len_r28=3
--- EXPECT: PROBE exit: t_r26=1 len_r26=1
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: iter	0	table#1(len=1)	table#2(len=3)
+-- EXPECT_PRINT: iter	1	table#1(len=1)	table#2(len=3)
+-- EXPECT_PRINT: iter	2	table#1(len=1)	table#2(len=3)
+-- EXPECT_PRINT: exit	table#1(len=1)
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r26 t_r26 len_r26 t_r28 len_r28
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 t_r26 len_r26
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 3 NZ 2 CHECKSUM 56
 -- EXPECT: NTABLES 2

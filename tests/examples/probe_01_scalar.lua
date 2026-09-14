@@ -1,12 +1,15 @@
--- probe_01_scalar.lua  [POSITIVE — the probe intrinsic, straight-line slice]
+-- probe_01_scalar.lua  [POSITIVE — the print intrinsic, straight-line slice]
 -- Every operand kind in one program: int, float, bool, table (pointer mode:
 -- no nested stores, so table operands print materialized length, no handle).
--- PROBE lines are deterministic output and pinned exactly like TABLE lines.
--- Pins embed physical register names BY DESIGN: the probe's subject is the
--- vreg->physical mapping, so an allocator change must break these pins just
--- as it breaks the byte locks.
--- EXPECT: PROBE scalars: i_r0=5 f_r22=2.5 b_r2=true len_r20=1
--- EXPECT: PROBE after: i_r20=7 i_r21=6
+-- Print lines are clean Lua-style output (tab-separated values, strings raw)
+-- and pinned whole-line like TABLE lines (EXPECT_PRINT). The register
+-- mapping the line used to carry lives in probe_map.txt, pinned whole-line
+-- by EXPECT_PROBE: the probe's subject is the vreg->physical mapping, so an
+-- allocator change must break those pins just as it breaks the byte locks.
+-- EXPECT_PRINT: scalars	5	2.5	true	table(len=1)
+-- EXPECT_PRINT: after	7	6
+-- EXPECT_PROBE: #0 tag="scalars" b0 depth0 i_r0 f_r22 b_r2 len_r20
+-- EXPECT_PROBE: #1 tag="after" b0 depth0 i_r20 i_r21
 -- EXPECT: NTABLES 1
 -- EXPECT: TABLE 0 LEN 2 NZ 2 CHECKSUM 19
 local a = 5

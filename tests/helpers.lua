@@ -67,3 +67,14 @@ function find_baked()
     if line and line ~= "" then return line end
     return nil
 end
+
+-- probe_map.txt sits BESIDE the freshest baked_native.rs (build.rs writes
+-- it whenever the program contains probes). Same freshness rule — the
+-- freshest map belongs to the test cargo just built.
+function find_probe_map()
+    local p = io.popen("ls -t target/release/build/phia-*/out/probe_map.txt 2>/dev/null | head -1")
+    local line = p:read("*l")
+    p:close()
+    if line and line ~= "" then return line end
+    return nil
+end

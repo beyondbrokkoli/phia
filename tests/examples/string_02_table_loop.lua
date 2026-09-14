@@ -5,12 +5,14 @@
 -- len frozen at 4 from the first probe line. The probe's own t[i] read
 -- rides the upgraded fast path (string clone through the hoisted
 -- pointer). Values x, xo, xoo, xooo.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE iter: i_r22=0 s_r23="xo" len_r26=4 s_r22="xo"
--- EXPECT: PROBE iter: i_r22=1 s_r23="xoo" len_r26=4 s_r22="xoo"
--- EXPECT: PROBE iter: i_r22=2 s_r23="xooo" len_r26=4 s_r22="xooo"
--- EXPECT: PROBE iter: i_r22=3 s_r23="xoooo" len_r26=4 s_r22="xoooo"
--- EXPECT: PROBE exit: s_r23="xoooo" len_r26=4
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: iter	0	xo	table(len=4)	xo
+-- EXPECT_PRINT: iter	1	xoo	table(len=4)	xoo
+-- EXPECT_PRINT: iter	2	xooo	table(len=4)	xooo
+-- EXPECT_PRINT: iter	3	xoooo	table(len=4)	xoooo
+-- EXPECT_PRINT: exit	xoooo	table(len=4)
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r22 s_r23 len_r26 s_r22
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 s_r23 len_r26
 -- EXPECT: TABLE 0 LEN 4 NZ 4 CHECKSUM -7302824913170803880
 -- EXPECT: NTABLES 1
 -- EXPECT: fast_sets=1

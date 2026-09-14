@@ -337,7 +337,10 @@ pub fn run_baked() -> Vec<Box<Table>> {
     unsafe {
         *t.sarray.get_unchecked_mut(idx) = s_r173.clone();
     }
-    println!("PROBE final: i_r0={} f_r184={:?} s_r172={:?} b_r4={} b_r126={} s_r170={:?} s_r171={:?} i_r143={} f_r187={:?} i_r154={}", 19, f_r184, s_r172, true, false, s_r170, s_r171, 9, f_r187, -2);
+    println!(
+        "final\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
+        19, f_r184, s_r172, true, false, s_r170, s_r171, 9, f_r187, -2
+    );
     return tables;
 }
 

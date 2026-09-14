@@ -1,14 +1,17 @@
 -- probe_06_ssa_names.lua [POSITIVE — SSA versioning as observable
--- register NAMES]. The same variable x probed at three program points
--- prints three DIFFERENT physical names (before: the initial def; join:
--- the if-join phi's slot; after: the loop-phi's coalesced slot) with the
--- values 1 -> 2 -> 202 flowing through them. i's loop coalesced slot
--- reads 2 after the loop. The name changes ARE the pins: an allocator
--- or phi-coalescing change breaks this test like a lock.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE before: i_r0=1 b_r1=true
--- EXPECT: PROBE join: i_r30=2 b_r1=true
--- EXPECT: PROBE after: i_r31=202 i_r30=2
+-- register NAMES]. The same variable x printed at three program points
+-- carries three DIFFERENT physical names in probe_map.txt (before: the
+-- initial def; join: the if-join phi's slot; after: the loop-phi's
+-- coalesced slot) with the values 1 -> 2 -> 202 flowing through them
+-- (EXPECT_PRINT pins the values, EXPECT_PROBE the names). i's loop
+-- coalesced slot reads 2 after the loop. The name changes ARE the pins:
+-- an allocator or phi-coalescing change breaks this test like a lock.
+-- EXPECT_PRINT: before	1	true
+-- EXPECT_PRINT: join	2	true
+-- EXPECT_PRINT: after	202	2
+-- EXPECT_PROBE: #0 tag="before" b0 depth0 i_r0 b_r1
+-- EXPECT_PROBE: #1 tag="join" b3 depth0 i_r30 b_r1
+-- EXPECT_PROBE: #2 tag="after" b6 depth0 i_r31 i_r30
 -- EXPECT: NTABLES 1
 local x = 1
 local flag = true

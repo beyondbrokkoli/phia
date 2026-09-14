@@ -85,10 +85,12 @@ def run_seed(seed):
             ref_vals.append(v)
 
     try:
-        got_line = [l for l in got.stdout.splitlines() if l.startswith("PROBE final")][0]
-        got_vals = [t.split("=", 1)[1].strip('"') for t in got_line.split()[2:]]
+        # Clean Lua-style print: the line is tag + tab-separated values
+        # (e.g. "final\t0\t-8.56\tbeta") — no register names.
+        got_line = [l for l in got.stdout.splitlines() if l.startswith("final\t")][0]
+        got_vals = got_line.split("\t")[1:]
     except IndexError:
-        return {"status": "PARSE_ERROR", "msg": "Could not locate 'PROBE final' in phia output.", "src": src}
+        return {"status": "PARSE_ERROR", "msg": "Could not locate 'final' print line in phia output.", "src": src}
 
     if len(ref_vals) != len(got_vals):
         return {"status": "SHAPE_FAIL", "ref": ref_vals, "got": got_vals, "src": src}

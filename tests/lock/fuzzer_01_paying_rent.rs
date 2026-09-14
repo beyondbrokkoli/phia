@@ -214,7 +214,10 @@ pub fn run_baked() -> Vec<Box<Table>> {
     unsafe {
         *t.farray.get_unchecked_mut(idx) = f_r91;
     }
-    println!("PROBE final: i_r86={} f_r91={:?} s_r86={:?} b_r5={} i_r18={} b_r86={} i_r50={} i_r87={} f_r90={:?} i_r73={}", i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r90, 0);
+    println!(
+        "final\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}",
+        i_r86, f_r91, s_r86, false, -36, b_r86, 6, i_r87, f_r90, 0
+    );
     return tables;
 }
 

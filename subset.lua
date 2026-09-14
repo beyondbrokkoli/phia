@@ -63,8 +63,12 @@ grid[0][2] = 102
 -- grid[0]["x"] = 500       -- ERROR: Table index must be an Integer
 
 
--- 4. PRINT PROBE (Debugging)
--- 'print' takes an optional string literal tag as its first argument.
+-- 4. PRINT (Output & Debugging)
+-- 'print' works like standard Lua: one tab-separated line per call,
+-- values printed as-is (strings unquoted, booleans as true/false).
+-- An optional string literal first argument doubles as the probe tag
+-- naming the line in the probe_map.txt build sidecar, where every
+-- print's physical registers are recorded for debugging.
 print("state", pure_int, pure_float, num_list[1])
 
 
@@ -117,7 +121,7 @@ local missing_str = string_list[999]    -- Yields ""  (String)
 -- 8. ASCII ARTWORK (String Concatenation Folding)
 -- Chaining string concatenations evaluates safely and pins the register for consistent spacing.
 local line = "-" .. "~" .. "@"
--- PROBE art: s_r95="-~@"
+-- stdout: art, a tab, then -~@ (probe_map FINAL pins its register: s_r95)
 print("art", line)
 
 

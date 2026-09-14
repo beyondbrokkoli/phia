@@ -2,8 +2,9 @@
 --
 -- SYMPTOM (how this file fails when the bug returns):
 --   A GetTable result prints a stale constant (here: 0 instead of 26, idx 7
---   of the "final" probe). The load is missing from baked_native.rs
---   entirely; i_r87=26 below is the pin that catches it.
+--   of the "final" print line). The load is missing from baked_native.rs
+--   entirely; the 26 at that index below is the pin that catches it
+--   (probe_map names its register i_r87).
 --
 -- TRAP (the wrong diagnosis this bug invites):
 --   "The loop optimizer dropped the store." It did not. The store
@@ -41,7 +42,8 @@
 -- EXPECT: dyn_gets=3
 -- EXPECT: hoists=0
 -- the current formatting scheme makes it impossible to define empty hoist_ctx because it compares against nil
--- EXPECT: PROBE final: i_r86=0 f_r91=-8.56 s_r86="beta" b_r5=false i_r18=-36 b_r86=true i_r50=6 i_r87=26 f_r90=-12.99 i_r73=0
+-- EXPECT_PRINT: final	0	-8.56	beta	false	-36	true	6	26	-12.99	0
+-- EXPECT_PROBE: #0 tag="final" b3 depth0 i_r86 f_r91 s_r86 b_r5 i_r18 b_r86 i_r50 i_r87 f_r90 i_r73
 -- EXPECT: TABLE 0 LEN 6 NZ 3 CHECKSUM -9129967380583111719 SUM -12.120000000000001
 -- EXPECT: TABLE 1 LEN 6 NZ 2 CHECKSUM 192
 -- EXPECT: TABLE 2 LEN 1 NZ 1 CHECKSUM -4599869698905074565 SUM -12.99

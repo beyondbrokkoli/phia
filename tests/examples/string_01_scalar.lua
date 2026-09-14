@@ -3,11 +3,15 @@
 -- coerces numbers on concat (2 .. "x"); that is a build error here —
 -- pinned divergence, same family as float_03's mixed arithmetic.
 -- Chains fold LEFT (associative, unobservable — see parser note).
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE concat: s_r30="pha" s_r31="ia" s_r32="phaia"
--- EXPECT: PROBE chain: s_r32="pha-ia"
--- EXPECT: PROBE eq: b_r30=true b_r32=true
--- EXPECT: PROBE prec: b_r32=true b_r30=true
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: concat	pha	ia	phaia
+-- EXPECT_PRINT: chain	pha-ia
+-- EXPECT_PRINT: eq	true	true
+-- EXPECT_PRINT: prec	true	true
+-- EXPECT_PROBE: #0 tag="concat" b0 depth0 s_r30 s_r31 s_r32
+-- EXPECT_PROBE: #1 tag="chain" b0 depth0 s_r32
+-- EXPECT_PROBE: #2 tag="eq" b0 depth0 b_r30 b_r32
+-- EXPECT_PROBE: #3 tag="prec" b0 depth0 b_r32 b_r30
 -- EXPECT: NTABLES 0
 local a = "pha"
 local b = "ia"

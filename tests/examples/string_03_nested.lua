@@ -4,8 +4,9 @@
 -- handle (1), the row handle (2), and a string read THROUGH a handle
 -- chain (outer[0][1] = "beta"). The arena checksums cover both: outer
 -- holds handles, row holds FNV-hashed strings.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE nested: t_r17=1 len_r17=1 t_r21=2 len_r21=2 s_r17="beta" t_r20=2 len_r20=2
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: nested	table#1(len=1)	table#2(len=2)	beta	table#2(len=2)
+-- EXPECT_PROBE: #0 tag="nested" b0 depth0 t_r17 len_r17 t_r21 len_r21 s_r17 t_r20 len_r20
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 2 NZ 2 CHECKSUM 8580739319088111993
 -- EXPECT: NTABLES 2

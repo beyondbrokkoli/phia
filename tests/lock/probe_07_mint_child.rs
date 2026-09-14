@@ -109,17 +109,15 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 0
             };
             println!(
-                "PROBE iter: i_r26={} t_r26={} len_r26={} t_r28={} len_r28={}",
+                "iter\t{}\t{}\t{}",
                 i_r26,
-                t_r26,
                 match tables.get((t_r26 - 1) as usize) {
-                    Some(t) => t.array.len(),
-                    None => usize::MAX,
+                    Some(t) => format!("table#{}(len={})", t_r26, t.array.len()),
+                    None => "nil".to_string(),
                 },
-                t_r28,
                 match tables.get((t_r28 - 1) as usize) {
-                    Some(t) => t.array.len(),
-                    None => usize::MAX,
+                    Some(t) => format!("table#{}(len={})", t_r28, t.array.len()),
+                    None => "nil".to_string(),
                 }
             );
             i_r26 = i_r26 + 1;
@@ -128,11 +126,10 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
     }
     println!(
-        "PROBE exit: t_r26={} len_r26={}",
-        t_r26,
+        "exit\t{}",
         match tables.get((t_r26 - 1) as usize) {
-            Some(t) => t.array.len(),
-            None => usize::MAX,
+            Some(t) => format!("table#{}(len={})", t_r26, t.array.len()),
+            None => "nil".to_string(),
         }
     );
     return tables;

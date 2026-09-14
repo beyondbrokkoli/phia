@@ -2,12 +2,15 @@
 -- tests/run_boss.lua — THE BOSS: complete invariant analysis in one run.
 --
 -- One file, one source of truth for every test listing. Four disciplines:
---   POSITIVE  build ok -> run ok -> every EXPECT pin exact
---             (TABLE/PROBE = whole line, NTABLES = counted, k=v = stats,
---              else substring. PROBE needs the whole-line case: its lines
---              carry `=` so the k=v branch would otherwise grab them, and
---              that branch matches only the FIRST line per key prefix —
---              in-loop probes repeat the prefix by design.)
+--   POSITIVE  build ok -> run ok -> every pin exact
+--             (EXPECT: TABLE = whole line, NTABLES = counted, k=v = stats,
+--              else substring. EXPECT_PRINT = whole runtime print line,
+--              byte-exact incl. literal tab separators — print output is
+--              clean values now, no register names. EXPECT_PROBE = whole
+--              probe_map.txt line — the register pinning that print lines
+--              no longer carry lives in that sidecar. The k=v branch
+--              matches only the FIRST line per key prefix — in-loop
+--              repeats need the whole-line pin kinds.)
 --   NEGATIVE  build MUST fail -> every EXPECT_BUILD_FAIL message present
 --   PANIC     build ok -> run MUST fail -> the single EXPECT_PANIC pin must
 --             EQUAL the program's 'Runtime Error: ...' stderr line exactly,
@@ -322,8 +325,10 @@ local pos_passed = 0
 for _, name in ipairs(POSITIVE) do
     local src = EXAMPLES_DIR .. "/" .. name
     local expects = parse_expects(src, "EXPECT")
-    if #expects == 0 then
-        report_fail("positive", name, "listed positive but has no '-- EXPECT:' pins")
+    local print_pins = parse_expects(src, "EXPECT_PRINT")
+    local probe_pins = parse_expects(src, "EXPECT_PROBE")
+    if #expects == 0 and #print_pins == 0 and #probe_pins == 0 then
+        report_fail("positive", name, "listed positive but has no EXPECT/EXPECT_PRINT/EXPECT_PROBE pins")
     elseif parse_expects(src, "EXPECT_PANIC")[1] or parse_expects(src, "EXPECT_BUILD_FAIL")[1] then
         report_fail("positive", name, "carries EXPECT_PANIC/EXPECT_BUILD_FAIL pins — move it to the right list")
     elseif not build_ok(src) then
@@ -335,9 +340,17 @@ for _, name in ipairs(POSITIVE) do
             report_fail("positive", name, "run failed: " .. (runtime_error_lines(err)[1] or first_nonempty(err)))
         else
             local out = read_file(OUT)
+            -- EXPECT_PROBE pins match whole lines of the freshest
+            -- probe_map.txt (the register side of the join — the runtime
+            -- line itself prints clean values only).
+            local pmap = ""
+            if #probe_pins > 0 then
+                local pm = find_probe_map()
+                if pm then pmap = read_file(pm) end
+            end
             local bad
             for _, exp in ipairs(expects) do
-                if exp:match("^TABLE ") or exp:match("^PROBE ") then
+                if exp:match("^TABLE ") then
                     if not has_exact_line(out, exp) then bad = "want line: " .. exp break end
                 elseif exp:match("^NTABLES") then
                     local want = tonumber(exp:match("%d+"))
@@ -354,6 +367,22 @@ for _, name in ipairs(POSITIVE) do
                     elseif not out:find(exp, 1, true) then
                         bad = "missing text: " .. exp break
                     end
+                end
+            end
+            if not bad then
+                -- whole-line, byte-exact: pins carry the runtime line's
+                -- literal tab separators
+                for _, exp in ipairs(print_pins) do
+                    if not has_exact_line(out, exp) then bad = "want print line: " .. exp break end
+                end
+            end
+            if not bad then
+                for _, exp in ipairs(probe_pins) do
+                    if pmap == "" then
+                        bad = "EXPECT_PROBE pins but no probe_map.txt found (program has probes?)"
+                        break
+                    end
+                    if not has_exact_line(pmap, exp) then bad = "want probe_map line: " .. exp break end
                 end
             end
             if bad then

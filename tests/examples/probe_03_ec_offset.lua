@@ -4,10 +4,11 @@
 -- The probe pins that literal as a runtime invariant: len frozen at 4
 -- from the first line on, values t[1..3] = 0, 10, 20 (CHECKSUM 110).
 -- The probe's own t[i+1] read rides the upgraded fast path.
--- Pins embed physical register names BY DESIGN (see probe_01).
--- EXPECT: PROBE iter: i_r18=0 len_r18=4
--- EXPECT: PROBE iter: i_r18=1 len_r18=4
--- EXPECT: PROBE iter: i_r18=2 len_r18=4
+-- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
+-- EXPECT_PRINT: iter	0	table(len=4)
+-- EXPECT_PRINT: iter	1	table(len=4)
+-- EXPECT_PRINT: iter	2	table(len=4)
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r18 len_r18
 -- EXPECT: TABLE 0 LEN 4 NZ 2 CHECKSUM 110
 -- EXPECT: NTABLES 1
 -- EXPECT: fast_sets=1

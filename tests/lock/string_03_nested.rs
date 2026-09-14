@@ -123,22 +123,19 @@ pub fn run_baked() -> Vec<Box<Table>> {
         String::new()
     };
     println!(
-        "PROBE nested: t_r17={} len_r17={} t_r21={} len_r21={} s_r17={:?} t_r20={} len_r20={}",
-        t_r17,
+        "nested\t{}\t{}\t{}\t{}",
         match tables.get((t_r17 - 1) as usize) {
-            Some(t) => t.array.len(),
-            None => usize::MAX,
+            Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),
+            None => "nil".to_string(),
         },
-        t_r21,
         match tables.get((t_r21 - 1) as usize) {
-            Some(t) => t.sarray.len(),
-            None => usize::MAX,
+            Some(t) => format!("table#{}(len={})", t_r21, t.sarray.len()),
+            None => "nil".to_string(),
         },
         s_r17,
-        t_r20,
         match tables.get((t_r20 - 1) as usize) {
-            Some(t) => t.sarray.len(),
-            None => usize::MAX,
+            Some(t) => format!("table#{}(len={})", t_r20, t.sarray.len()),
+            None => "nil".to_string(),
         }
     );
     return tables;
