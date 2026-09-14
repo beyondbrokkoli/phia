@@ -11,9 +11,6 @@
 -- * sparse tables
 -- Approximately 153600 complex iterations in the worst case.
 
-local title = "ASCII MANDELBROT"
-print("title", title)
-
 -- Mandelbrot viewport
 
 local max_iter = 48
@@ -168,12 +165,10 @@ while col <= 79 do
     col = col + 1
 end
 
-print("art", line)
+print(line)
 
 cy = cy + dy
 row = row + 1
 
 
 end
-
-print("done", "mandelbrot calculation complete")
