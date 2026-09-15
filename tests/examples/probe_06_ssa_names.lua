@@ -10,8 +10,8 @@
 -- EXPECT_PRINT: join	2	true
 -- EXPECT_PRINT: after	202	2
 -- EXPECT_PROBE: #0 tag="before" b0 depth0 c0 c1
--- EXPECT_PROBE: #1 tag="join" b3 depth0 i_r29 c1
--- EXPECT_PROBE: #2 tag="after" b6 depth0 i_r30 i_r29
+-- EXPECT_PROBE: #1 tag="join" b3 depth0 i_r0 c1
+-- EXPECT_PROBE: #2 tag="after" b6 depth0 i_r1 i_r0
 -- EXPECT: NTABLES 1
 local x = 1
 local flag = true

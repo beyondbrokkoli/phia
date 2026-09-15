@@ -4,39 +4,39 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r12 = 0i64;
-    let mut b_r13 = false;
-    let mut t_r14: *mut Table = std::ptr::null_mut();
-    let mut p_r14: *mut i64 = std::ptr::null_mut();
-    let mut len_r14 = 0usize;
+    let mut i_r0 = 0i64;
+    let mut b_r1 = false;
+    let mut t_r2: *mut Table = std::ptr::null_mut();
+    let mut p_r2: *mut i64 = std::ptr::null_mut();
+    let mut len_r2 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r14 = &mut *new_table as *mut Table;
+    t_r2 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 10;
     if lim > 0 {
-        let t = unsafe { &mut *t_r14 };
+        let t = unsafe { &mut *t_r2 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r14 = unsafe { (*t_r14).array.len() };
-    p_r14 = unsafe { (*t_r14).array.as_mut_ptr() };
-    i_r12 = 0;
-    while i_r12 < 10 {
-        let k = i_r12;
+    len_r2 = unsafe { (*t_r2).array.len() };
+    p_r2 = unsafe { (*t_r2).array.as_mut_ptr() };
+    i_r0 = 0;
+    while i_r0 < 10 {
+        let k = i_r0;
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r14 {
+        if (k as usize) < len_r2 {
             unsafe {
-                *p_r14.add(k as usize) = 1;
+                *p_r2.add(k as usize) = 1;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
         }
-        i_r12 = i_r12 + 1;
+        i_r0 = i_r0 + 1;
     }
     return tables;
 }

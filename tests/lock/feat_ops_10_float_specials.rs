@@ -4,108 +4,108 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r55 = 0i64;
-    let mut i_r56 = 0i64;
-    let mut i_r57 = 0i64;
-    let mut b_r64 = false;
-    let mut b_r65 = false;
-    let mut t_r70: *mut Table = std::ptr::null_mut();
-    let mut f_r71 = 0f64;
-    let mut f_r72 = 0f64;
-    let mut t_r74: *mut Table = std::ptr::null_mut();
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut i_r2 = 0i64;
+    let mut b_r9 = false;
+    let mut b_r10 = false;
+    let mut t_r15: *mut Table = std::ptr::null_mut();
+    let mut f_r16 = 0f64;
+    let mut f_r17 = 0f64;
+    let mut t_r19: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    f_r71 = 1.0 / 0.0;
-    f_r72 = 0.0 / 0.0;
-    b_r64 = 1.0 < f_r71;
-    if b_r64 {
-        i_r55 = 1;
+    f_r16 = 1.0 / 0.0;
+    f_r17 = 0.0 / 0.0;
+    b_r9 = 1.0 < f_r16;
+    if b_r9 {
+        i_r0 = 1;
     } else {
-        i_r55 = 0;
+        i_r0 = 0;
     }
-    b_r64 = f_r72 == f_r72;
-    if b_r64 {
-        i_r56 = i_r55 + 10;
-        i_r57 = i_r56;
+    b_r9 = f_r17 == f_r17;
+    if b_r9 {
+        i_r1 = i_r0 + 10;
+        i_r2 = i_r1;
     } else {
-        i_r57 = i_r55;
+        i_r2 = i_r0;
     }
-    b_r64 = f_r72 == f_r72;
-    b_r65 = !b_r64;
-    if b_r65 {
-        i_r56 = i_r57 + 100;
-        i_r55 = i_r56;
+    b_r9 = f_r17 == f_r17;
+    b_r10 = !b_r9;
+    if b_r10 {
+        i_r1 = i_r2 + 100;
+        i_r0 = i_r1;
     } else {
-        i_r55 = i_r57;
+        i_r0 = i_r2;
     }
-    b_r65 = f_r71 == f_r71;
-    if b_r65 {
-        i_r56 = i_r55 + 1000;
-        i_r57 = i_r56;
+    b_r10 = f_r16 == f_r16;
+    if b_r10 {
+        i_r1 = i_r0 + 1000;
+        i_r2 = i_r1;
     } else {
-        i_r57 = i_r55;
+        i_r2 = i_r0;
     }
-    b_r65 = f_r71 >= f_r71;
-    if b_r65 {
-        i_r56 = i_r57 + 10000;
-        i_r55 = i_r56;
+    b_r10 = f_r16 >= f_r16;
+    if b_r10 {
+        i_r1 = i_r2 + 10000;
+        i_r0 = i_r1;
     } else {
-        i_r55 = i_r57;
+        i_r0 = i_r2;
     }
     let mut new_table = Box::new(Table::new());
-    t_r70 = &mut *new_table as *mut Table;
+    t_r15 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r70 };
+    let t = unsafe { &mut *t_r15 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r55;
+        *t.array.get_unchecked_mut(idx) = i_r0;
     }
     let mut new_table = Box::new(Table::new_float());
-    t_r74 = &mut *new_table as *mut Table;
+    t_r19 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r74 };
+    let t = unsafe { &mut *t_r19 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r71;
+        *t.farray.get_unchecked_mut(idx) = f_r16;
     }
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r74 };
+    let t = unsafe { &mut *t_r19 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r72;
+        *t.farray.get_unchecked_mut(idx) = f_r17;
     }
-    f_r72 = -f_r71;
+    f_r17 = -f_r16;
     let k = 2;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r74 };
+    let t = unsafe { &mut *t_r19 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r72;
+        *t.farray.get_unchecked_mut(idx) = f_r17;
     }
     return tables;
 }

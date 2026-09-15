@@ -4,54 +4,54 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r17 = 0i64;
-    let mut i_r18 = 0i64;
-    let mut i_r19 = 0i64;
-    let mut b_r21 = false;
-    let mut t_r22: *mut Table = std::ptr::null_mut();
-    let mut p_r22: *mut i64 = std::ptr::null_mut();
-    let mut len_r22 = 0usize;
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut i_r2 = 0i64;
+    let mut b_r4 = false;
+    let mut t_r5: *mut Table = std::ptr::null_mut();
+    let mut p_r5: *mut i64 = std::ptr::null_mut();
+    let mut len_r5 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r22 = &mut *new_table as *mut Table;
+    t_r5 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 10;
     if lim > 0 {
-        let t = unsafe { &mut *t_r22 };
+        let t = unsafe { &mut *t_r5 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r22 = unsafe { (*t_r22).array.len() };
-    p_r22 = unsafe { (*t_r22).array.as_mut_ptr() };
-    i_r17 = 1;
-    while i_r17 < 10 {
-        i_r18 = i_r17 - 1;
-        let k = i_r18;
+    len_r5 = unsafe { (*t_r5).array.len() };
+    p_r5 = unsafe { (*t_r5).array.as_mut_ptr() };
+    i_r0 = 1;
+    while i_r0 < 10 {
+        i_r1 = i_r0 - 1;
+        let k = i_r1;
         if k < 0 {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &*t_r22 };
-        i_r19 = if idx < t.array.len() {
+        let t = unsafe { &*t_r5 };
+        i_r2 = if idx < t.array.len() {
             unsafe { *t.array.get_unchecked(idx) }
         } else {
             0
         };
-        i_r18 = i_r19 + 1;
-        let k = i_r17;
+        i_r1 = i_r2 + 1;
+        let k = i_r0;
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r22 {
+        if (k as usize) < len_r5 {
             unsafe {
-                *p_r22.add(k as usize) = i_r18;
+                *p_r5.add(k as usize) = i_r1;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
         }
-        i_r17 = i_r17 + 1;
+        i_r0 = i_r0 + 1;
     }
     return tables;
 }

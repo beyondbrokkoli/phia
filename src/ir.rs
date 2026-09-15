@@ -8,19 +8,27 @@ pub type BlockId = usize;
 /// THE ID-SPACE CONSTITUTION.
 ///
 /// RegId is a layered namespace. Every layer has exactly one owner phase,
-/// and ownership follows pipeline order — the id space is a timeline, and
-/// that timeline IS the disjointness guarantee (collisions required two
-/// phases to share a range; no range is ever born overlapping anymore):
+/// and ownership follows pipeline order — and layers NEVER COEXIST
+/// QUERYABLE: layer B is range-disjoint from everything by its
+/// reserved-high base, and layer C replaces layer A wholesale (the
+/// rewrite erases A's ids in the same pass that mints C's), so no two
+/// live layers ever share a range:
 ///
 /// ```text
 /// layer A   vregs      [0, V)                owner: lowerer (+ optimizer's
-///                                              next_vreg mints into it)
+///                                              next_vreg mints into it);
+///                                              dies at allocate_registers
 /// layer B   consts     [CONST_REG_BASE, …)   owner: propagate_constants
 ///                                              (the remint; reserved high
-///                                              range so B's SIZE can never
-///                                              move C's base)
-/// layer C   physicals  [base, base+P)        owner: allocate_registers
-///                   base = ceiling of layer A only (trap 0's guard)
+///                                              range, disjoint from every
+///                                              other layer numerically)
+/// layer C   physicals  [0, P)                owner: allocate_registers
+///                   minted from ZERO — the pass rewrites the layer-A
+///                   ids out of the IR as it mints, so A and C never
+///                   coexist and the numeric overlap of [0,V) and
+///                   [0,P) is unobservable (the old base = max-vreg+1
+///                   layout carried the scars of the vreg namespace
+///                   into every program's physical numbering)
 ///                   sub-layered in mint order — int, bool, table,
 ///                   string, float, ftable, tstr, btable — EIGHT
 ///                   consecutive per-pool ranges on ONE global
@@ -32,12 +40,17 @@ pub type BlockId = usize;
 ///
 /// The three laws:
 ///
-/// 1. **One layer, one owner, pipeline order.** A later phase's base is
-///    the ceiling of the layers it may see, with foreign layers EXCLUDED
-///    EXPLICITLY. reg_alloc's `!is_const_reg` scan guard (defs, uses AND
-///    branch conds) is not a patch — it is the first place this law is
-///    spelled out in code; any future consumer of raw ids over the whole
-///    IR must make the same exclusion, or cite this law instead of
+/// 1. **One layer, one owner, pipeline order — and overlapping layers
+///    never coexist.** Ownership follows the pipeline; disjointness is
+///    a VISIBILITY property, not just base arithmetic: layer B is
+///    range-disjoint from everything (reserved high), and layer C
+///    rewrites the layer-A namespace out of the IR as it mints. The
+///    spelled-out-in-code instances: reg_alloc's skip set (consts
+///    never enter a pool) and its remap-completeness assert (every
+///    non-const id MUST enter a pool before the rewrite — an unmapped
+///    vreg would survive and numerically collide with minted
+///    physicals). Any future consumer of raw ids over the whole IR
+///    must make the same exclusions, or cite this law instead of
 ///    remembering the war story.
 /// 2. **Membership by range, value by map, kind by range (physicals) or
 ///    static type (vregs), rendering by layer.** Four orthogonal
@@ -51,9 +64,10 @@ pub type BlockId = usize;
 ///    reused; layer C ids are never queried against const maps except as
 ///    tautologically-false range checks.
 ///
-/// A future id consumer asks "which layers does my scan see?" — consts_f
-/// and consts_s, when built, mint sequentially from the same layer B under
-/// the same law, touching no base math anywhere.
+/// A future id consumer asks "which layers does my scan see, and do any
+/// two of them coexist?" — consts_f and consts_s minted from the same
+/// layer B under the same law, and the zero-base mint touched no base
+/// math outside allocate_registers itself.
 pub type RegId = u32;
 
 /// Layer B's base: const-folded register ids mint from this reserved high

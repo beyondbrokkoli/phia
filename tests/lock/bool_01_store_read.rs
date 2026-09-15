@@ -4,21 +4,21 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut b_r16 = false;
-    let mut b_r17 = false;
-    let mut b_r18 = false;
-    let mut t_r19: *mut Table = std::ptr::null_mut();
+    let mut b_r0 = false;
+    let mut b_r1 = false;
+    let mut b_r2 = false;
+    let mut t_r3: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new_bool());
-    t_r19 = &mut *new_table as *mut Table;
+    t_r3 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r19 };
+    let t = unsafe { &mut *t_r3 };
     if idx >= t.barray.len() {
         t.barray.resize(idx + 1, false);
     }
@@ -30,7 +30,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r19 };
+    let t = unsafe { &mut *t_r3 };
     if idx >= t.barray.len() {
         t.barray.resize(idx + 1, false);
     }
@@ -42,7 +42,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r19 };
+    let t = unsafe { &mut *t_r3 };
     if idx >= t.barray.len() {
         t.barray.resize(idx + 1, false);
     }
@@ -54,8 +54,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r19 };
-    b_r16 = if idx < t.barray.len() {
+    let t = unsafe { &*t_r3 };
+    b_r0 = if idx < t.barray.len() {
         unsafe { *t.barray.get_unchecked(idx) }
     } else {
         false
@@ -65,8 +65,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r19 };
-    b_r17 = if idx < t.barray.len() {
+    let t = unsafe { &*t_r3 };
+    b_r1 = if idx < t.barray.len() {
         unsafe { *t.barray.get_unchecked(idx) }
     } else {
         false
@@ -76,13 +76,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r19 };
-    b_r18 = if idx < t.barray.len() {
+    let t = unsafe { &*t_r3 };
+    b_r2 = if idx < t.barray.len() {
         unsafe { *t.barray.get_unchecked(idx) }
     } else {
         false
     };
-    println!("{}\t{}\t{}\t{}", "flags", b_r16, b_r17, b_r18);
+    println!("{}\t{}\t{}\t{}", "flags", b_r0, b_r1, b_r2);
     return tables;
 }
 

@@ -4,19 +4,19 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut b_r6 = false;
-    let mut t_r7: *mut Table = std::ptr::null_mut();
+    let mut b_r0 = false;
+    let mut t_r1: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new_bool());
-    t_r7 = &mut *new_table as *mut Table;
+    t_r1 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r7 };
+    let t = unsafe { &mut *t_r1 };
     if idx >= t.barray.len() {
         t.barray.resize(idx + 1, false);
     }
@@ -28,13 +28,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r7 };
-    b_r6 = if idx < t.barray.len() {
+    let t = unsafe { &*t_r1 };
+    b_r0 = if idx < t.barray.len() {
         unsafe { *t.barray.get_unchecked(idx) }
     } else {
         false
     };
-    println!("{}\t{}", "bool element", b_r6);
+    println!("{}\t{}", "bool element", b_r0);
     return tables;
 }
 

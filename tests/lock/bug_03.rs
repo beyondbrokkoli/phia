@@ -4,32 +4,32 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r14 = 0i64;
-    let mut i_r15 = 0i64;
-    let mut b_r16 = false;
-    let mut t_r17: *mut Table = std::ptr::null_mut();
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut b_r2 = false;
+    let mut t_r3: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r17 = &mut *new_table as *mut Table;
+    t_r3 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    i_r14 = 200;
-    i_r15 = 0;
-    while i_r15 < i_r14 {
-        let k = i_r15;
+    i_r0 = 200;
+    i_r1 = 0;
+    while i_r1 < i_r0 {
+        let k = i_r1;
         if k < 0 {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r17 };
+        let t = unsafe { &mut *t_r3 };
         if idx >= t.array.len() {
             t.array.resize(idx + 1, 0);
         }
         unsafe {
             *t.array.get_unchecked_mut(idx) = 1;
         }
-        i_r14 = i_r14 + 1;
-        i_r15 = i_r15 + 2;
+        i_r0 = i_r0 + 1;
+        i_r1 = i_r1 + 2;
     }
     return tables;
 }

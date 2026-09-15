@@ -8,7 +8,7 @@
 -- EXPECT_PRINT: iter	0	table(len=4)
 -- EXPECT_PRINT: iter	1	table(len=4)
 -- EXPECT_PRINT: iter	2	table(len=4)
--- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r15 len_r19
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r0 len_r4
 -- EXPECT: TABLE 0 LEN 4 NZ 2 CHECKSUM 110
 -- EXPECT: NTABLES 1
 -- EXPECT: fast_sets=1

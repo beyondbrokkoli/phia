@@ -4,18 +4,18 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut t_r1: *mut Table = std::ptr::null_mut();
+    let mut t_r0: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new_float());
-    t_r1 = &mut *new_table as *mut Table;
+    t_r0 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r1 };
+    let t = unsafe { &mut *t_r0 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }

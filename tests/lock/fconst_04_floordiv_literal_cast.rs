@@ -4,25 +4,25 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r18 = 0i64;
-    let mut b_r19 = false;
-    let mut f_r20 = 0f64;
-    let mut f_r21 = 0f64;
+    let mut i_r0 = 0i64;
+    let mut b_r1 = false;
+    let mut f_r2 = 0f64;
+    let mut f_r3 = 0f64;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     if true {
-        i_r18 = 0;
-        while i_r18 < 2 {
-            i_r18 = i_r18 + 1;
+        i_r0 = 0;
+        while i_r0 < 2 {
+            i_r0 = i_r0 + 1;
         }
-        f_r20 = ((-8.45 / 4.0) as f64).floor();
-        f_r21 = -8.45 - ((-8.45 / 5.0) as f64).floor() * 5.0;
+        f_r2 = ((-8.45 / 4.0) as f64).floor();
+        f_r3 = -8.45 - ((-8.45 / 5.0) as f64).floor() * 5.0;
     } else {
-        f_r20 = -8.45;
-        f_r21 = -8.45;
+        f_r2 = -8.45;
+        f_r3 = -8.45;
     }
-    println!("{}\t{:?}", "f", f_r20);
-    println!("{}\t{:?}", "g", f_r21);
+    println!("{}\t{:?}", "f", f_r2);
+    println!("{}\t{:?}", "g", f_r3);
     return tables;
 }
 

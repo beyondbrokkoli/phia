@@ -259,34 +259,21 @@ pub fn allocate_registers(
     let (_, live_out) = compute_liveness(blocks);
     let iv = live_intervals(blocks, &live_out);
 
-    // 3. mint physical ids from ABOVE the whole vreg namespace —
-    //    a physical id must never equal a vreg id (const or not).
-    //    Const operands mint from CONST_REG_BASE up (the remint in
-    //    propagate_constants), so ids at or above it are const-range and
-    //    excluded from the scan — defs AND uses both (a folded def
-    //    remains in the IR skipped-at-emission, and every literal use
-    //    still carries its const id as an operand).
-    let mut max_reg: RegId = 0;
-    for b in blocks {
-        for i in &b.instrs {
-            if let Some(d) = i.def_reg() && d > max_reg && !is_const_reg(d) { max_reg = d; }
-            for u in i.use_regs() { if u > max_reg && !is_const_reg(u) { max_reg = u; } }
-        }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator
-            && !is_const_reg(*cond) && *cond > max_reg { max_reg = *cond; }
-    }
-    // The const namespace is disjoint by construction (reserved high
-    // range), so the old defensive max-over-const-keys term is retired:
-    // a stale const key can never numerically equal a minted physical
-    // anymore. The seed-43 incident (a folded def deleted from the IR
-    // while its consts entry lived on, its key colliding with a minted
-    // physical, emit_instr's const early-out swallowing a GetTable
-    // wholesale) is fuzzer_01's pin — the debug_assert below is its
-    // by-construction tripwire for debug builds.
-    let base = max_reg + 1;
-    debug_assert!(base <= CONST_REG_BASE);
-
-    let mut vregs: Vec<RegId> = ty.keys().copied().collect();
+    // 3. mint physical ids from ZERO — the scars of the vreg namespace
+    //    are gone (the old base was max-vreg+1, so every program's
+    //    physicals carried an arbitrary offset). Layer C does not sit
+    //    ABOVE layer A; it REPLACES it: the remap in step 4 rewrites
+    //    every def, use and branch cond through `map`, erasing the
+    //    vreg namespace from the IR in the same pass that mints the
+    //    physicals. The numeric overlap of [0, V) and [0, P) is
+    //    therefore unobservable — the only cross-layer keys still
+    //    alive at emission are the CONST maps, and layer B is the
+    //    reserved high range, disjoint from every physical by
+    //    construction. (Seed-43/fuzzer_01 is the cautionary tale for
+    //    a map outliving its namespace; vregs have no map.)
+    //    Consts never get a physical slot: all their uses render as
+    //    literals (the skip set is exactly layer-B membership,
+    //    constitution law 2).
 
     // ONE GLOBAL TIMELINE of physical ids: eight consecutive per-pool
     // ranges, minted in fixed order — int, bool, table, string, float,
@@ -299,11 +286,8 @@ pub fn allocate_registers(
     // Int/Bool/Table/String from one shared range — every
     // "which pool is this id?" hazard (Eq's ty, probe operand kinds,
     // the pretty-while bool-context counter) traces to that sharing.
-    // Range ORDER preserves the old relative order (shared block,
-    // then float, ftable, tstr, btable), so programs using a single
-    // scalar kind — and int+float programs — keep byte-identical ids.
     let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
-    let int_base = base;
+    let int_base: RegId = 0;
     let bool_base = int_base + pool_count(Pool::Int) as RegId;
     let table_base = bool_base + pool_count(Pool::Bool) as RegId;
     let str_base = table_base + pool_count(Pool::Table) as RegId;
@@ -311,6 +295,12 @@ pub fn allocate_registers(
     let ftable_base = float_base + pool_count(Pool::Float) as RegId;
     let tstr_base = ftable_base + pool_count(Pool::TableFloat) as RegId;
     let btable_base = tstr_base + pool_count(Pool::TableString) as RegId;
+    // layer-C ceiling stays under the const range (tripwire: the two
+    // namespaces are disjoint by construction, and a program big
+    // enough to reach 2^31 physicals is a build bug, not a workload)
+    debug_assert!(btable_base + pool_count(Pool::TableBool) as RegId <= CONST_REG_BASE);
+
+    let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
     // LOAD-BEARING: the `r` tiebreak makes this a total order. Without it,
     // equal-interval regs fall back to HashMap iteration order (random per
@@ -352,6 +342,30 @@ pub fn allocate_registers(
         map.insert(r, phys);
     }
 
+    // 3.5 REMAP-COMPLETENESS TRIPWIRE. Every non-const id in the
+    //     program must be in `map` (or the skip set). An unmapped vreg
+    //     rides the identity fallback below and keeps its id — which
+    //     since the zero-base mint NUMERICALLY COLLIDES with minted
+    //     physicals and would silently read/write a declared local of
+    //     the wrong pool. (Pre-zero-base it rendered as a high,
+    //     undeclared id and failed the build loudly.) A real assert,
+    //     not debug_assert: silent wrong code is the one failure this
+    //     pass may never produce. Cost: one scan per compile.
+    for b in blocks {
+        for i in &b.instrs {
+            for r in i.use_regs().into_iter().chain(i.def_reg()) {
+                assert!(map.contains_key(&r) || is_const_reg(r),
+                    "reg_alloc: vreg {r} never entered a pool — it would \
+                     survive the rewrite and collide with physical ids");
+            }
+        }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
+            assert!(map.contains_key(cond) || is_const_reg(*cond),
+                "reg_alloc: branch cond {cond} never entered a pool — it would \
+                 survive the rewrite and collide with physical ids");
+        }
+    }
+
     // 4. rewrite references (const vregs stay identity: codegen looks
     //    them up in the const maps and never emits them)
     for b in &mut program.blocks {
@@ -375,7 +389,7 @@ pub fn allocate_registers(
         n_ftable: *count.entry(Pool::TableFloat).or_insert(0),
         n_tstr: *count.entry(Pool::TableString).or_insert(0),
         n_btable: *count.entry(Pool::TableBool).or_insert(0),
-        int_base: base,
+        int_base,
         bool_base,
         table_base,
         str_base,

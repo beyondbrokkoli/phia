@@ -4,22 +4,22 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r15 = 0i64;
-    let mut b_r16 = false;
-    let mut t_r17 = 0i64;
-    let mut p_r17: *mut i64 = std::ptr::null_mut();
-    let mut len_r17 = 0usize;
-    let mut t_r18 = 0i64;
+    let mut i_r0 = 0i64;
+    let mut b_r1 = false;
+    let mut t_r2 = 0i64;
+    let mut p_r2: *mut i64 = std::ptr::null_mut();
+    let mut len_r2 = 0usize;
+    let mut t_r3 = 0i64;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     tables.push(Box::new(Table::new()));
-    t_r17 = tables.len() as i64;
+    t_r2 = tables.len() as i64;
     let lim = 3;
     if lim > 0 {
-        if t_r17 == 0 {
+        if t_r2 == 0 {
             panic!("Runtime Error: table is nil");
         }
-        let t = match tables.get_mut((t_r17 - 1) as usize) {
+        let t = match tables.get_mut((t_r2 - 1) as usize) {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
@@ -27,28 +27,28 @@ pub fn run_baked() -> Vec<Box<Table>> {
             t.array.resize(lim as usize, 0);
         }
     }
-    if t_r17 == 0 {
+    if t_r2 == 0 {
         panic!("Runtime Error: table is nil");
     }
-    let t = match tables.get_mut((t_r17 - 1) as usize) {
+    let t = match tables.get_mut((t_r2 - 1) as usize) {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r17 = t.array.len();
-    p_r17 = t.array.as_mut_ptr();
-    i_r15 = 0;
-    while i_r15 < 3 {
+    len_r2 = t.array.len();
+    p_r2 = t.array.as_mut_ptr();
+    i_r0 = 0;
+    while i_r0 < 3 {
         tables.push(Box::new(Table::new()));
-        t_r18 = tables.len() as i64;
+        t_r3 = tables.len() as i64;
         let k = 0;
         if k < 0 {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        if t_r18 == 0 {
+        if t_r3 == 0 {
             panic!("Runtime Error: table is nil");
         }
-        let t = match tables.get_mut((t_r18 - 1) as usize) {
+        let t = match tables.get_mut((t_r3 - 1) as usize) {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
@@ -56,15 +56,15 @@ pub fn run_baked() -> Vec<Box<Table>> {
             t.array.resize(idx + 1, 0);
         }
         unsafe {
-            *t.array.get_unchecked_mut(idx) = i_r15;
+            *t.array.get_unchecked_mut(idx) = i_r0;
         }
-        let k = i_r15;
+        let k = i_r0;
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r17 {
+        if (k as usize) < len_r2 {
             unsafe {
-                *p_r17.add(k as usize) = t_r18;
+                *p_r2.add(k as usize) = t_r3;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
@@ -72,24 +72,24 @@ pub fn run_baked() -> Vec<Box<Table>> {
         println!(
             "{}\t{}\t{}\t{}",
             "iter",
-            i_r15,
-            match tables.get((t_r17 - 1) as usize) {
-                Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),
+            i_r0,
+            match tables.get((t_r2 - 1) as usize) {
+                Some(t) => format!("table#{}(len={})", t_r2, t.array.len()),
                 None => "nil".to_string(),
             },
-            match tables.get((t_r18 - 1) as usize) {
-                Some(t) => format!("table#{}(len={})", t_r18, t.array.len()),
+            match tables.get((t_r3 - 1) as usize) {
+                Some(t) => format!("table#{}(len={})", t_r3, t.array.len()),
                 None => "nil".to_string(),
             }
         );
-        i_r15 = i_r15 + 1;
+        i_r0 = i_r0 + 1;
     }
     println!(
         "{}\t{}\t{}",
         "exit",
-        i_r15,
-        match tables.get((t_r17 - 1) as usize) {
-            Some(t) => format!("table#{}(len={})", t_r17, t.array.len()),
+        i_r0,
+        match tables.get((t_r2 - 1) as usize) {
+            Some(t) => format!("table#{}(len={})", t_r2, t.array.len()),
             None => "nil".to_string(),
         }
     );

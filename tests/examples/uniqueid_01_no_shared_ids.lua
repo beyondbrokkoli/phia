@@ -11,12 +11,13 @@
 -- and bool-context-counter hazard classes.
 -- RE-VERIFY IF THIS BREAKS: a repeated id across two different
 -- prefixes in the probe pins (or the decl block) means the allocator
--- regressed to co-numbering pools; the EXPECT_PRINT pins are the
--- semantic net.
+-- regressed to co-numbering pools; a nonzero first id (decl block not
+-- starting i_r0) means the zero-base normalization regressed; the
+-- EXPECT_PRINT pins are the semantic net.
 -- EXPECT_PRINT: mix	3	xyyy	false
 -- EXPECT_PRINT: tab	table(len=3)
--- EXPECT_PROBE: #0 tag="mix" b3 depth0 i_r18 s_r22 b_r19
--- EXPECT_PROBE: #1 tag="tab" b3 depth0 len_r21
+-- EXPECT_PROBE: #0 tag="mix" b3 depth0 i_r0 s_r4 b_r1
+-- EXPECT_PROBE: #1 tag="tab" b3 depth0 len_r3
 -- EXPECT: NTABLES 1
 local t = {}
 local i = 0

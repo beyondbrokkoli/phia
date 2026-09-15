@@ -4,54 +4,54 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r34 = 0i64;
-    let mut i_r35 = 0i64;
-    let mut i_r36 = 0i64;
-    let mut i_r37 = 0i64;
-    let mut b_r41 = false;
-    let mut t_r44: *mut Table = std::ptr::null_mut();
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut i_r2 = 0i64;
+    let mut i_r3 = 0i64;
+    let mut b_r7 = false;
+    let mut t_r10: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    i_r34 = 0;
-    i_r35 = 0;
+    i_r0 = 0;
+    i_r1 = 0;
     loop {
-        b_r41 = i_r35 < 11;
-        if b_r41 {
-            i_r36 = i_r35 % 2 + i64::from(i_r35 % 2 != 0 && (i_r35 % 2 < 0) != (2 < 0)) * 2;
-            b_r41 = i_r36 == 0;
-            if b_r41 {
-                i_r36 = i_r35 * 10;
-                i_r37 = i_r34 + i_r36;
-                i_r34 = i_r37;
+        b_r7 = i_r1 < 11;
+        if b_r7 {
+            i_r2 = i_r1 % 2 + i64::from(i_r1 % 2 != 0 && (i_r1 % 2 < 0) != (2 < 0)) * 2;
+            b_r7 = i_r2 == 0;
+            if b_r7 {
+                i_r2 = i_r1 * 10;
+                i_r3 = i_r0 + i_r2;
+                i_r0 = i_r3;
             } else {
-                b_r41 = i_r35 == 5;
-                if b_r41 {
-                    i_r37 = i_r34 - 100;
-                    i_r34 = i_r37;
+                b_r7 = i_r1 == 5;
+                if b_r7 {
+                    i_r3 = i_r0 - 100;
+                    i_r0 = i_r3;
                 } else {
-                    i_r37 = i_r34 + 1;
-                    i_r34 = i_r37;
+                    i_r3 = i_r0 + 1;
+                    i_r0 = i_r3;
                 }
             }
-            i_r35 = i_r35 + 1;
+            i_r1 = i_r1 + 1;
         } else {
             break;
         }
     }
     let mut new_table = Box::new(Table::new());
-    t_r44 = &mut *new_table as *mut Table;
+    t_r10 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r44 };
+    let t = unsafe { &mut *t_r10 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r34;
+        *t.array.get_unchecked_mut(idx) = i_r0;
     }
     return tables;
 }

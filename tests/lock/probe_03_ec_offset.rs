@@ -4,46 +4,46 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r15 = 0i64;
-    let mut i_r16 = 0i64;
-    let mut i_r17 = 0i64;
-    let mut b_r18 = false;
-    let mut t_r19: *mut Table = std::ptr::null_mut();
-    let mut p_r19: *mut i64 = std::ptr::null_mut();
-    let mut len_r19 = 0usize;
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut i_r2 = 0i64;
+    let mut b_r3 = false;
+    let mut t_r4: *mut Table = std::ptr::null_mut();
+    let mut p_r4: *mut i64 = std::ptr::null_mut();
+    let mut len_r4 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r19 = &mut *new_table as *mut Table;
+    t_r4 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 4;
     if lim > 0 {
-        let t = unsafe { &mut *t_r19 };
+        let t = unsafe { &mut *t_r4 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r19 = unsafe { (*t_r19).array.len() };
-    p_r19 = unsafe { (*t_r19).array.as_mut_ptr() };
-    i_r15 = 0;
-    while i_r15 < 3 {
-        i_r16 = i_r15 + 1;
-        i_r17 = i_r15 * 10;
-        let k = i_r16;
+    len_r4 = unsafe { (*t_r4).array.len() };
+    p_r4 = unsafe { (*t_r4).array.as_mut_ptr() };
+    i_r0 = 0;
+    while i_r0 < 3 {
+        i_r1 = i_r0 + 1;
+        i_r2 = i_r0 * 10;
+        let k = i_r1;
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r19 {
+        if (k as usize) < len_r4 {
             unsafe {
-                *p_r19.add(k as usize) = i_r17;
+                *p_r4.add(k as usize) = i_r2;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
         }
-        println!("{}\t{}\ttable(len={})", "iter", i_r15, unsafe {
-            (*t_r19).array.len()
+        println!("{}\t{}\ttable(len={})", "iter", i_r0, unsafe {
+            (*t_r4).array.len()
         });
-        i_r15 = i_r15 + 1;
+        i_r0 = i_r0 + 1;
     }
     return tables;
 }

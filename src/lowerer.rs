@@ -214,8 +214,11 @@ impl IrLowerer {
             Stmt::TableAssign { table, index, expr } => {
                 // A bare `name[...]` lvalue reads the variable directly:
                 // lowering it as an expression would mint (and abandon) a
-                // fresh vreg — burning an id shifts phys_base and every
-                // physical register in the program. Only genuine
+                // fresh vreg. Since the zero-base physical mint that no
+                // longer renumbers any physical register — but an
+                // abandoned id is still dead weight in the vreg
+                // namespace (dump noise, def_map churn), so the
+                // avoidance stays as hygiene. Only genuine
                 // sub-expressions (nested lvalues like `t[0][i]`) lower.
                 let t_reg = match table {
                     Expr::Identifier(name) => self.read_var(name).reg,

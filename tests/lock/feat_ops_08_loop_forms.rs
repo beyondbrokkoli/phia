@@ -4,81 +4,81 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r47 = 0i64;
-    let mut i_r48 = 0i64;
-    let mut i_r49 = 0i64;
-    let mut i_r50 = 0i64;
-    let mut i_r51 = 0i64;
-    let mut b_r55 = false;
-    let mut b_r56 = false;
-    let mut t_r60: *mut Table = std::ptr::null_mut();
+    let mut i_r0 = 0i64;
+    let mut i_r1 = 0i64;
+    let mut i_r2 = 0i64;
+    let mut i_r3 = 0i64;
+    let mut i_r4 = 0i64;
+    let mut b_r8 = false;
+    let mut b_r9 = false;
+    let mut t_r13: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    i_r47 = 0;
-    i_r48 = 0;
+    i_r0 = 0;
+    i_r1 = 0;
     loop {
-        b_r55 = i_r47 <= 3;
-        if b_r55 {
-            i_r48 = i_r48 + i_r47;
-            i_r47 = i_r47 + 1;
+        b_r8 = i_r0 <= 3;
+        if b_r8 {
+            i_r1 = i_r1 + i_r0;
+            i_r0 = i_r0 + 1;
         } else {
             break;
         }
     }
-    b_r55 = false;
-    i_r47 = 0;
+    b_r8 = false;
+    i_r0 = 0;
     loop {
-        b_r56 = !b_r55;
-        if b_r56 {
-            i_r47 = i_r47 + 1;
-            b_r56 = i_r47 >= 2;
-            if b_r56 {
-                b_r55 = true;
+        b_r9 = !b_r8;
+        if b_r9 {
+            i_r0 = i_r0 + 1;
+            b_r9 = i_r0 >= 2;
+            if b_r9 {
+                b_r8 = true;
             }
         } else {
             break;
         }
     }
-    i_r49 = 4;
-    i_r50 = 0;
+    i_r2 = 4;
+    i_r3 = 0;
     loop {
-        b_r56 = i_r49 >= 1;
-        if b_r56 {
-            i_r51 = i_r50 * 10;
-            i_r50 = i_r51 + i_r49;
-            i_r49 = i_r49 - 1;
+        b_r9 = i_r2 >= 1;
+        if b_r9 {
+            i_r4 = i_r3 * 10;
+            i_r3 = i_r4 + i_r2;
+            i_r2 = i_r2 - 1;
         } else {
             break;
         }
     }
     let mut new_table = Box::new(Table::new());
-    t_r60 = &mut *new_table as *mut Table;
+    t_r13 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    i_r51 = i_r48 * 100;
-    i_r48 = i_r51 + i_r47;
+    i_r4 = i_r1 * 100;
+    i_r1 = i_r4 + i_r0;
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r60 };
+    let t = unsafe { &mut *t_r13 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r48;
+        *t.array.get_unchecked_mut(idx) = i_r1;
     }
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r60 };
+    let t = unsafe { &mut *t_r13 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r50;
+        *t.array.get_unchecked_mut(idx) = i_r3;
     }
     return tables;
 }
