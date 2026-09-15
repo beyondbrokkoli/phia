@@ -77,6 +77,21 @@ fn loop_region(blocks: &[BasicBlock], header: BlockId, body: BlockId) -> Vec<Blo
     region
 }
 
+// DEF_MAP INDEX-STABILITY INVARIANT. def_map maps vreg -> (block, index)
+// and is built ONCE, before any mutation — every later pass in this
+// function must keep those pairs valid:
+//   * PASS 3's upgrades rewrite instructions IN PLACE (index preserved);
+//   * the tier-4 mints and S5's EC/Hoist pairs only APPEND to pre-header
+//     blocks (existing indices preserved — the appends deliberately
+//     happen before PASS 3 could run again on the same header);
+//   * the orphan-feeder cleanup RETAINS (removes) instructions, which
+//     DOES shift indices — but only for blocks inside the region, only
+//     after this header's analysis is complete, and only for feeders
+//     whose sole use was just rewritten away, so their def_map entries
+//     can never be queried again (the LATER headers' analyses look up
+//     live operands only). If a future pass ever deletes or inserts
+//     mid-block, def_map must be rebuilt (or switched to instruction
+//     identity) in the same commit.
 pub fn optimize(program: &mut IrProgram) {
     let mut def_map: HashMap<RegId, (BlockId, usize)> = HashMap::new();
     for block in &program.blocks {

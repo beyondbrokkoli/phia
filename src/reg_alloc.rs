@@ -6,6 +6,35 @@ use crate::ast::StaticType;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Pool { Int, Float, Bool, String, Table, TableFloat, TableString, TableBool }
 
+/// StaticType -> Pool. THE pool oracle — every "which storage side?"
+/// question routes through here (or through the disjoint-range
+/// predicates that mirror these pools in backend.rs).
+///
+/// Adding an element kind (the bool patch is the reference, 2026-09-15):
+/// ```text
+///  1. type_checker.rs : resolve_static arm; check_cond/Not Var arms if the
+///     kind is Boolean-like; BinaryOp Var arms are OP-GUARDED (== / ~= only)
+///     so arith on the deferred kind still falls through to the rejections.
+///  2. memory.rs       : storage side + is_* flag + constructor.
+///  3. reg_alloc.rs    : pool_of arm; disjoint base range; AllocInfo field;
+///     mint arm; decl-range comment.
+///  4. backend.rs      : is_*table_reg predicate; pool_prefixed; decl
+///     ptr_ty; NewTable (handle AND pointer mode); SetTable (both modes);
+///     GetTable (handle tuple arm + pointer branch); SetTableFast;
+///     GetTableFast; EnsureCapacity (fld, zero); HoistRawPtr (fld);
+///     DebugProbe (fld token).
+///  5. main.rs         : dump branch (order: is_string -> is_float -> is_bool
+///     -> int; flags mutually exclusive by NewTable).
+///  6. Corpus          : positive dyn / fast / handle-mode / deferred-bind
+///     tests + negative element-conflict test; list in tests/listing.lua
+///     (single source — boss hygiene and lockdown both read it; a NEW
+///     test needs listing.lua + a relock for its lock).
+///  7. Docs            : subset.lua AND its README copy must stay in sync
+///     (they are two copies of one file, by design).
+/// ```
+/// A missed backend arm is almost always loud (generated Rust fails to
+/// compile, or a fast-path bounds panic) — the quiet corner is a wrong
+/// `fld` that still compiles; check EC/HR agreement first.
 fn pool_of(t: &StaticType) -> Pool {
     match t {
         StaticType::Integer => Pool::Int,
