@@ -17,41 +17,36 @@ pub fn run_baked() -> Vec<Box<Table>> {
     tables.push(new_table);
     t_r25 = t_r24;
     i_r24 = 0;
-    loop {
-        b_r24 = i_r24 < 3;
-        if b_r24 {
-            let k = 0;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &*t_r25 };
-            i_r25 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
-            } else {
-                0
-            };
-            let mut new_table = Box::new(Table::new());
-            t_r25 = &mut *new_table as *mut Table;
-            tables.push(new_table);
-            i_r26 = i_r25 + i_r24;
-            i_r25 = i_r26 + 5;
-            let k = i_r24;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r25 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = i_r25;
-            }
-            i_r24 = i_r24 + 1;
-        } else {
-            break;
+    while i_r24 < 3 {
+        let k = 0;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        let t = unsafe { &*t_r25 };
+        i_r25 = if idx < t.array.len() {
+            unsafe { *t.array.get_unchecked(idx) }
+        } else {
+            0
+        };
+        let mut new_table = Box::new(Table::new());
+        t_r25 = &mut *new_table as *mut Table;
+        tables.push(new_table);
+        i_r26 = i_r25 + i_r24;
+        i_r25 = i_r26 + 5;
+        let k = i_r24;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r25 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = i_r25;
+        }
+        i_r24 = i_r24 + 1;
     }
     let mut new_table = Box::new(Table::new());
     t_r24 = &mut *new_table as *mut Table;

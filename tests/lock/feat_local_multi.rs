@@ -99,14 +99,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
     };
     println!("{}\t{}\t{:?}\t{}", "tables", i_r60, f_r62, s_r60);
     i_r60 = 0;
-    loop {
-        b_r60 = i_r60 < 1;
-        if b_r60 {
-            println!("{}\t{}\t{}", "shadow", 0, 15);
-            i_r60 = i_r60 + 1;
-        } else {
-            break;
-        }
+    while i_r60 < 1 {
+        println!("{}\t{}\t{}", "shadow", 0, 15);
+        i_r60 = i_r60 + 1;
     }
     println!("{}\t{}", "outer", 10);
     return tables;

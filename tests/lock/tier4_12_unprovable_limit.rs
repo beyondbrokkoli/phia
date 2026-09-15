@@ -91,48 +91,43 @@ pub fn run_baked() -> Vec<Box<Table>> {
     };
     i_r26 = i_r25 + 1;
     i_r25 = 0;
-    loop {
-        b_r25 = i_r25 < i_r26;
-        if b_r25 {
-            let k = 0;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            if t_r26 == 0 {
-                panic!("Runtime Error: table is nil");
-            }
-            let t = match tables.get((t_r26 - 1) as usize) {
-                Some(t) => &**t,
-                None => panic!("Runtime Error: table is nil"),
-            };
-            t_r27 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
-            } else {
-                0
-            };
-            let k = i_r25;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            if t_r27 == 0 {
-                panic!("Runtime Error: table is nil");
-            }
-            let t = match tables.get_mut((t_r27 - 1) as usize) {
-                Some(t) => &mut **t,
-                None => panic!("Runtime Error: table is nil"),
-            };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = 1;
-            }
-            i_r25 = i_r25 + 1;
-        } else {
-            break;
+    while i_r25 < i_r26 {
+        let k = 0;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        if t_r26 == 0 {
+            panic!("Runtime Error: table is nil");
+        }
+        let t = match tables.get((t_r26 - 1) as usize) {
+            Some(t) => &**t,
+            None => panic!("Runtime Error: table is nil"),
+        };
+        t_r27 = if idx < t.array.len() {
+            unsafe { *t.array.get_unchecked(idx) }
+        } else {
+            0
+        };
+        let k = i_r25;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        if t_r27 == 0 {
+            panic!("Runtime Error: table is nil");
+        }
+        let t = match tables.get_mut((t_r27 - 1) as usize) {
+            Some(t) => &mut **t,
+            None => panic!("Runtime Error: table is nil"),
+        };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = 1;
+        }
+        i_r25 = i_r25 + 1;
     }
     return tables;
 }

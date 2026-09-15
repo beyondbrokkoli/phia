@@ -15,28 +15,23 @@ pub fn run_baked() -> Vec<Box<Table>> {
     tables.push(new_table);
     t_r13 = t_r12;
     i_r12 = 0;
-    loop {
-        b_r12 = i_r12 < 10;
-        if b_r12 {
-            let mut new_table = Box::new(Table::new());
-            t_r13 = &mut *new_table as *mut Table;
-            tables.push(new_table);
-            let k = i_r12;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r13 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = 1;
-            }
-            i_r12 = i_r12 + 1;
-        } else {
-            break;
+    while i_r12 < 10 {
+        let mut new_table = Box::new(Table::new());
+        t_r13 = &mut *new_table as *mut Table;
+        tables.push(new_table);
+        let k = i_r12;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r13 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = 1;
+        }
+        i_r12 = i_r12 + 1;
     }
     return tables;
 }

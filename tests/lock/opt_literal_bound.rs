@@ -25,25 +25,20 @@ pub fn run_baked() -> Vec<Box<Table>> {
     len_r11 = unsafe { (*t_r11).array.len() };
     p_r11 = unsafe { (*t_r11).array.as_mut_ptr() };
     i_r11 = 0;
-    loop {
-        b_r11 = i_r11 < 100;
-        if b_r11 {
-            i_r12 = i_r11 + 5;
-            let k = i_r11;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r11 {
-                unsafe {
-                    *p_r11.add(k as usize) = i_r12;
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            i_r11 = i_r11 + 1;
-        } else {
-            break;
+    while i_r11 < 100 {
+        i_r12 = i_r11 + 5;
+        let k = i_r11;
+        if k < 0 {
+            panic!("Runtime Error: Negative index in fast path");
         }
+        if (k as usize) < len_r11 {
+            unsafe {
+                *p_r11.add(k as usize) = i_r12;
+            }
+        } else {
+            panic!("optimizer invariant violated: fast-path bounds check failed");
+        }
+        i_r11 = i_r11 + 1;
     }
     return tables;
 }

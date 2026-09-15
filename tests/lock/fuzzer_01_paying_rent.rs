@@ -43,49 +43,44 @@ pub fn run_baked() -> Vec<Box<Table>> {
         *t.array.get_unchecked_mut(idx) = 4;
     }
     i_r83 = 0;
-    loop {
-        b_r83 = i_r83 < 4;
-        if b_r83 {
-            let k = 0;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r87 };
-            if idx >= t.farray.len() {
-                t.farray.resize(idx + 1, 0.0);
-            }
-            unsafe {
-                *t.farray.get_unchecked_mut(idx) = -8.56;
-            }
-            let k = 4;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r87 };
-            if idx >= t.farray.len() {
-                t.farray.resize(idx + 1, 0.0);
-            }
-            unsafe {
-                *t.farray.get_unchecked_mut(idx) = -2.84;
-            }
-            let k = 5;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r83 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = 26;
-            }
-            i_r83 = i_r83 + 1;
-        } else {
-            break;
+    while i_r83 < 4 {
+        let k = 0;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r87 };
+        if idx >= t.farray.len() {
+            t.farray.resize(idx + 1, 0.0);
+        }
+        unsafe {
+            *t.farray.get_unchecked_mut(idx) = -8.56;
+        }
+        let k = 4;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r87 };
+        if idx >= t.farray.len() {
+            t.farray.resize(idx + 1, 0.0);
+        }
+        unsafe {
+            *t.farray.get_unchecked_mut(idx) = -2.84;
+        }
+        let k = 5;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r83 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = 26;
+        }
+        i_r83 = i_r83 + 1;
     }
     let k = 4;
     if k < 0 {

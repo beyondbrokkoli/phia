@@ -10,13 +10,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     i_r10 = 5;
-    loop {
-        b_r10 = i_r10 < 0;
-        if b_r10 {
-            i_r10 = i_r10 + 1;
-        } else {
-            break;
-        }
+    while i_r10 < 0 {
+        i_r10 = i_r10 + 1;
     }
     let mut new_table = Box::new(Table::new());
     t_r10 = &mut *new_table as *mut Table;

@@ -15,14 +15,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
 
     i_r34 = 0;
     f_r40 = 1.0;
-    loop {
-        b_r34 = i_r34 < 1;
-        if b_r34 {
-            f_r40 = f_r40 - 1.0;
-            i_r34 = i_r34 + 1;
-        } else {
-            break;
-        }
+    while i_r34 < 1 {
+        f_r40 = f_r40 - 1.0;
+        i_r34 = i_r34 + 1;
     }
     i_r35 = 5 * i_r34;
     i_r34 = 0 - i_r35;

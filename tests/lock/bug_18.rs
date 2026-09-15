@@ -18,16 +18,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     i_r16 = 1;
     i_r17 = 2;
     i_r18 = 0;
-    loop {
-        b_r16 = i_r18 < 4;
-        if b_r16 {
-            i_r19 = i_r17;
-            i_r17 = i_r16 + 10;
-            i_r16 = i_r19;
-            i_r18 = i_r18 + 1;
-        } else {
-            break;
-        }
+    while i_r18 < 4 {
+        i_r19 = i_r17;
+        i_r17 = i_r16 + 10;
+        i_r16 = i_r19;
+        i_r18 = i_r18 + 1;
     }
     let k = 0;
     if k < 0 {

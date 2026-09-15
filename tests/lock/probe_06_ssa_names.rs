@@ -19,14 +19,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
     println!("{}\t{}\t{}", "join", i_r29, true);
     i_r30 = i_r29;
     i_r29 = 0;
-    loop {
-        b_r29 = i_r29 < 2;
-        if b_r29 {
-            i_r30 = i_r30 + 100;
-            i_r29 = i_r29 + 1;
-        } else {
-            break;
-        }
+    while i_r29 < 2 {
+        i_r30 = i_r30 + 100;
+        i_r29 = i_r29 + 1;
     }
     println!("{}\t{}\t{}", "after", i_r30, i_r29);
     let mut new_table = Box::new(Table::new());

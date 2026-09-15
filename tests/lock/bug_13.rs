@@ -15,50 +15,45 @@ pub fn run_baked() -> Vec<Box<Table>> {
     t_r18 = &mut *new_table as *mut Table;
     tables.push(new_table);
     i_r18 = 0;
-    loop {
-        b_r18 = i_r18 < 10;
-        if b_r18 {
-            i_r19 = i_r18 + 300;
-            let k = i_r18;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r18 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = i_r19;
-            }
-            i_r19 = i_r18;
-            let k = i_r19;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &*t_r18 };
-            i_r20 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
-            } else {
-                0
-            };
-            let k = i_r20;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r18 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = 1;
-            }
-            i_r18 = i_r18 + 1;
-        } else {
-            break;
+    while i_r18 < 10 {
+        i_r19 = i_r18 + 300;
+        let k = i_r18;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r18 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = i_r19;
+        }
+        i_r19 = i_r18;
+        let k = i_r19;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &*t_r18 };
+        i_r20 = if idx < t.array.len() {
+            unsafe { *t.array.get_unchecked(idx) }
+        } else {
+            0
+        };
+        let k = i_r20;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r18 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = 1;
+        }
+        i_r18 = i_r18 + 1;
     }
     return tables;
 }

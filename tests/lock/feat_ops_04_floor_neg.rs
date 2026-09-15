@@ -19,13 +19,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     i_r81 = 0;
-    loop {
-        b_r81 = i_r81 < 1;
-        if b_r81 {
-            i_r81 = i_r81 + 1;
-        } else {
-            break;
-        }
+    while i_r81 < 1 {
+        i_r81 = i_r81 + 1;
     }
     i_r82 = 7 * i_r81;
     i_r83 = 0 - i_r82;

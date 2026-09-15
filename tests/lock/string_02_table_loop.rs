@@ -27,42 +27,37 @@ pub fn run_baked() -> Vec<Box<Table>> {
     p_r22 = unsafe { (*t_r22).sarray.as_mut_ptr() };
     s_r20 = "x".to_string();
     i_r20 = 0;
-    loop {
-        b_r20 = i_r20 < 4;
-        if b_r20 {
-            s_r20 = format!("{}{}", s_r20, "o");
-            let k = i_r20;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r22 {
-                unsafe {
-                    *p_r22.add(k as usize) = s_r20.clone();
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            let k = i_r20;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r22 {
-                s_r21 = unsafe { (*p_r22.add(k as usize)).clone() };
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            println!(
-                "{}\t{}\t{}\ttable(len={})\t{}",
-                "iter",
-                i_r20,
-                s_r20,
-                unsafe { (*t_r22).sarray.len() },
-                s_r21
-            );
-            i_r20 = i_r20 + 1;
-        } else {
-            break;
+    while i_r20 < 4 {
+        s_r20 = format!("{}{}", s_r20, "o");
+        let k = i_r20;
+        if k < 0 {
+            panic!("Runtime Error: Negative index in fast path");
         }
+        if (k as usize) < len_r22 {
+            unsafe {
+                *p_r22.add(k as usize) = s_r20.clone();
+            }
+        } else {
+            panic!("optimizer invariant violated: fast-path bounds check failed");
+        }
+        let k = i_r20;
+        if k < 0 {
+            panic!("Runtime Error: Negative index in fast path");
+        }
+        if (k as usize) < len_r22 {
+            s_r21 = unsafe { (*p_r22.add(k as usize)).clone() };
+        } else {
+            panic!("optimizer invariant violated: fast-path bounds check failed");
+        }
+        println!(
+            "{}\t{}\t{}\ttable(len={})\t{}",
+            "iter",
+            i_r20,
+            s_r20,
+            unsafe { (*t_r22).sarray.len() },
+            s_r21
+        );
+        i_r20 = i_r20 + 1;
     }
     println!("{}\t{}\ttable(len={})", "exit", s_r20, unsafe {
         (*t_r22).sarray.len()

@@ -31,38 +31,33 @@ pub fn run_baked() -> Vec<Box<Table>> {
     p_r17 = unsafe { (*t_r17).array.as_mut_ptr() };
     t_r19 = t_r18;
     i_r17 = 0;
-    loop {
-        b_r17 = i_r17 < 5;
-        if b_r17 {
-            let k = i_r17;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r17 {
-                unsafe {
-                    *p_r17.add(k as usize) = 1;
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            i_r18 = i_r17 + 3;
-            let k = i_r18;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            let t = unsafe { &mut *t_r19 };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = 9;
-            }
-            t_r19 = t_r17;
-            i_r17 = i_r17 + 1;
-        } else {
-            break;
+    while i_r17 < 5 {
+        let k = i_r17;
+        if k < 0 {
+            panic!("Runtime Error: Negative index in fast path");
         }
+        if (k as usize) < len_r17 {
+            unsafe {
+                *p_r17.add(k as usize) = 1;
+            }
+        } else {
+            panic!("optimizer invariant violated: fast-path bounds check failed");
+        }
+        i_r18 = i_r17 + 3;
+        let k = i_r18;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
+        }
+        let idx = k as usize;
+        let t = unsafe { &mut *t_r19 };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = 9;
+        }
+        t_r19 = t_r17;
+        i_r17 = i_r17 + 1;
     }
     return tables;
 }

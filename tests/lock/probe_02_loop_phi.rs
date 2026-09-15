@@ -37,57 +37,52 @@ pub fn run_baked() -> Vec<Box<Table>> {
     len_r15 = t.array.len();
     p_r15 = t.array.as_mut_ptr();
     i_r15 = 0;
-    loop {
-        b_r15 = i_r15 < 3;
-        if b_r15 {
-            tables.push(Box::new(Table::new()));
-            t_r16 = tables.len() as i64;
-            let k = 0;
-            if k < 0 {
-                panic!("Runtime Error: Negative table index");
-            }
-            let idx = k as usize;
-            if t_r16 == 0 {
-                panic!("Runtime Error: table is nil");
-            }
-            let t = match tables.get_mut((t_r16 - 1) as usize) {
-                Some(t) => &mut **t,
-                None => panic!("Runtime Error: table is nil"),
-            };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
-            }
-            unsafe {
-                *t.array.get_unchecked_mut(idx) = i_r15;
-            }
-            let k = i_r15;
-            if k < 0 {
-                panic!("Runtime Error: Negative index in fast path");
-            }
-            if (k as usize) < len_r15 {
-                unsafe {
-                    *p_r15.add(k as usize) = t_r16;
-                }
-            } else {
-                panic!("optimizer invariant violated: fast-path bounds check failed");
-            }
-            println!(
-                "{}\t{}\t{}\t{}",
-                "iter",
-                i_r15,
-                match tables.get((t_r15 - 1) as usize) {
-                    Some(t) => format!("table#{}(len={})", t_r15, t.array.len()),
-                    None => "nil".to_string(),
-                },
-                match tables.get((t_r16 - 1) as usize) {
-                    Some(t) => format!("table#{}(len={})", t_r16, t.array.len()),
-                    None => "nil".to_string(),
-                }
-            );
-            i_r15 = i_r15 + 1;
-        } else {
-            break;
+    while i_r15 < 3 {
+        tables.push(Box::new(Table::new()));
+        t_r16 = tables.len() as i64;
+        let k = 0;
+        if k < 0 {
+            panic!("Runtime Error: Negative table index");
         }
+        let idx = k as usize;
+        if t_r16 == 0 {
+            panic!("Runtime Error: table is nil");
+        }
+        let t = match tables.get_mut((t_r16 - 1) as usize) {
+            Some(t) => &mut **t,
+            None => panic!("Runtime Error: table is nil"),
+        };
+        if idx >= t.array.len() {
+            t.array.resize(idx + 1, 0);
+        }
+        unsafe {
+            *t.array.get_unchecked_mut(idx) = i_r15;
+        }
+        let k = i_r15;
+        if k < 0 {
+            panic!("Runtime Error: Negative index in fast path");
+        }
+        if (k as usize) < len_r15 {
+            unsafe {
+                *p_r15.add(k as usize) = t_r16;
+            }
+        } else {
+            panic!("optimizer invariant violated: fast-path bounds check failed");
+        }
+        println!(
+            "{}\t{}\t{}\t{}",
+            "iter",
+            i_r15,
+            match tables.get((t_r15 - 1) as usize) {
+                Some(t) => format!("table#{}(len={})", t_r15, t.array.len()),
+                None => "nil".to_string(),
+            },
+            match tables.get((t_r16 - 1) as usize) {
+                Some(t) => format!("table#{}(len={})", t_r16, t.array.len()),
+                None => "nil".to_string(),
+            }
+        );
+        i_r15 = i_r15 + 1;
     }
     println!(
         "{}\t{}\t{}",

@@ -159,10 +159,40 @@ pub fn pool_prefixed(
     }
 }
 
-fn reg_uses(program: &IrProgram, r: RegId) -> usize {
+// Uses of `r` consumed AS A BOOLEAN. Int/Bool/Table/String physicals
+// deliberately share one id range, so a raw-id use count cannot tell the
+// cond bool's readers from a co-numbered int's (the loop counter and the
+// header Less's bool target mint base+0 in their respective pools —
+// i_r33 and b_r33 coexist). This counter answers the pretty-guard
+// question exactly — "does anything but the Branch read the Less's
+// result?" — by counting only the sites that consume the id in bool
+// context. Every bool reader an IR program can have is enumerated:
+// Branch conds, Not sources, Eq with ty Boolean, Move with ty Boolean,
+// DebugProbe Boolean operands, and Boolean-valued stores into
+// bool-element tables. Int-context uses of the same ID belong to a
+// DIFFERENT variable (i_rN vs b_rN — distinct Rust locals) and are
+// irrelevant by construction; a vreg typed both bool and int is
+// impossible (the ty map panics on conflicts). Phis are gone by
+// emission time (resolve_phis).
+fn bool_reg_uses(program: &IrProgram, r: RegId) -> usize {
     let mut n = 0;
     for b in &program.blocks {
-        for i in &b.instrs { for u in i.use_regs() { if u == r { n += 1; } } }
+        for i in &b.instrs {
+            match i {
+                Instruction::Not { source, .. } if *source == r => n += 1,
+                Instruction::Eq { left, right, ty: StaticType::Boolean, .. }
+                    if *left == r || *right == r => n += 1,
+                Instruction::Move { source, ty: StaticType::Boolean, .. } if *source == r => n += 1,
+                Instruction::SetTable { val, ty: StaticType::Boolean, .. }
+                | Instruction::SetTableFast { val, ty: StaticType::Boolean, .. } if *val == r => n += 1,
+                Instruction::DebugProbe { operands, .. } => {
+                    for &(reg, ref t) in operands {
+                        if reg == r && matches!(t, StaticType::Boolean) { n += 1; }
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(Terminator::Branch { cond, .. }) = &b.terminator
             && *cond == r { n += 1; }
     }
@@ -947,8 +977,12 @@ fn emit_loop(
 
     // Pretty form: the header holds nothing (identifier condition, e.g.
     // phase I / bug16a) or exactly the Less computing the branch
-    // condition with no other readers of its result. The Less folds into
-    // the while-condition — still evaluated every iteration.
+    // condition with no other BOOLEAN readers of its result
+    // (bool_reg_uses — pool-aware; the old raw-id count saw the shared
+    // id range's co-numbered ints too and declined almost every loop,
+    // which is why `while i < n` used to ride the fallback
+    // everywhere). The Less folds into the while-condition — still
+    // evaluated every iteration.
     //
     // Float operands DECLINE the pretty arm: iop_str! below would render
     // them as `i_r<id>` — undeclared registers, a program that does not
@@ -965,7 +999,7 @@ fn emit_loop(
     } else if block.instrs.len() == 1 {
         match &block.instrs[0] {
             Instruction::Less { target, left, right }
-                if *target == cond && reg_uses(program, cond) == 1
+                if *target == cond && bool_reg_uses(program, cond) == 1
                     && !is_float_reg(*left, alloc)
                     && !consts_f.contains_key(left) =>
                 Some(format!("{} < {}", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
