@@ -122,6 +122,7 @@ return {
         "string_08_tag_escaping.lua",
         "feat_local_multi.lua",
         "dce_01_dead_scalars.lua",
+        "fwhile_01_float_ident_bound.lua",
     },
     negative = {
         "bug_10a.lua",

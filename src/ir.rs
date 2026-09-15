@@ -4,13 +4,58 @@
 use crate::ast::StaticType;
 
 pub type BlockId = usize;
+
+/// THE ID-SPACE CONSTITUTION.
+///
+/// RegId is a layered namespace. Every layer has exactly one owner phase,
+/// and ownership follows pipeline order — the id space is a timeline, and
+/// that timeline IS the disjointness guarantee (collisions required two
+/// phases to share a range; no range is ever born overlapping anymore):
+///
+/// ```text
+/// layer A   vregs      [0, V)                owner: lowerer (+ optimizer's
+///                                              next_vreg mints into it)
+/// layer B   consts     [CONST_REG_BASE, …)   owner: propagate_constants
+///                                              (the remint; reserved high
+///                                              range so B's SIZE can never
+///                                              move C's base)
+/// layer C   physicals  [base, base+P)        owner: allocate_registers
+///                   base = ceiling of layer A only (trap 0's guard)
+///                   sub-layered in mint order: shared i/b/t/s range,
+///                   then float, ftable, tstr, btable — a sub-timeline
+///                   of pools
+/// ```
+///
+/// The three laws:
+///
+/// 1. **One layer, one owner, pipeline order.** A later phase's base is
+///    the ceiling of the layers it may see, with foreign layers EXCLUDED
+///    EXPLICITLY. reg_alloc's `!is_const_reg` scan guard (defs, uses AND
+///    branch conds) is not a patch — it is the first place this law is
+///    spelled out in code; any future consumer of raw ids over the whole
+///    IR must make the same exclusion, or cite this law instead of
+///    remembering the war story.
+/// 2. **Membership by range, value by map, kind by static type, rendering
+///    by layer.** Four orthogonal questions, four mechanisms, never mixed:
+///    `is_const_reg` answers membership; the consts maps answer value; the
+///    operand's `StaticType` answers int-vs-bool (and, under consts_f,
+///    float-vs-string — the Int/Bool shared-range precedent); `c{n}` /
+///    literal vs `i_r{n}` follows the layer.
+/// 3. **Ids never migrate.** A folded vreg is REMINTED into layer B, never
+///    reused; layer C ids are never queried against const maps except as
+///    tautologically-false range checks.
+///
+/// A future id consumer asks "which layers does my scan see?" — consts_f
+/// and consts_s, when built, mint sequentially from the same layer B under
+/// the same law, touching no base math anywhere.
 pub type RegId = u32;
 
-// Const-folded register ids mint from this reserved high range, disjoint
-// from the vreg/physical low half BY CONSTRUCTION — the two namespaces can
-// never collide numerically (the fuzzer_01 stale-key/physical collision
-// class is impossible rather than defended against). Realistic id counts
-// are in the hundreds; nothing else ever mints this high.
+/// Layer B's base: const-folded register ids mint from this reserved high
+/// range, disjoint from the vreg/physical low half BY CONSTRUCTION — the
+/// two namespaces can never collide numerically (the fuzzer_01
+/// stale-key/physical collision class is impossible rather than defended
+/// against). Realistic id counts are in the hundreds; nothing else ever
+/// mints this high.
 pub const CONST_REG_BASE: RegId = 1 << 31;
 
 pub fn is_const_reg(r: RegId) -> bool { r >= CONST_REG_BASE }

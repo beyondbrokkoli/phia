@@ -890,7 +890,7 @@ fn emit_loop(
     body: BlockId,
     emitted: &mut [bool],
 ) {
-    let (program, _alloc, consts_i, consts_b, _uses_handles) = env;
+    let (program, alloc, consts_i, consts_b, _uses_handles) = env;
     if !is_loop_header(program, h) {
         panic!("structured codegen: Branch in block {h} is not a loop header");
     }
@@ -903,12 +903,22 @@ fn emit_loop(
     // phase I / bug16a) or exactly the Less computing the branch
     // condition with no other readers of its result. The Less folds into
     // the while-condition — still evaluated every iteration.
+    //
+    // Float operands DECLINE the pretty arm: iop_str! below would render
+    // them as `i_r<id>` — undeclared registers, a program that does not
+    // compile (fwhile_01's shape: identifier-bound float bounds put the
+    // bare Less alone in the header; literal bounds escape by loading in
+    // the header, which makes len()==2 decline here). The fallback emits
+    // the Less through emit_instr, whose float arm is correct — exactly
+    // what it exists for. Only Less needs the guard: Leq/Geq never ride
+    // the pretty arm, and bool/string cannot be `<` operands.
     let pretty = if block.instrs.is_empty() {
         Some(bop_str!(cond, consts_b).to_string())
     } else if block.instrs.len() == 1 {
         match &block.instrs[0] {
             Instruction::Less { target, left, right }
-                if *target == cond && reg_uses(program, cond) == 1 =>
+                if *target == cond && reg_uses(program, cond) == 1
+                    && !is_float_reg(*left, alloc) =>
                 Some(format!("{} < {}", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
             _ => None,
         }
