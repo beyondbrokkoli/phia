@@ -274,6 +274,23 @@ type EmitEnv<'a> = (
     bool,
 );
 
+// The float floor-division subexpression `x / y`, E0689-proofed: when
+// BOTH operands const-folded to literals the division is `{float}`
+// and a `.floor()` method call on it is f32/f64-ambiguous — pin it
+// with `as f64`. Any register operand types the division already, and
+// that spelling stays byte-identical to the frozen locks.
+fn floor_div_str(
+    left: RegId,
+    right: RegId,
+    consts_f: &HashMap<RegId, f64>,
+) -> String {
+    if consts_f.contains_key(&left) && consts_f.contains_key(&right) {
+        format!("(({} / {}) as f64)", fop_str!(left, consts_f), fop_str!(right, consts_f))
+    } else {
+        format!("({} / {})", fop_str!(left, consts_f), fop_str!(right, consts_f))
+    }
+}
+
 fn emit_instr(
     out: &mut String,
     env: EmitEnv,
@@ -418,10 +435,15 @@ fn emit_instr(
         // divergence: Lua's `/` always yields a float and strict
         // typing forbids that, so integer `/` is truncating division
         // and float `/` is plain division.) /0 and MIN/-1 still panic
-        // inside the leading L / R.
+        // inside the leading L / R. The float templates pin an
+        // all-literal division with `as f64`: `.floor()` on {float}
+        // is f32/f64-ambiguous (E0689) — a register operand types the
+        // division, but consts_f folding can leave BOTH operands
+        // literal (fuzzer seed 65; fconst_04 pins it).
         Instruction::IntDiv { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = ({} / {}).floor();\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                let div = floor_div_str(*left, *right, consts_f);
+                out.push_str(&format!("f_r{target} = {div}.floor();\n"))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
@@ -435,8 +457,11 @@ fn emit_instr(
         // the divisor exactly when the two signs disagree.
         Instruction::Mod { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} - ({} / {}).floor() * {};\n",
-                    fop_str!(*left, consts_f), fop_str!(*left, consts_f), fop_str!(*right, consts_f), fop_str!(*right, consts_f)))
+                // same E0689 pin as IntDiv: the inner (l / r) riding
+                // .floor() is all-literal when both operands folded
+                let div = floor_div_str(*left, *right, consts_f);
+                out.push_str(&format!("f_r{target} = {} - {div}.floor() * {};\n",
+                    fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",

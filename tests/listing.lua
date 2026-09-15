@@ -128,6 +128,7 @@ return {
         "fconst_03_chain_table_checksum.lua",
         "sconst_01_concat_fold.lua",
         "whilepretty_01_shared_id.lua",
+        "fconst_04_floordiv_literal_cast.lua",
     },
     negative = {
         "bug_10a.lua",
