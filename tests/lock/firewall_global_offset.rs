@@ -6,39 +6,39 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r17 = 0i64;
     let mut i_r18 = 0i64;
-    let mut b_r17 = false;
-    let mut t_r17: *mut Table = std::ptr::null_mut();
-    let mut p_r17: *mut i64 = std::ptr::null_mut();
-    let mut len_r17 = 0usize;
-    let mut t_r18: *mut Table = std::ptr::null_mut();
-    let mut t_r19: *mut Table = std::ptr::null_mut();
+    let mut b_r19 = false;
+    let mut t_r20: *mut Table = std::ptr::null_mut();
+    let mut p_r20: *mut i64 = std::ptr::null_mut();
+    let mut len_r20 = 0usize;
+    let mut t_r21: *mut Table = std::ptr::null_mut();
+    let mut t_r22: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r17 = &mut *new_table as *mut Table;
+    t_r20 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let mut new_table = Box::new(Table::new());
-    t_r18 = &mut *new_table as *mut Table;
+    t_r21 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 8;
     if lim > 0 {
-        let t = unsafe { &mut *t_r17 };
+        let t = unsafe { &mut *t_r20 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r17 = unsafe { (*t_r17).array.len() };
-    p_r17 = unsafe { (*t_r17).array.as_mut_ptr() };
-    t_r19 = t_r18;
+    len_r20 = unsafe { (*t_r20).array.len() };
+    p_r20 = unsafe { (*t_r20).array.as_mut_ptr() };
+    t_r22 = t_r21;
     i_r17 = 0;
     while i_r17 < 5 {
         let k = i_r17;
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r17 {
+        if (k as usize) < len_r20 {
             unsafe {
-                *p_r17.add(k as usize) = 1;
+                *p_r20.add(k as usize) = 1;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
@@ -49,14 +49,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r19 };
+        let t = unsafe { &mut *t_r22 };
         if idx >= t.array.len() {
             t.array.resize(idx + 1, 0);
         }
         unsafe {
             *t.array.get_unchecked_mut(idx) = 9;
         }
-        t_r19 = t_r17;
+        t_r22 = t_r20;
         i_r17 = i_r17 + 1;
     }
     return tables;

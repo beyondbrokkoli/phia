@@ -17,7 +17,7 @@
 --   1e-9. Don't "fix" this pin to match Lua byte-for-byte.
 
 -- EXPECT_PRINT: final	16	-0.5700000000000001	betabeta	false	alphadelta	-2	betaalphadelta	0.19000000000000003	11	1
--- EXPECT_PROBE: #0 tag="final" b42 depth0 c0 f_r279 c152 c129 s_r263 c19 c27 c31 c97 c102
+-- EXPECT_PROBE: #0 tag="final" b42 depth0 c0 f_r295 c152 c129 s_r290 c19 c27 c31 c97 c102
 -- EXPECT: TABLE 0 LEN 6 NZ 3 CHECKSUM 55033987446467463 SUM 14.794666666666664
 -- EXPECT: TABLE 1 LEN 5 NZ 2 CHECKSUM -3
 -- EXPECT: TABLE 2 LEN 5 NZ 1 CHECKSUM -90

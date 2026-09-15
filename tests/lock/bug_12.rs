@@ -6,28 +6,28 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r18 = 0i64;
     let mut i_r19 = 0i64;
-    let mut b_r18 = false;
-    let mut t_r18: *mut Table = std::ptr::null_mut();
-    let mut p_r18: *mut i64 = std::ptr::null_mut();
-    let mut len_r18 = 0usize;
-    let mut t_r19: *mut Table = std::ptr::null_mut();
+    let mut b_r20 = false;
+    let mut t_r21: *mut Table = std::ptr::null_mut();
+    let mut p_r21: *mut i64 = std::ptr::null_mut();
+    let mut len_r21 = 0usize;
+    let mut t_r22: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r18 = &mut *new_table as *mut Table;
+    t_r21 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let mut new_table = Box::new(Table::new());
-    t_r19 = &mut *new_table as *mut Table;
+    t_r22 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 310;
     if lim > 0 {
-        let t = unsafe { &mut *t_r18 };
+        let t = unsafe { &mut *t_r21 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r18 = unsafe { (*t_r18).array.len() };
-    p_r18 = unsafe { (*t_r18).array.as_mut_ptr() };
+    len_r21 = unsafe { (*t_r21).array.len() };
+    p_r21 = unsafe { (*t_r21).array.as_mut_ptr() };
     i_r18 = 0;
     while i_r18 < 10 {
         i_r19 = i_r18 + 300;
@@ -35,9 +35,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r18 {
+        if (k as usize) < len_r21 {
             unsafe {
-                *p_r18.add(k as usize) = 1;
+                *p_r21.add(k as usize) = 1;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
@@ -46,9 +46,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r18 {
+        if (k as usize) < len_r21 {
             unsafe {
-                *p_r18.add(k as usize) = 1;
+                *p_r21.add(k as usize) = 1;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");

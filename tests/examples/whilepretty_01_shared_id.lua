@@ -1,18 +1,20 @@
--- whilepretty_01_shared_id.lua  [POSITIVE — pretty while-form under the
--- shared id range]
--- The id-collision pin. Int and Bool physicals deliberately mint from
--- one shared base: this program's loop counter and its header Less's
--- bool target both take base+0 (i_rN and b_rN, one number, two
--- variables). The pretty-arm guard used to count uses by RAW id, so the
--- counter's uses inflated the cond's count and EVERY `while i < n`
--- shaped loop degraded to the fallback `loop { b_rN = i_rN < lit; ... }`
--- spelling — no lock in the corpus had ever shown a pretty
--- `while i_rN < lit {` form. The guard now counts bool-CONTEXT uses
--- only (bool_reg_uses), and this lock pins the pretty spelling on the
--- exact collision shape.
+-- whilepretty_01_shared_id.lua  [POSITIVE — pretty while-form on the
+-- historical id-collision shape]
+-- The pretty-form pin, kept on the shape that discovered it. Under the
+-- OLD shared id range this program's loop counter and its header
+-- Less's bool target co-numbered (i_rN and b_rN, one number, two
+-- variables), and the pretty-arm guard's raw-id use count saw the
+-- counter's uses as the cond's — EVERY `while i < n` shaped loop
+-- degraded to the fallback `loop { b_rN = i_rN < lit; ... }` spelling.
+-- The interim fix counted bool-CONTEXT uses (bool_reg_uses); since the
+-- one-global-timeline mint gave every physical a unique id, the guard
+-- is a plain raw use count (count_uses) and the collision shape is
+-- ordinary. This lock keeps pinning the pretty spelling — and its
+-- decl block (i_rN, then b_rN+1) pins the counter/cond ids NOT
+-- co-numbering anymore.
 -- RE-VERIFY IF THIS BREAKS: a `loop {` in this lock means the guard
--- regressed to raw-id counting (or over/under-counts a bool reader
--- site); the value pin below is the semantic net.
+-- over/under-counts a use site; the value pin below is the semantic
+-- net.
 -- EXPECT_PRINT: i	3
 local i = 0
 while i < 3 do i = i + 1 end

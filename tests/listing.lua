@@ -129,6 +129,7 @@ return {
         "sconst_01_concat_fold.lua",
         "whilepretty_01_shared_id.lua",
         "fconst_04_floordiv_literal_cast.lua",
+        "uniqueid_01_no_shared_ids.lua",
     },
     negative = {
         "bug_10a.lua",

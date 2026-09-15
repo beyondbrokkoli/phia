@@ -7,24 +7,24 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r15 = 0i64;
     let mut i_r16 = 0i64;
     let mut i_r17 = 0i64;
-    let mut b_r15 = false;
-    let mut t_r15: *mut Table = std::ptr::null_mut();
-    let mut p_r15: *mut i64 = std::ptr::null_mut();
-    let mut len_r15 = 0usize;
+    let mut b_r18 = false;
+    let mut t_r19: *mut Table = std::ptr::null_mut();
+    let mut p_r19: *mut i64 = std::ptr::null_mut();
+    let mut len_r19 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r15 = &mut *new_table as *mut Table;
+    t_r19 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 4;
     if lim > 0 {
-        let t = unsafe { &mut *t_r15 };
+        let t = unsafe { &mut *t_r19 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r15 = unsafe { (*t_r15).array.len() };
-    p_r15 = unsafe { (*t_r15).array.as_mut_ptr() };
+    len_r19 = unsafe { (*t_r19).array.len() };
+    p_r19 = unsafe { (*t_r19).array.as_mut_ptr() };
     i_r15 = 0;
     while i_r15 < 3 {
         i_r16 = i_r15 + 1;
@@ -33,15 +33,15 @@ pub fn run_baked() -> Vec<Box<Table>> {
         if k < 0 {
             panic!("Runtime Error: Negative index in fast path");
         }
-        if (k as usize) < len_r15 {
+        if (k as usize) < len_r19 {
             unsafe {
-                *p_r15.add(k as usize) = i_r17;
+                *p_r19.add(k as usize) = i_r17;
             }
         } else {
             panic!("optimizer invariant violated: fast-path bounds check failed");
         }
         println!("{}\t{}\ttable(len={})", "iter", i_r15, unsafe {
-            (*t_r15).array.len()
+            (*t_r19).array.len()
         });
         i_r15 = i_r15 + 1;
     }

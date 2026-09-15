@@ -21,9 +21,13 @@ pub type BlockId = usize;
 ///                                              move C's base)
 /// layer C   physicals  [base, base+P)        owner: allocate_registers
 ///                   base = ceiling of layer A only (trap 0's guard)
-///                   sub-layered in mint order: shared i/b/t/s range,
-///                   then float, ftable, tstr, btable — a sub-timeline
-///                   of pools
+///                   sub-layered in mint order — int, bool, table,
+///                   string, float, ftable, tstr, btable — EIGHT
+///                   consecutive per-pool ranges on ONE global
+///                   timeline: every physical id belongs to exactly
+///                   one pool, and no two physical registers ever
+///                   share a number (i_r12/b_r12 co-numbering is
+///                   gone; pool membership is a pure range check)
 /// ```
 ///
 /// The three laws:
@@ -35,12 +39,14 @@ pub type BlockId = usize;
 ///    spelled out in code; any future consumer of raw ids over the whole
 ///    IR must make the same exclusion, or cite this law instead of
 ///    remembering the war story.
-/// 2. **Membership by range, value by map, kind by static type, rendering
-///    by layer.** Four orthogonal questions, four mechanisms, never mixed:
-///    `is_const_reg` answers membership; the consts maps answer value; the
-///    operand's `StaticType` answers int-vs-bool (and, under consts_f,
-///    float-vs-string — the Int/Bool shared-range precedent); `c{n}` /
-///    literal vs `i_r{n}` follows the layer.
+/// 2. **Membership by range, value by map, kind by range (physicals) or
+///    static type (vregs), rendering by layer.** Four orthogonal
+///    questions, four mechanisms, never mixed: `is_const_reg` answers
+///    membership; the consts maps answer value; an id's POOL RANGE
+///    answers its kind once layer C has minted it (pre-alloc, vregs
+///    have no ranges — there the operand's `StaticType` is the only
+///    kind source, which is why Eq and DebugProbe carry types at all);
+///    `c{n}` / literal vs `i_r{n}` follows the layer.
 /// 3. **Ids never migrate.** A folded vreg is REMINTED into layer B, never
 ///    reused; layer C ids are never queried against const maps except as
 ///    tautologically-false range checks.
@@ -96,16 +102,18 @@ pub enum Instruction {
     // pre-header +1 and opens the fast path exactly as before.
     Leq { target: RegId, left: RegId, right: RegId },
     Geq { target: RegId, left: RegId, right: RegId },
-    // ty = the OPERAND type (Integer | Float | Boolean — the checker
-    // guarantees both sides agree). Eq operands are the only polymorphic
-    // operands in the IR without an instruction-carried type, and Int and
-    // Bool physicals deliberately share one id range, so the pool tables
-    // cannot disambiguate them — the rendering needs this field.
+    // ty = the OPERAND type (Integer | Float | Boolean | String — the
+    // checker guarantees both sides agree). Eq operands are the only
+    // polymorphic operands in the IR without an instruction-carried
+    // type, and at FOLD time (pre-alloc) vreg ids carry no pool ranges,
+    // so the const maps need this field to know which of them to
+    // consult. Post-alloc the operands' pool ranges answer on their
+    // own; emission still rides the ty because it is already here.
     Eq { target: RegId, left: RegId, right: RegId, ty: StaticType },
     Not { target: RegId, source: RegId },
     // String concatenation. Monomorphic — String-only operands by the
-    // checker — so it carries no kind: the polymorphic-operand rule
-    // (Int/Bool sharing an id range) cannot apply to it.
+    // checker — so it carries no kind: there is nothing to
+    // disambiguate.
     Concat { target: RegId, left: RegId, right: RegId },
 
     Phi { target: RegId, ty: StaticType, args: Vec<(BlockId, RegId)> },
@@ -115,10 +123,10 @@ pub enum Instruction {
     SetTableFast { table: RegId, key: RegId, val: RegId, ty: StaticType },
     GetTableFast { target: RegId, table: RegId, key: RegId, ty: StaticType },
     /// Runtime observation point: prints its operands' values under the
-    /// tag. Defines nothing; carries each operand's kind because Int and
-    /// Bool physicals share one id range and nothing else disambiguates
-    /// them at emission (the polymorphic-operand rule). Never DCE'd: it
-    /// has no def to be dead and it is not in the pure set.
+    /// tag. Defines nothing; carries each operand's kind for PRE-ALLOC
+    /// typing (reg_alloc's pool map — vreg ids carry no ranges yet) and
+    /// for the print-format choice ({} vs {:?}). Never DCE'd: it has no
+    /// def to be dead and it is not in the pure set.
     DebugProbe { tag: String, operands: Vec<(RegId, StaticType)> },
 }
 

@@ -10,8 +10,8 @@
 -- EXPECT_PRINT: iter	1	table#1(len=1)	table#2(len=3)
 -- EXPECT_PRINT: iter	2	table#1(len=1)	table#2(len=3)
 -- EXPECT_PRINT: exit	table#1(len=1)
--- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r26 t_r26 len_r26 t_r28 len_r28
--- EXPECT_PROBE: #1 tag="exit" b3 depth0 t_r26 len_r26
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r26 t_r29 len_r29 t_r31 len_r31
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 t_r29 len_r29
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 3 NZ 2 CHECKSUM 56
 -- EXPECT: NTABLES 2

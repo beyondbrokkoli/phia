@@ -6,12 +6,12 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r14 = 0i64;
     let mut i_r15 = 0i64;
-    let mut b_r14 = false;
-    let mut t_r14: *mut Table = std::ptr::null_mut();
+    let mut b_r16 = false;
+    let mut t_r17: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r14 = &mut *new_table as *mut Table;
+    t_r17 = &mut *new_table as *mut Table;
     tables.push(new_table);
     i_r14 = 200;
     i_r15 = 0;
@@ -21,7 +21,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r14 };
+        let t = unsafe { &mut *t_r17 };
         if idx >= t.array.len() {
             t.array.resize(idx + 1, 0);
         }

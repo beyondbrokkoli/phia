@@ -122,7 +122,8 @@ fn live_intervals(blocks: &[BasicBlock], live_out: &[HashSet<RegId>]) -> HashMap
 pub struct AllocInfo {
     pub n_int: usize, pub n_bool: usize, pub n_float: usize, pub n_str: usize,
     pub n_table: usize, pub n_ftable: usize, pub n_tstr: usize, pub n_btable: usize,
-    pub phys_base: RegId, pub float_base: RegId, pub ftable_base: RegId,
+    pub int_base: RegId, pub bool_base: RegId, pub table_base: RegId,
+    pub str_base: RegId, pub float_base: RegId, pub ftable_base: RegId,
     pub tstr_base: RegId, pub btable_base: RegId
 }
 
@@ -221,9 +222,9 @@ pub fn allocate_registers(
                 | Instruction::Less { left, right, .. }
                 | Instruction::Leq { left, right, .. } | Instruction::Geq { left, right, .. } =>
                     vec![(*left, StaticType::Integer), (*right, StaticType::Integer)],
-                // Eq's operands are polymorphic: the instruction's ty is
-                // the only reliable pool source (Int and Bool physicals
-                // share one id range, so nothing else disambiguates).
+                // Eq's operands are polymorphic and the fold (which runs
+                // pre-alloc, where ids carry no pool ranges) needs the
+                // instruction's ty as its kind source here.
                 Instruction::Eq { left, right, ty, .. } =>
                     vec![(*left, ty.clone()), (*right, ty.clone())],
                 // Concat is monomorphic String — no ambiguity to carry.
@@ -236,10 +237,11 @@ pub fn allocate_registers(
                     vec![(*table, StaticType::Table(Box::new(StaticType::Integer))), (*limit, StaticType::Integer)],
                 Instruction::HoistRawPtr { table } =>
                     vec![(*table, StaticType::Table(Box::new(StaticType::Integer)))],
-                // The probe's operand list IS its kind carrier. Without
-                // this arm the operands never enter the ty map, never
-                // get physical ids, and emission renders undeclared
-                // registers — the polymorphic-operand rule, enforced.
+                // The probe's operand list IS its kind carrier for this
+                // pre-mint typing pass (ids answer pool questions only
+                // AFTER the ranges exist). Without this arm the operands
+                // never enter the ty map, never get physical ids, and
+                // emission renders undeclared registers.
                 Instruction::DebugProbe { operands, .. } =>
                     operands.iter().map(|(r, t)| (*r, t.clone())).collect(),
                 _ => vec![],
@@ -286,23 +288,26 @@ pub fn allocate_registers(
 
     let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
-    // Int/Bool/Table/String scalars deliberately SHARE the physical id
-    // space (i_r12, b_r12, t_r12, s_r12 coexist — the prefix
-    // disambiguates; that layout is what every integer lock freezes).
-    // Float scalars mint from a disjoint range (emission asks "is reg
-    // N float?" from N alone), float-ELEMENT tables from a second
-    // disjoint range on top, string-ELEMENT tables from a third,
-    // bool-ELEMENT tables from a fourth: the per-id pointer decls and
-    // EC/HR field choices (*mut f64/farray, *mut String/sarray, *mut
-    // bool/barray) must never serve the wrong table kind.
-    // Pure-integer programs mint none of these: integer ids, integer
-    // bytes, byte-for-byte.
+    // ONE GLOBAL TIMELINE of physical ids: eight consecutive per-pool
+    // ranges, minted in fixed order — int, bool, table, string, float,
+    // ftable, tstr, btable. Every physical id belongs to exactly one
+    // pool and no two physical registers ever share a number (the
+    // SSA spirit carried into the physical namespace): `i_r12` and
+    // `b_r12` can no longer coexist, so pool membership is a pure
+    // range check and nothing downstream needs a carried StaticType
+    // to disambiguate a scalar operand. The old layout co-numbered
+    // Int/Bool/Table/String from one shared range — every
+    // "which pool is this id?" hazard (Eq's ty, probe operand kinds,
+    // the pretty-while bool-context counter) traces to that sharing.
+    // Range ORDER preserves the old relative order (shared block,
+    // then float, ftable, tstr, btable), so programs using a single
+    // scalar kind — and int+float programs — keep byte-identical ids.
     let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
-    let max_other = pool_count(Pool::Int)
-        .max(pool_count(Pool::Bool))
-        .max(pool_count(Pool::Table))
-        .max(pool_count(Pool::String));
-    let float_base = base + max_other as RegId;
+    let int_base = base;
+    let bool_base = int_base + pool_count(Pool::Int) as RegId;
+    let table_base = bool_base + pool_count(Pool::Bool) as RegId;
+    let str_base = table_base + pool_count(Pool::Table) as RegId;
+    let float_base = str_base + pool_count(Pool::String) as RegId;
     let ftable_base = float_base + pool_count(Pool::Float) as RegId;
     let tstr_base = ftable_base + pool_count(Pool::TableFloat) as RegId;
     let btable_base = tstr_base + pool_count(Pool::TableString) as RegId;
@@ -333,11 +338,14 @@ pub fn allocate_registers(
             let c = count.entry(p).or_insert(0);
             let n = *c; *c += 1;
             match p {
+                Pool::Int => int_base + n as RegId,
+                Pool::Bool => bool_base + n as RegId,
+                Pool::Table => table_base + n as RegId,
+                Pool::String => str_base + n as RegId,
                 Pool::Float => float_base + n as RegId,
                 Pool::TableFloat => ftable_base + n as RegId,
                 Pool::TableString => tstr_base + n as RegId,
                 Pool::TableBool => btable_base + n as RegId,
-                _ => base + n as RegId,
             }
         });
         act.push((phys, end));
@@ -367,7 +375,10 @@ pub fn allocate_registers(
         n_ftable: *count.entry(Pool::TableFloat).or_insert(0),
         n_tstr: *count.entry(Pool::TableString).or_insert(0),
         n_btable: *count.entry(Pool::TableBool).or_insert(0),
-        phys_base: base,
+        int_base: base,
+        bool_base,
+        table_base,
+        str_base,
         float_base,
         ftable_base,
         tstr_base,

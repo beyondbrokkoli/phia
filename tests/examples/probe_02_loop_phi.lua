@@ -12,8 +12,8 @@
 -- EXPECT_PRINT: iter	1	table#1(len=3)	table#3(len=1)
 -- EXPECT_PRINT: iter	2	table#1(len=3)	table#4(len=1)
 -- EXPECT_PRINT: exit	3	table#1(len=3)
--- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r15 t_r15 len_r15 t_r16 len_r16
--- EXPECT_PROBE: #1 tag="exit" b3 depth0 i_r15 t_r15 len_r15
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r15 t_r17 len_r17 t_r18 len_r18
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 i_r15 t_r17 len_r17
 -- EXPECT: NTABLES 4
 -- EXPECT: TABLE 0 LEN 3 NZ 3 CHECKSUM 20
 local t = {}

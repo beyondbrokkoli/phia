@@ -215,12 +215,11 @@ pub fn propagate_constants(
                             cb.insert(*target, l >= r);
                         }
                     }
-                    // Eq folds per operand kind — the instruction's ty is
-                    // the single source of truth (Int/Bool physicals share
-                    // one id range; nothing else disambiguates). Bool Eqs
-                    // deliberately stay unfolded (emission renders
-                    // both-const bools as literals anyway) — a
-                    // byte-frozen choice.
+                    // Eq folds per operand kind — the instruction's ty
+                    // is the only kind source at fold time (vregs carry
+                    // no pool ranges pre-alloc). Bool Eqs deliberately
+                    // stay unfolded (emission renders both-const bools
+                    // as literals anyway) — a byte-frozen choice.
                     Instruction::Eq { target, left, right, ty }
                         if single_def(&defs, *target) => match ty {
                             StaticType::Integer => {

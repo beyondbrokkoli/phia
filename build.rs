@@ -171,48 +171,45 @@ fn render_final_ir(
     consts_f: &HashMap<ir::RegId, f64>,
     consts_s: &HashMap<ir::RegId, String>,
 ) {
-    use ast::StaticType;
     use ir::Instruction as I;
-    let st_i = StaticType::Integer;
-    let st_b = StaticType::Boolean;
-    let st_tbl = || StaticType::Table(Box::new(StaticType::Integer));
-    // pool_prefixed bound to this dump's data: the match arms below
-    // keep their old two-argument shape.
-    let pp = |r: ir::RegId, t: &StaticType| {
-        backend::pool_prefixed(r, t, consts_i, consts_b, consts_f, consts_s, alloc)
+    // pool_prefixed bound to this dump's data. One argument: the id
+    // alone answers the pool (one global timeline, one range per
+    // pool), so no StaticType hint rides along anymore.
+    let pp = |r: ir::RegId| {
+        backend::pool_prefixed(r, consts_i, consts_b, consts_f, consts_s, alloc)
     };
     for b in &program.blocks {
         let term = match &b.terminator {
             Some(ir::Terminator::Jump(t)) => format!("Jump(b{t})"),
             Some(ir::Terminator::Branch { cond, true_block, false_block }) =>
                 format!("Branch {{ cond: {}, true_block: {true_block}, false_block: {false_block} }}",
-                    pp(*cond, &StaticType::Boolean)),
+                    pp(*cond)),
             Some(ir::Terminator::Halt) => "Halt".to_string(),
             None => "None".to_string(),
         };
         out.push_str(&format!("BLOCK {} (depth {}) term=Some({term})\n", b.id, b.depth));
         for i in &b.instrs {
             let s = match i {
-                I::LoadInt { target, val } => format!("LoadInt {{ target: {}, val: {val} }}", pp(*target, &st_i)),
-                I::LoadFloat { target, val } => format!("LoadFloat {{ target: {}, val: {val:?} }}", pp(*target, &StaticType::Float)),
-                I::LoadBool { target, val } => format!("LoadBool {{ target: {}, val: {val} }}", pp(*target, &st_b)),
-                I::LoadString { target, val } => format!("LoadString {{ target: {}, val: {val:?} }}", pp(*target, &StaticType::String)),
-                I::NewTable { target, ty } => format!("NewTable {{ target: {}, ty: {ty:?} }}", pp(*target, ty)),
+                I::LoadInt { target, val } => format!("LoadInt {{ target: {}, val: {val} }}", pp(*target)),
+                I::LoadFloat { target, val } => format!("LoadFloat {{ target: {}, val: {val:?} }}", pp(*target)),
+                I::LoadBool { target, val } => format!("LoadBool {{ target: {}, val: {val} }}", pp(*target)),
+                I::LoadString { target, val } => format!("LoadString {{ target: {}, val: {val:?} }}", pp(*target)),
+                I::NewTable { target, ty } => format!("NewTable {{ target: {}, ty: {ty:?} }}", pp(*target)),
                 I::SetTable { table, key, val, ty } =>
                     format!("SetTable {{ table: {}, key: {}, val: {}, ty: {ty:?} }}",
-                        pp(*table, &st_tbl()), pp(*key, &st_i), pp(*val, ty)),
+                        pp(*table), pp(*key), pp(*val)),
                 I::SetTableFast { table, key, val, ty } =>
                     format!("SetTableFast {{ table: {}, key: {}, val: {}, ty: {ty:?} }}",
-                        pp(*table, &st_tbl()), pp(*key, &st_i), pp(*val, ty)),
+                        pp(*table), pp(*key), pp(*val)),
                 I::GetTable { target, table, key, ty } =>
                     format!("GetTable {{ target: {}, table: {}, key: {}, ty: {ty:?} }}",
-                        pp(*target, ty), pp(*table, &st_tbl()), pp(*key, &st_i)),
+                        pp(*target), pp(*table), pp(*key)),
                 I::GetTableFast { target, table, key, ty } =>
                     format!("GetTableFast {{ target: {}, table: {}, key: {}, ty: {ty:?} }}",
-                        pp(*target, ty), pp(*table, &st_tbl()), pp(*key, &st_i)),
+                        pp(*target), pp(*table), pp(*key)),
                 I::Move { target, source, ty } =>
                     format!("Move {{ target: {}, source: {}, ty: {ty:?} }}",
-                        pp(*target, ty), pp(*source, ty)),
+                        pp(*target), pp(*source)),
                 I::Add { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Add", *target, *left, *right),
                 I::Sub { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Sub", *target, *left, *right),
                 I::Mul { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mul", *target, *left, *right),
@@ -220,41 +217,39 @@ fn render_final_ir(
                 I::IntDiv { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "IntDiv", *target, *left, *right),
                 I::Mod { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mod", *target, *left, *right),
                 I::Neg { target, source } =>
-                    format!("Neg {{ target: {}, source: {} }}", pp(*target, &st_i), pp(*source, &st_i)),
+                    format!("Neg {{ target: {}, source: {} }}", pp(*target), pp(*source)),
                 I::Less { target, left, right } =>
                     format!("Less {{ target: {}, left: {}, right: {} }}",
-                        pp(*target, &st_b), pp(*left, &st_i), pp(*right, &st_i)),
+                        pp(*target), pp(*left), pp(*right)),
                 I::Leq { target, left, right } =>
                     format!("Leq {{ target: {}, left: {}, right: {} }}",
-                        pp(*target, &st_b), pp(*left, &st_i), pp(*right, &st_i)),
+                        pp(*target), pp(*left), pp(*right)),
                 I::Geq { target, left, right } =>
                     format!("Geq {{ target: {}, left: {}, right: {} }}",
-                        pp(*target, &st_b), pp(*left, &st_i), pp(*right, &st_i)),
+                        pp(*target), pp(*left), pp(*right)),
                 I::Eq { target, left, right, ty } =>
                     format!("Eq {{ target: {}, left: {}, right: {}, ty: {ty:?} }}",
-                        pp(*target, &st_b), pp(*left, ty), pp(*right, ty)),
+                        pp(*target), pp(*left), pp(*right)),
                 I::Not { target, source } =>
-                    format!("Not {{ target: {}, source: {} }}", pp(*target, &st_b), pp(*source, &st_b)),
+                    format!("Not {{ target: {}, source: {} }}", pp(*target), pp(*source)),
                 I::Concat { target, left, right } =>
                     format!("Concat {{ target: {}, left: {}, right: {} }}",
-                        pp(*target, &StaticType::String),
-                        pp(*left, &StaticType::String),
-                        pp(*right, &StaticType::String)),
+                        pp(*target), pp(*left), pp(*right)),
                 I::Phi { target, ty, args } => {
                     let a: Vec<String> = args.iter()
-                        .map(|(b, r)| format!("b{b}:{}", pp(*r, ty)))
+                        .map(|(b, r)| format!("b{b}:{}", pp(*r)))
                         .collect();
                     format!("Phi {{ target: {}, ty: {ty:?}, args: [{}] }}",
-                        pp(*target, ty), a.join(", "))
+                        pp(*target), a.join(", "))
                 }
                 I::EnsureCapacity { table, limit } =>
                     format!("EnsureCapacity {{ table: {}, limit: {} }}",
-                        pp(*table, &st_tbl()), pp(*limit, &st_i)),
+                        pp(*table), pp(*limit)),
                 I::HoistRawPtr { table } =>
-                    format!("HoistRawPtr {{ table: {} }}", pp(*table, &st_tbl())),
+                    format!("HoistRawPtr {{ table: {} }}", pp(*table)),
                 I::DebugProbe { tag, operands } => {
                     let ops: Vec<String> = operands.iter()
-                        .map(|(r, t)| format!("({}, {t:?})", pp(*r, t)))
+                        .map(|(r, t)| format!("({}, {t:?})", pp(*r)))
                         .collect();
                     format!("DebugProbe {{ tag: {tag:?}, operands: [{}] }}", ops.join(", "))
                 }
@@ -275,20 +270,15 @@ fn arith(
     left: ir::RegId,
     right: ir::RegId,
 ) -> String {
-    // operands inherit the target's pool (Float vs Int) — the same
-    // is_float_reg(target) test emission applies to the untyped arith ops.
-    // (Probing pool_prefixed with a Float hint does NOT work: for ids
-    // outside the disjoint ranges it falls through to the hint, so every
-    // probe answered f_r.)
-    let t = if backend::is_float_reg(target, alloc) {
-        ast::StaticType::Float
-    } else {
-        ast::StaticType::Integer
+    // The untyped arith ops render every operand by its own pool range:
+    // the id alone answers float vs int (const operands render through
+    // the map lookup inside pool_prefixed). The old version had to
+    // probe the TARGET's pool first and smear that hint over the
+    // operands — a workaround for the days when ids carried no pools.
+    let p = |r: ir::RegId| {
+        backend::pool_prefixed(r, consts_i, consts_b, consts_f, consts_s, alloc)
     };
-    format!("{name} {{ target: {}, left: {}, right: {} }}",
-        backend::pool_prefixed(target, &t, consts_i, consts_b, consts_f, consts_s, alloc),
-        backend::pool_prefixed(left, &t, consts_i, consts_b, consts_f, consts_s, alloc),
-        backend::pool_prefixed(right, &t, consts_i, consts_b, consts_f, consts_s, alloc))
+    format!("{name} {{ target: {}, left: {}, right: {} }}", p(target), p(left), p(right))
 }
 
 fn main() {
@@ -401,8 +391,9 @@ fn main() {
     if dump_final {
         let mut s = String::from(
             "== FINAL CFG — post-allocate_registers (pool-prefixed physical ids), the structured codegen's input ==\n\
-             == i_r/b_r/f_r/s_r/t_r name the exact Rust variable emission generates; pools share ids BY DESIGN ==\n\
-             == (i_r49 and t_r49 are different variables). v marks const-skipped vregs (rendered as literals). ==\n",
+             == i_r/b_r/f_r/s_r/t_r name the exact Rust variable emission generates; every physical id is unique ==\n\
+             == (one global timeline, one pool per range — no two variables share a number). c{n} marks const-folded ==\n\
+             == regs (layer-B ids; their uses render as literals). ==\n",
         );
         render_final_ir(&mut s, &ir_program, &alloc_info, &consts_i, &consts_b, &consts_f, &consts_s);
         std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();

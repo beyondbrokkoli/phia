@@ -6,18 +6,18 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r18 = 0i64;
     let mut i_r19 = 0i64;
-    let mut t_r18: *mut Table = std::ptr::null_mut();
+    let mut t_r20: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r18 = &mut *new_table as *mut Table;
+    t_r20 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r18 };
+    let t = unsafe { &mut *t_r20 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
@@ -30,14 +30,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
         5,
         2.5,
         true,
-        unsafe { (*t_r18).array.len() }
+        unsafe { (*t_r20).array.len() }
     );
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r18 };
+    let t = unsafe { &mut *t_r20 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
@@ -49,7 +49,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r18 };
+    let t = unsafe { &*t_r20 };
     i_r18 = if idx < t.array.len() {
         unsafe { *t.array.get_unchecked(idx) }
     } else {
@@ -60,7 +60,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r18 };
+    let t = unsafe { &*t_r20 };
     i_r19 = if idx < t.array.len() {
         unsafe { *t.array.get_unchecked(idx) }
     } else {

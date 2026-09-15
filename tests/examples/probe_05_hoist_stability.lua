@@ -11,7 +11,7 @@
 -- EXPECT_PRINT: iter	1	table(len=4)	101	table(len=51)
 -- EXPECT_PRINT: iter	2	table(len=4)	102	table(len=101)
 -- EXPECT_PRINT: iter	3	table(len=4)	103	table(len=151)
--- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r22 len_r22 i_r23 len_r23
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r22 len_r27 i_r23 len_r28
 -- EXPECT: TABLE 0 LEN 4 NZ 4 CHECKSUM 1020
 -- EXPECT: TABLE 1 LEN 151 NZ 4 CHECKSUM 304
 -- EXPECT: NTABLES 2

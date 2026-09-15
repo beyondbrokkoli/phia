@@ -6,19 +6,19 @@ use crate::memory::Table;
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r18 = 0i64;
     let mut i_r19 = 0i64;
-    let mut b_r18 = false;
-    let mut t_r18: *mut Table = std::ptr::null_mut();
-    let mut t_r19: *mut Table = std::ptr::null_mut();
-    let mut t_r20: *mut Table = std::ptr::null_mut();
+    let mut b_r20 = false;
+    let mut t_r21: *mut Table = std::ptr::null_mut();
+    let mut t_r22: *mut Table = std::ptr::null_mut();
+    let mut t_r23: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r18 = &mut *new_table as *mut Table;
+    t_r21 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let mut new_table = Box::new(Table::new());
-    t_r19 = &mut *new_table as *mut Table;
+    t_r22 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    t_r20 = t_r19;
+    t_r23 = t_r22;
     i_r18 = 0;
     while i_r18 < 10 {
         let k = i_r18;
@@ -26,7 +26,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r18 };
+        let t = unsafe { &mut *t_r21 };
         if idx >= t.array.len() {
             t.array.resize(idx + 1, 0);
         }
@@ -38,7 +38,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &*t_r18 };
+        let t = unsafe { &*t_r21 };
         i_r19 = if idx < t.array.len() {
             unsafe { *t.array.get_unchecked(idx) }
         } else {
@@ -49,14 +49,14 @@ pub fn run_baked() -> Vec<Box<Table>> {
             panic!("Runtime Error: Negative table index");
         }
         let idx = k as usize;
-        let t = unsafe { &mut *t_r20 };
+        let t = unsafe { &mut *t_r23 };
         if idx >= t.array.len() {
             t.array.resize(idx + 1, 0);
         }
         unsafe {
             *t.array.get_unchecked_mut(idx) = 2;
         }
-        t_r20 = t_r18;
+        t_r23 = t_r21;
         i_r18 = i_r18 + 1;
     }
     return tables;

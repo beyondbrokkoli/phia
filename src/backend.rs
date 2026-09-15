@@ -20,15 +20,34 @@ pub fn program_uses_handles(blocks: &[BasicBlock]) -> bool {
     }))
 }
 
-// Pool membership is answered by the disjoint mint ranges, NOT a
-// phys-id -> pool map: Int/Bool/Table/String deliberately share one id
-// range, so such a map is last-writer-wins across those pools and any
-// future bare-id lookup would silently query whichever pool minted the
-// id last. The disjoint pools have exact ranges by construction —
-// Float mints [float_base, float_base + n_float), float_base sits
-// above the entire shared range, and no other pool mints into it — so
-// range membership equals "this pool minted this id", and vreg ids
-// (all < phys_base <= float_base) can never fall inside.
+// Pool membership is answered by the mint ranges, NOT a phys-id -> pool
+// map: allocate_registers lays the eight pools out as consecutive ranges
+// on ONE global timeline, so every physical id belongs to exactly one
+// pool and range membership equals "this pool minted this id". The old
+// shared Int/Bool/Table/String range (i_r12/b_r12/t_r12/s_r12
+// co-numbering four distinct variables) is what once made a map
+// last-writer-wins and a bare-id lookup a coin flip — the uniqueness
+// timeline removes the hazard class entirely. Const ids (layer B,
+// >= CONST_REG_BASE) sit far above every range, so they can never fall
+// inside one either.
+pub fn is_int_reg(r: RegId, alloc: &AllocInfo) -> bool {
+    r >= alloc.int_base && r < alloc.int_base + alloc.n_int as RegId
+}
+
+pub fn is_bool_reg(r: RegId, alloc: &AllocInfo) -> bool {
+    r >= alloc.bool_base && r < alloc.bool_base + alloc.n_bool as RegId
+}
+
+// Plain int-element/handle tables ([table_base, table_base + n_table));
+// the element-kind table pools below are their own ranges.
+pub fn is_table_reg(r: RegId, alloc: &AllocInfo) -> bool {
+    r >= alloc.table_base && r < alloc.table_base + alloc.n_table as RegId
+}
+
+pub fn is_str_reg(r: RegId, alloc: &AllocInfo) -> bool {
+    r >= alloc.str_base && r < alloc.str_base + alloc.n_str as RegId
+}
+
 pub fn is_float_reg(r: RegId, alloc: &AllocInfo) -> bool {
     r >= alloc.float_base && r < alloc.float_base + alloc.n_float as RegId
 }
@@ -127,13 +146,20 @@ macro_rules! sop_str {
     }};
 }
 
-// Const-skipped vregs keep their (reminted, CONST_REG_BASE-offset) id at
-// emission — uses render as literals — so the dump marks them `c{n}`
-// (n = offset from the const base): self-documenting, and visually
-// distinct from both physicals and the vreg namespace.
+// The dump's id renderer. A const-folded vreg (layer-B id, >=
+// CONST_REG_BASE) renders `c{n}` (n = offset from the const base):
+// self-documenting, and visually distinct from both physicals and the
+// vreg namespace. Every other id renders as its pool-prefixed physical
+// register, and the id ALONE answers the pool — one global timeline,
+// one range per pool — so no StaticType hint is needed (or accepted:
+// the hint used to paper over the shared Int/Bool/Table/String range
+// by trusting the caller's guess). The panic is a tripwire, not
+// defense: post-allocate_registers every id in the IR is either a
+// layer-B const or a minted physical, so an unmatched id means the
+// layer law broke and the dump must not name a register that does not
+// exist.
 pub fn pool_prefixed(
     r: RegId,
-    t: &StaticType,
     consts_i: &HashMap<RegId, i64>,
     consts_b: &HashMap<RegId, bool>,
     consts_f: &HashMap<RegId, f64>,
@@ -144,54 +170,33 @@ pub fn pool_prefixed(
         || consts_f.contains_key(&r) || consts_s.contains_key(&r) {
         return format!("c{}", r - crate::ir::CONST_REG_BASE);
     }
-    if is_float_reg(r, alloc) {
-        return format!("f_r{r}");
-    }
+    if is_int_reg(r, alloc) { return format!("i_r{r}"); }
+    if is_bool_reg(r, alloc) { return format!("b_r{r}"); }
+    if is_table_reg(r, alloc) { return format!("t_r{r}"); }
+    if is_str_reg(r, alloc) { return format!("s_r{r}"); }
+    if is_float_reg(r, alloc) { return format!("f_r{r}"); }
     if is_ftable_reg(r, alloc) || is_tstr_reg(r, alloc) || is_btable_reg(r, alloc) {
         return format!("t_r{r}");
     }
-    match t {
-        StaticType::Integer => format!("i_r{r}"),
-        StaticType::Float => format!("f_r{r}"),
-        StaticType::Boolean => format!("b_r{r}"),
-        StaticType::String => format!("s_r{r}"),
-        StaticType::Table(_) | StaticType::UnknownTable(_) => format!("t_r{r}"),
-    }
+    panic!("pool_prefixed: reg {r} is neither const nor any pool's physical — \
+            post-allocation id-space law violated");
 }
 
-// Uses of `r` consumed AS A BOOLEAN. Int/Bool/Table/String physicals
-// deliberately share one id range, so a raw-id use count cannot tell the
-// cond bool's readers from a co-numbered int's (the loop counter and the
-// header Less's bool target mint base+0 in their respective pools —
-// i_r33 and b_r33 coexist). This counter answers the pretty-guard
-// question exactly — "does anything but the Branch read the Less's
-// result?" — by counting only the sites that consume the id in bool
-// context. Every bool reader an IR program can have is enumerated:
-// Branch conds, Not sources, Eq with ty Boolean, Move with ty Boolean,
-// DebugProbe Boolean operands, and Boolean-valued stores into
-// bool-element tables. Int-context uses of the same ID belong to a
-// DIFFERENT variable (i_rN vs b_rN — distinct Rust locals) and are
-// irrelevant by construction; a vreg typed both bool and int is
-// impossible (the ty map panics on conflicts). Phis are gone by
-// emission time (resolve_phis).
-fn bool_reg_uses(program: &IrProgram, r: RegId) -> usize {
+// Total uses of `r` across instructions and branch conditions. With
+// unique physical ids every use of the id IS a use of this register —
+// the question the pretty-while guard asks ("does anything but the
+// Branch read the Less's result?") is answered exactly by the raw
+// count, no type-context enumeration needed. The old
+// bool-context-only counter (bool_reg_uses) existed because Int and
+// Bool physicals co-numbered one shared range and a co-numbered int's
+// uses inflated the count; the one-global-timeline mint retired it.
+// Phis are gone by emission time (resolve_phis), so this enumerates
+// plain use_regs + Branch conds and nothing else.
+fn count_uses(program: &IrProgram, r: RegId) -> usize {
     let mut n = 0;
     for b in &program.blocks {
         for i in &b.instrs {
-            match i {
-                Instruction::Not { source, .. } if *source == r => n += 1,
-                Instruction::Eq { left, right, ty: StaticType::Boolean, .. }
-                    if *left == r || *right == r => n += 1,
-                Instruction::Move { source, ty: StaticType::Boolean, .. } if *source == r => n += 1,
-                Instruction::SetTable { val, ty: StaticType::Boolean, .. }
-                | Instruction::SetTableFast { val, ty: StaticType::Boolean, .. } if *val == r => n += 1,
-                Instruction::DebugProbe { operands, .. } => {
-                    for &(reg, ref t) in operands {
-                        if reg == r && matches!(t, StaticType::Boolean) { n += 1; }
-                    }
-                }
-                _ => {}
-            }
+            if i.use_regs().contains(&r) { n += 1; }
         }
         if let Some(Terminator::Branch { cond, .. }) = &b.terminator
             && *cond == r { n += 1; }
@@ -503,12 +508,15 @@ fn emit_instr(
                 out.push_str(&format!("b_r{target} = {} >= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
-        // The instruction's ty is the single source of truth for the
-        // rendering: Int and Bool physicals share one id range, so the
-        // pool tables cannot tell an int operand from a bool operand
-        // (a const-bool-on-the-left Eq used to render undeclared i_rN
-        // registers, and an aliased physical bool rendered the wrong
-        // variable entirely).
+        // The instruction's ty drives the rendering here. Since the
+        // one-global-timeline mint it is a convenience rather than a
+        // necessity (the operands' own pool ranges would answer too),
+        // but the ty is already carried for the const FOLD, which runs
+        // pre-alloc where ids have no ranges — rendering rides it for
+        // free. History: under the old shared Int/Bool range this match
+        // was the ONLY correct disambiguator (a const-bool-on-the-left
+        // Eq used to render undeclared i_rN registers, and an aliased
+        // physical bool rendered the wrong variable entirely).
         Instruction::Eq { target, left, right, ty } => match ty {
             StaticType::Float =>
                 out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f))),
@@ -1002,12 +1010,11 @@ fn emit_loop(
 
     // Pretty form: the header holds nothing (identifier condition, e.g.
     // phase I / bug16a) or exactly the Less computing the branch
-    // condition with no other BOOLEAN readers of its result
-    // (bool_reg_uses — pool-aware; the old raw-id count saw the shared
-    // id range's co-numbered ints too and declined almost every loop,
-    // which is why `while i < n` used to ride the fallback
-    // everywhere). The Less folds into the while-condition — still
-    // evaluated every iteration.
+    // condition with no other readers of its result (count_uses == 1 —
+    // exact since physical ids are unique; the pre-uniqueness era
+    // needed a bool-CONTEXT counter because a co-numbered int's uses
+    // inflated the raw count). The Less folds into the
+    // while-condition — still evaluated every iteration.
     //
     // Float operands DECLINE the pretty arm: iop_str! below would render
     // them as `i_r<id>` — undeclared registers, a program that does not
@@ -1024,7 +1031,7 @@ fn emit_loop(
     } else if block.instrs.len() == 1 {
         match &block.instrs[0] {
             Instruction::Less { target, left, right }
-                if *target == cond && bool_reg_uses(program, cond) == 1
+                if *target == cond && count_uses(program, cond) == 1
                     && !is_float_reg(*left, alloc)
                     && !consts_f.contains_key(left) =>
                 Some(format!("{} < {}", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
@@ -1059,16 +1066,19 @@ pub fn generate_rust_code(
     consts_f: &HashMap<RegId, f64>,
     consts_s: &HashMap<RegId, String>,
 ) -> String {
-    // AllocInfo is a named tuple of pool counts + base ids — pull out
+    // AllocInfo is a named tuple of pool counts + range bases — pull out
     // every value once up front; emission below only reads these.
     let AllocInfo {
         n_int: n_i, n_bool: n_b, n_float: n_f, n_str: n_s, n_table: n_t,
         n_ftable: n_tf, n_tstr: n_ts, n_btable: n_tb,
-        phys_base: base, float_base: fbase, ftable_base: tfbase,
+        int_base: ibase, bool_base: bbase, table_base: tbase,
+        str_base: sbase, float_base: fbase, ftable_base: tfbase,
         tstr_base: tsbase, btable_base: tbbase,
     } = *alloc;
-    let (base, fbase, tfbase, tsbase, tbbase) =
-        (base as usize, fbase as usize, tfbase as usize, tsbase as usize, tbbase as usize);
+    let (ibase, bbase, tbase, sbase, fbase, tfbase, tsbase, tbbase) = (
+        ibase as usize, bbase as usize, tbase as usize, sbase as usize,
+        fbase as usize, tfbase as usize, tsbase as usize, tbbase as usize,
+    );
 
     let uses_handles = program_uses_handles(&program.blocks);
 
@@ -1094,14 +1104,17 @@ pub fn generate_rust_code(
         }
     }
 
-    for r in base..base + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
-    for r in base..base + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }
+    // Decl block walks the mint timeline: int, bool, table, string,
+    // float, then the element-kind table pools — decl order IS range
+    // order, so the generated locals read in the same order the ids
+    // were handed out. Every id in these loops is unique across pools;
+    // pure-int programs (and int+float programs) emit the same decl
+    // bytes they always did.
+    for r in ibase..ibase + n_i { out.push_str(&format!("    let mut i_r{r} = 0i64;\n")); }
+    for r in bbase..bbase + n_b { out.push_str(&format!("    let mut b_r{r} = false;\n")); }
+    for r in tbase..tbase + n_t { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
+    for r in sbase..sbase + n_s { out.push_str(&format!("    let mut s_r{r} = String::new();\n")); }
     for r in fbase..fbase + n_f { out.push_str(&format!("    let mut f_r{r} = 0f64;\n")); }
-    for r in base..base + n_s { out.push_str(&format!("    let mut s_r{r} = String::new();\n")); }
-    // handle tables: the shared id range first, then the disjoint
-    // float-table, string-table and bool-table ranges — same decl shape,
-    // pointer type from the pool
-    for r in base..base + n_t { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     for r in tfbase..tfbase + n_tf { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     for r in tsbase..tsbase + n_ts { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     for r in tbbase..tbbase + n_tb { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }

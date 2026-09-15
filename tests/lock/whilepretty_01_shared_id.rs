@@ -5,7 +5,7 @@ use crate::memory::Table;
 #[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r6 = 0i64;
-    let mut b_r6 = false;
+    let mut b_r7 = false;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     i_r6 = 0;

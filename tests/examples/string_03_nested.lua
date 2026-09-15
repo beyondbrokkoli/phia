@@ -6,7 +6,7 @@
 -- holds handles, row holds FNV-hashed strings.
 -- EXPECT_PROBE pins embed physical register names BY DESIGN (see probe_01).
 -- EXPECT_PRINT: nested	table#1(len=1)	table#2(len=2)	beta	table#2(len=2)
--- EXPECT_PROBE: #0 tag="nested" b0 depth0 t_r14 len_r14 t_r16 len_r16 s_r14 t_r15 len_r15
+-- EXPECT_PROBE: #0 tag="nested" b0 depth0 t_r14 len_r14 t_r17 len_r17 s_r15 t_r16 len_r16
 -- EXPECT: TABLE 0 LEN 1 NZ 1 CHECKSUM 2
 -- EXPECT: TABLE 1 LEN 2 NZ 2 CHECKSUM 8580739319088111993
 -- EXPECT: NTABLES 2
