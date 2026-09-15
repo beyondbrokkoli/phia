@@ -18,6 +18,12 @@ pub struct IrLowerer {
     type_map: HashMap<usize, StaticType>, // table id -> resolved element type (from the checker)
 }
 
+impl Default for IrLowerer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrLowerer {
     pub fn new() -> Self {
         let entry_block = BasicBlock::new(0, 0);
@@ -257,16 +263,15 @@ impl IrLowerer {
                             // the condition lowers to a native Leq in the
                             // header instead (no lock covers the MAX shape).
                             bound_left = self.materialize_bound(left);
-                            if let Expr::Integer(v) = &**right {
-                                if v.checked_add(1).is_some() {
-                                    if let Some(r) = self.materialize_bound(right) {
-                                        let one = self.next_reg();
-                                        self.emit(Instruction::LoadInt { target: one, val: 1 });
-                                        let r2 = self.next_reg();
-                                        self.emit(Instruction::Add { target: r2, left: r, right: one });
-                                        bound_right = Some(r2);
-                                    }
-                                }
+                            if let Expr::Integer(v) = &**right
+                                && v.checked_add(1).is_some()
+                                && let Some(r) = self.materialize_bound(right)
+                            {
+                                let one = self.next_reg();
+                                self.emit(Instruction::LoadInt { target: one, val: 1 });
+                                let r2 = self.next_reg();
+                                self.emit(Instruction::Add { target: r2, left: r, right: one });
+                                bound_right = Some(r2);
                             }
                         }
                         _ => {}
@@ -337,11 +342,11 @@ impl IrLowerer {
                 for (var, phi_reg) in &phis {
                     let back_edge_local = self.read_var(var);
                     for instr in &mut self.blocks[header_block].instrs {
-                        if let Instruction::Phi { target, args, .. } = instr {
-                            if *target == *phi_reg {
-                                args.push((end_of_body, back_edge_local.reg));
-                                break;
-                            }
+                        if let Instruction::Phi { target, args, .. } = instr
+                            && *target == *phi_reg
+                        {
+                            args.push((end_of_body, back_edge_local.reg));
+                            break;
                         }
                     }
                 }

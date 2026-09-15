@@ -6,6 +6,15 @@ use crate::ast::StaticType;
 pub type BlockId = usize;
 pub type RegId = u32;
 
+// Const-folded register ids mint from this reserved high range, disjoint
+// from the vreg/physical low half BY CONSTRUCTION — the two namespaces can
+// never collide numerically (the fuzzer_01 stale-key/physical collision
+// class is impossible rather than defended against). Realistic id counts
+// are in the hundreds; nothing else ever mints this high.
+pub const CONST_REG_BASE: RegId = 1 << 31;
+
+pub fn is_const_reg(r: RegId) -> bool { r >= CONST_REG_BASE }
+
 #[derive(Debug, Clone)]
 pub enum Terminator {
     /// Unconditional jump to another block

@@ -10,9 +10,9 @@
 -- EXPECT_PRINT: a{b}c\d	1
 -- EXPECT_PRINT: C:\path	2.5
 -- EXPECT_PRINT: val=C:\tmp\x	7
--- EXPECT_PROBE: #0 tag="a{b}c\d" b0 depth0 i_r0
--- EXPECT_PROBE: #1 tag="C:\path" b0 depth0 f_r8
--- EXPECT_PROBE: #2 tag="" b0 depth0 s_r7 i_r6
+-- EXPECT_PROBE: #0 tag="a{b}c\d" b0 depth0 c0
+-- EXPECT_PROBE: #1 tag="C:\path" b0 depth0 f_r4
+-- EXPECT_PROBE: #2 tag="" b0 depth0 s_r3 c1
 local n = 1
 local f = 2.5
 local p = "val=C:\tmp\x"

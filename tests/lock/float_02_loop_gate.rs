@@ -4,47 +4,47 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r16 = 0i64;
-    let mut b_r16 = false;
-    let mut f_r17 = 0f64;
-    let mut f_r18 = 0f64;
-    let mut t_r20: *mut Table = std::ptr::null_mut();
-    let mut p_r20: *mut f64 = std::ptr::null_mut();
-    let mut len_r20 = 0usize;
+    let mut i_r14 = 0i64;
+    let mut b_r14 = false;
+    let mut f_r15 = 0f64;
+    let mut f_r16 = 0f64;
+    let mut t_r18: *mut Table = std::ptr::null_mut();
+    let mut p_r18: *mut f64 = std::ptr::null_mut();
+    let mut len_r18 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new_float());
-    t_r20 = &mut *new_table as *mut Table;
+    t_r18 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    f_r17 = 0.0;
+    f_r15 = 0.0;
     let lim = 8;
     if lim > 0 {
-        let t = unsafe { &mut *t_r20 };
+        let t = unsafe { &mut *t_r18 };
         if (lim as usize) > t.farray.len() {
             t.farray.resize(lim as usize, 0.0);
         }
     }
-    len_r20 = unsafe { (*t_r20).farray.len() };
-    p_r20 = unsafe { (*t_r20).farray.as_mut_ptr() };
-    f_r18 = f_r17;
-    i_r16 = 0;
+    len_r18 = unsafe { (*t_r18).farray.len() };
+    p_r18 = unsafe { (*t_r18).farray.as_mut_ptr() };
+    f_r16 = f_r15;
+    i_r14 = 0;
     loop {
-        b_r16 = i_r16 < 8;
-        if b_r16 {
-            let k = i_r16;
+        b_r14 = i_r14 < 8;
+        if b_r14 {
+            let k = i_r14;
             if k < 0 {
                 panic!("Runtime Error: Negative index in fast path");
             }
-            if (k as usize) < len_r20 {
+            if (k as usize) < len_r18 {
                 unsafe {
-                    *p_r20.add(k as usize) = f_r18;
+                    *p_r18.add(k as usize) = f_r16;
                 }
             } else {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
-            f_r17 = 0.25;
-            f_r18 = f_r18 + f_r17;
-            i_r16 = i_r16 + 1;
+            f_r15 = 0.25;
+            f_r16 = f_r16 + f_r15;
+            i_r14 = i_r14 + 1;
         } else {
             break;
         }

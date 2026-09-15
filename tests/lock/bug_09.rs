@@ -4,110 +4,110 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
+    let mut i_r54 = 0i64;
+    let mut i_r55 = 0i64;
+    let mut i_r56 = 0i64;
     let mut i_r57 = 0i64;
     let mut i_r58 = 0i64;
-    let mut i_r59 = 0i64;
-    let mut i_r60 = 0i64;
-    let mut i_r61 = 0i64;
-    let mut b_r57 = false;
-    let mut t_r57: *mut Table = std::ptr::null_mut();
-    let mut p_r57: *mut i64 = std::ptr::null_mut();
-    let mut len_r57 = 0usize;
-    let mut t_r58: *mut Table = std::ptr::null_mut();
-    let mut p_r58: *mut i64 = std::ptr::null_mut();
-    let mut len_r58 = 0usize;
+    let mut b_r54 = false;
+    let mut t_r54: *mut Table = std::ptr::null_mut();
+    let mut p_r54: *mut i64 = std::ptr::null_mut();
+    let mut len_r54 = 0usize;
+    let mut t_r55: *mut Table = std::ptr::null_mut();
+    let mut p_r55: *mut i64 = std::ptr::null_mut();
+    let mut len_r55 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r57 = &mut *new_table as *mut Table;
+    t_r54 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let mut new_table = Box::new(Table::new());
-    t_r58 = &mut *new_table as *mut Table;
+    t_r55 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 2000;
     if lim > 0 {
-        let t = unsafe { &mut *t_r57 };
+        let t = unsafe { &mut *t_r54 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r57 = unsafe { (*t_r57).array.len() };
-    p_r57 = unsafe { (*t_r57).array.as_mut_ptr() };
-    i_r57 = 0;
+    len_r54 = unsafe { (*t_r54).array.len() };
+    p_r54 = unsafe { (*t_r54).array.as_mut_ptr() };
+    i_r54 = 0;
     loop {
-        b_r57 = i_r57 < 2000;
-        if b_r57 {
-            let k = i_r57;
+        b_r54 = i_r54 < 2000;
+        if b_r54 {
+            let k = i_r54;
             if k < 0 {
                 panic!("Runtime Error: Negative index in fast path");
             }
-            if (k as usize) < len_r57 {
+            if (k as usize) < len_r54 {
                 unsafe {
-                    *p_r57.add(k as usize) = i_r57;
+                    *p_r54.add(k as usize) = i_r54;
                 }
             } else {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
-            i_r57 = i_r57 + 1;
+            i_r54 = i_r54 + 1;
         } else {
             break;
         }
     }
-    i_r57 = 0;
+    i_r54 = 0;
     loop {
-        b_r57 = i_r57 < 500;
-        if b_r57 {
+        b_r54 = i_r54 < 500;
+        if b_r54 {
             let lim = 2000;
             if lim > 0 {
-                let t = unsafe { &mut *t_r57 };
+                let t = unsafe { &mut *t_r54 };
                 if (lim as usize) > t.array.len() {
                     t.array.resize(lim as usize, 0);
                 }
             }
-            len_r57 = unsafe { (*t_r57).array.len() };
-            p_r57 = unsafe { (*t_r57).array.as_mut_ptr() };
+            len_r54 = unsafe { (*t_r54).array.len() };
+            p_r54 = unsafe { (*t_r54).array.as_mut_ptr() };
             let lim = 2002;
             if lim > 0 {
-                let t = unsafe { &mut *t_r58 };
+                let t = unsafe { &mut *t_r55 };
                 if (lim as usize) > t.array.len() {
                     t.array.resize(lim as usize, 0);
                 }
             }
-            len_r58 = unsafe { (*t_r58).array.len() };
-            p_r58 = unsafe { (*t_r58).array.as_mut_ptr() };
-            i_r58 = 0;
+            len_r55 = unsafe { (*t_r55).array.len() };
+            p_r55 = unsafe { (*t_r55).array.as_mut_ptr() };
+            i_r55 = 0;
             loop {
-                b_r57 = i_r58 < 2000;
-                if b_r57 {
-                    let k = i_r58;
+                b_r54 = i_r55 < 2000;
+                if b_r54 {
+                    let k = i_r55;
                     if k < 0 {
                         panic!("Runtime Error: Negative index in fast path");
                     }
-                    if (k as usize) < len_r57 {
-                        i_r59 = unsafe { *p_r57.add(k as usize) };
+                    if (k as usize) < len_r54 {
+                        i_r56 = unsafe { *p_r54.add(k as usize) };
                     } else {
                         panic!("optimizer invariant violated: fast-path bounds check failed");
                     }
-                    i_r60 = i_r58 + 2;
-                    i_r61 = i_r59 - 1;
-                    i_r59 = i_r61 + 1;
-                    let k = i_r60;
+                    i_r57 = i_r55 + 2;
+                    i_r58 = i_r56 - 1;
+                    i_r56 = i_r58 + 1;
+                    let k = i_r57;
                     if k < 0 {
                         panic!("Runtime Error: Negative index in fast path");
                     }
-                    if (k as usize) < len_r58 {
+                    if (k as usize) < len_r55 {
                         unsafe {
-                            *p_r58.add(k as usize) = i_r59;
+                            *p_r55.add(k as usize) = i_r56;
                         }
                     } else {
                         panic!("optimizer invariant violated: fast-path bounds check failed");
                     }
-                    i_r58 = i_r58 + 1;
+                    i_r55 = i_r55 + 1;
                 } else {
                     break;
                 }
             }
-            i_r57 = i_r57 + 1;
+            i_r54 = i_r54 + 1;
         } else {
             break;
         }

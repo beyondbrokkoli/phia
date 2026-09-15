@@ -4,53 +4,53 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r21 = 0i64;
-    let mut i_r22 = 0i64;
-    let mut b_r21 = false;
-    let mut t_r21: *mut Table = std::ptr::null_mut();
+    let mut i_r19 = 0i64;
+    let mut i_r20 = 0i64;
+    let mut b_r19 = false;
+    let mut t_r19: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r21 = &mut *new_table as *mut Table;
+    t_r19 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    i_r21 = 0;
+    i_r19 = 0;
     loop {
-        b_r21 = i_r21 < 10;
-        if b_r21 {
-            let k = i_r21;
+        b_r19 = i_r19 < 10;
+        if b_r19 {
+            let k = i_r19;
             if k < 0 {
                 panic!("Runtime Error: Negative table index");
             }
             let idx = k as usize;
-            let t = unsafe { &mut *t_r21 };
+            let t = unsafe { &mut *t_r19 };
             if idx >= t.array.len() {
                 t.array.resize(idx + 1, 0);
             }
             unsafe {
                 *t.array.get_unchecked_mut(idx) = 1;
             }
-            i_r22 = 0;
+            i_r20 = 0;
             loop {
-                b_r21 = i_r22 < 2;
-                if b_r21 {
+                b_r19 = i_r20 < 2;
+                if b_r19 {
                     let k = 999;
                     if k < 0 {
                         panic!("Runtime Error: Negative table index");
                     }
                     let idx = k as usize;
-                    let t = unsafe { &mut *t_r21 };
+                    let t = unsafe { &mut *t_r19 };
                     if idx >= t.array.len() {
                         t.array.resize(idx + 1, 0);
                     }
                     unsafe {
-                        *t.array.get_unchecked_mut(idx) = i_r22;
+                        *t.array.get_unchecked_mut(idx) = i_r20;
                     }
-                    i_r22 = i_r22 + 1;
+                    i_r20 = i_r20 + 1;
                 } else {
                     break;
                 }
             }
-            i_r21 = i_r21 + 1;
+            i_r19 = i_r19 + 1;
         } else {
             break;
         }

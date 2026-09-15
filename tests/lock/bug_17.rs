@@ -4,34 +4,34 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r11 = 0i64;
-    let mut b_r11 = false;
-    let mut t_r11: *mut Table = std::ptr::null_mut();
+    let mut i_r10 = 0i64;
+    let mut b_r10 = false;
+    let mut t_r10: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    i_r11 = 5;
+    i_r10 = 5;
     loop {
-        b_r11 = i_r11 < 0;
-        if b_r11 {
-            i_r11 = i_r11 + 1;
+        b_r10 = i_r10 < 0;
+        if b_r10 {
+            i_r10 = i_r10 + 1;
         } else {
             break;
         }
     }
     let mut new_table = Box::new(Table::new());
-    t_r11 = &mut *new_table as *mut Table;
+    t_r10 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r11 };
+    let t = unsafe { &mut *t_r10 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r11;
+        *t.array.get_unchecked_mut(idx) = i_r10;
     }
     return tables;
 }

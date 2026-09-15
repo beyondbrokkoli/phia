@@ -4,45 +4,45 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
+    let mut i_r29 = 0i64;
     let mut i_r30 = 0i64;
-    let mut i_r31 = 0i64;
-    let mut b_r30 = false;
-    let mut t_r30: *mut Table = std::ptr::null_mut();
+    let mut b_r29 = false;
+    let mut t_r29: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     println!("{}\t{}\t{}", "before", 1, true);
     if true {
-        i_r30 = 2;
+        i_r29 = 2;
     } else {
-        i_r30 = 11;
+        i_r29 = 11;
     }
-    println!("{}\t{}\t{}", "join", i_r30, true);
-    i_r31 = i_r30;
-    i_r30 = 0;
+    println!("{}\t{}\t{}", "join", i_r29, true);
+    i_r30 = i_r29;
+    i_r29 = 0;
     loop {
-        b_r30 = i_r30 < 2;
-        if b_r30 {
-            i_r31 = i_r31 + 100;
-            i_r30 = i_r30 + 1;
+        b_r29 = i_r29 < 2;
+        if b_r29 {
+            i_r30 = i_r30 + 100;
+            i_r29 = i_r29 + 1;
         } else {
             break;
         }
     }
-    println!("{}\t{}\t{}", "after", i_r31, i_r30);
+    println!("{}\t{}\t{}", "after", i_r30, i_r29);
     let mut new_table = Box::new(Table::new());
-    t_r30 = &mut *new_table as *mut Table;
+    t_r29 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r30 };
+    let t = unsafe { &mut *t_r29 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r31;
+        *t.array.get_unchecked_mut(idx) = i_r30;
     }
     return tables;
 }

@@ -1,5 +1,5 @@
 // src/register_alloc.rs
-use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, RegId};
+use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, RegId, CONST_REG_BASE, is_const_reg};
 use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
 
@@ -192,9 +192,8 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
                 ty.entry(r).or_insert(pool_of(&t));
             }
         }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-            if !skip.contains(cond) { ty.entry(*cond).or_insert(Pool::Bool); }
-        }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator
+            && !skip.contains(cond) { ty.entry(*cond).or_insert(Pool::Bool); }
     }
 
     // 2. liveness + intervals (unchanged)
@@ -203,33 +202,30 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
 
     // 3. mint physical ids from ABOVE the whole vreg namespace —
     //    a physical id must never equal a vreg id (const or not).
+    //    Const operands mint from CONST_REG_BASE up (the remint in
+    //    propagate_constants), so ids at or above it are const-range and
+    //    excluded from the scan — defs AND uses both (a folded def
+    //    remains in the IR skipped-at-emission, and every literal use
+    //    still carries its const id as an operand).
     let mut max_reg: RegId = 0;
     for b in blocks {
         for i in &b.instrs {
-            if let Some(d) = i.def_reg() { if d > max_reg { max_reg = d; } }
-            for u in i.use_regs() { if u > max_reg { max_reg = u; } }
+            if let Some(d) = i.def_reg() && d > max_reg && !is_const_reg(d) { max_reg = d; }
+            for u in i.use_regs() { if u > max_reg && !is_const_reg(u) { max_reg = u; } }
         }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-            if *cond > max_reg { max_reg = *cond; }
-        }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator
+            && !is_const_reg(*cond) && *cond > max_reg { max_reg = *cond; }
     }
-    // Mint from above the ENTIRE id space the emission-side const maps
-    // can ever be queried with: surviving IR vregs AND consts keys.
-    // propagate_constants runs before simplify's DCE, so a folded def
-    // can be deleted from the IR while its consts_i/consts_b entry
-    // lives on — that id appears in no instruction (invisible to the
-    // scan above) yet the maps still answer for it. A physical minted
-    // onto such a stale key makes emit_instr's const early-out silently
-    // swallow the instruction (a GetTable vanishes wholesale) and
-    // iop_str render the dead constant at every use. Found by the
-    // differential fuzzer, seed 43: `local v12 = v8` DCE'd, its folded
-    // consts_i key numerically equaled the physical minted for a later
-    // GetTable target, and the probe printed the stale 0 instead of 26.
-    let max_const = consts_i.keys().copied()
-        .chain(consts_b.keys().copied())
-        .max()
-        .unwrap_or(0);
-    let base = max_reg.max(max_const) + 1;
+    // The const namespace is disjoint by construction (reserved high
+    // range), so the old defensive max-over-const-keys term is retired:
+    // a stale const key can never numerically equal a minted physical
+    // anymore. The seed-43 incident (a folded def deleted from the IR
+    // while its consts entry lived on, its key colliding with a minted
+    // physical, emit_instr's const early-out swallowing a GetTable
+    // wholesale) is fuzzer_01's pin — the debug_assert below is its
+    // by-construction tripwire for debug builds.
+    let base = max_reg + 1;
+    debug_assert!(base <= CONST_REG_BASE);
 
     let mut vregs: Vec<RegId> = ty.keys().copied().collect();
 
@@ -295,9 +291,8 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
     //    them up in the const maps and never emits them)
     for b in &mut program.blocks {
         for i in &mut b.instrs { i.remap_instr(&|r| *map.get(&r).unwrap_or(&r)); }
-        if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
-            if let Some(&p) = map.get(&*cond) { *cond = p; }
-        }
+        if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator
+            && let Some(&p) = map.get(&*cond) { *cond = p; }
     }
 
     // 5. self-copies are no-ops

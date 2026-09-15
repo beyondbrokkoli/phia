@@ -116,24 +116,32 @@ fn scan_probes(blocks: &[ir::BasicBlock], mid: bool) -> Vec<String> {
             let ops: Vec<String> = operands.iter().map(|(r, t)| {
                 if mid {
                     let mut s = format!("v{r}:{t:?}");
-                    if let Some(&(pb, pi)) = phi_defs.get(r) {
-                        if let I::Phi { args, .. } = &blocks[pb].instrs[pi] {
-                            let incoming: Vec<String> = args.iter()
-                                .map(|(bb, rr)| format!("b{bb}:v{rr}")).collect();
-                            s.push_str(&format!(" [phi <- {}]", incoming.join(", ")));
-                        }
+                    if let Some(&(pb, pi)) = phi_defs.get(r)
+                        && let I::Phi { args, .. } = &blocks[pb].instrs[pi]
+                    {
+                        let incoming: Vec<String> = args.iter()
+                            .map(|(bb, rr)| format!("b{bb}:v{rr}")).collect();
+                        s.push_str(&format!(" [phi <- {}]", incoming.join(", ")));
                     }
                     s
                 } else {
                     use ast::StaticType;
-                    match t {
-                        StaticType::Integer => format!("i_r{r}"),
-                        StaticType::Float => format!("f_r{r}"),
-                        StaticType::Boolean => format!("b_r{r}"),
-                        StaticType::String => format!("s_r{r}"),
-                        StaticType::Table(_) | StaticType::UnknownTable(_) =>
-                            if uses_handles { format!("t_r{r} len_r{r}") }
-                            else { format!("len_r{r}") },
+                    // A const operand renders c{n} (n = offset from the
+                    // const base): its id names the reserved range, not a
+                    // register — pre-remint it rendered i_r<stale-vreg-id>,
+                    // naming a register that never existed.
+                    if ir::is_const_reg(*r) {
+                        format!("c{}", r - ir::CONST_REG_BASE)
+                    } else {
+                        match t {
+                            StaticType::Integer => format!("i_r{r}"),
+                            StaticType::Float => format!("f_r{r}"),
+                            StaticType::Boolean => format!("b_r{r}"),
+                            StaticType::String => format!("s_r{r}"),
+                            StaticType::Table(_) | StaticType::UnknownTable(_) =>
+                                if uses_handles { format!("t_r{r} len_r{r}") }
+                                else { format!("len_r{r}") },
+                        }
                     }
                 }
             }).collect();

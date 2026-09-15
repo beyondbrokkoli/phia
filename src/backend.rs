@@ -4,8 +4,6 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
 use crate::reg_alloc::AllocInfo;
 
-fn indent(d: usize) -> String { "    ".repeat(d) }
-
 // DUAL-TEMPLATE GATE, shared with the build.rs probe-map sidecar (which
 // must render the same table tokens the runtime PROBE line prints). A
 // Table element type can only be born from a table-typed table op
@@ -118,16 +116,10 @@ macro_rules! sop_str {
     }};
 }
 
-// Debug-dump helper: render an allocated register the way emission
-// would — pool prefix included. The final CFG dump prints raw physical
-// ids, and Int/Bool/Table/String physicals deliberately share one id
-// space (i_r49 and t_r49 are distinct variables), so a bare number
-// reads as a clobber that cannot happen. The operand's static type
-// disambiguates the shared pools (the same rule Eq/probe emission
-// uses); Float/TableFloat/TableString live in disjoint id ranges, so
-// their pool lookups are unambiguous. Const-skipped vregs keep their
-// vreg id at emission (uses render as literals) — mark those `v` so
-// the two namespaces are visually distinct in the dump.
+// Const-skipped vregs keep their (reminted, CONST_REG_BASE-offset) id at
+// emission — uses render as literals — so the dump marks them `c{n}`
+// (n = offset from the const base): self-documenting, and visually
+// distinct from both physicals and the vreg namespace.
 pub fn pool_prefixed(
     r: RegId,
     t: &StaticType,
@@ -136,7 +128,7 @@ pub fn pool_prefixed(
     alloc: &AllocInfo,
 ) -> String {
     if consts_i.contains_key(&r) || consts_b.contains_key(&r) {
-        return format!("v{r}");
+        return format!("c{}", r - crate::ir::CONST_REG_BASE);
     }
     if is_float_reg(r, alloc) {
         return format!("f_r{r}");
@@ -157,9 +149,8 @@ fn reg_uses(program: &IrProgram, r: RegId) -> usize {
     let mut n = 0;
     for b in &program.blocks {
         for i in &b.instrs { for u in i.use_regs() { if u == r { n += 1; } } }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-            if *cond == r { n += 1; }
-        }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator
+            && *cond == r { n += 1; }
     }
     n
 }
@@ -241,16 +232,14 @@ fn emit_instr(
     out: &mut String,
     env: EmitEnv,
     instr: &Instruction,
-    d: usize,
 ) {
     let (_, alloc, consts_i, consts_b, uses_handles) = env;
     // compile-time-computed defs emit nothing: their uses are literals
-    if let Some(t) = instr.def_reg() {
-        if consts_i.contains_key(&t) || consts_b.contains_key(&t) {
-            return;
-        }
+    if let Some(t) = instr.def_reg()
+        && (consts_i.contains_key(&t) || consts_b.contains_key(&t))
+    {
+        return;
     }
-    let ind = indent(d);
     // In handle mode a table-typed operand renders as its t_r handle reg.
     // Checked arena resolution (tables.get/get_mut + nil panic) instead of
     // get_unchecked: even a hypothetical checker bug degrades to a clean
@@ -259,17 +248,17 @@ fn emit_instr(
     let is_tbl = |ty: &StaticType| matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_));
     match instr {
         Instruction::LoadInt { target, val } =>
-            out.push_str(&format!("{ind}i_r{target} = {val};\n")),
+            out.push_str(&format!("i_r{target} = {val};\n")),
         Instruction::LoadFloat { target, val } =>
-            out.push_str(&format!("{ind}f_r{target} = {val:?};\n")),
+            out.push_str(&format!("f_r{target} = {val:?};\n")),
         Instruction::LoadBool { target, val } =>
-            out.push_str(&format!("{ind}b_r{target} = {val};\n")),
+            out.push_str(&format!("b_r{target} = {val};\n")),
         Instruction::LoadString { target, val } =>
             // {:?} on a &str renders a valid escaped Rust literal
-            out.push_str(&format!("{ind}s_r{target} = {val:?}.to_string();\n")),
+            out.push_str(&format!("s_r{target} = {val:?}.to_string();\n")),
         Instruction::Concat { target, left, right } =>
             out.push_str(&format!(
-                "{ind}s_r{target} = format!(\"{{}}{{}}\", {}, {});\n",
+                "s_r{target} = format!(\"{{}}{{}}\", {}, {});\n",
                 sop_str!(*left), sop_str!(*right)
             )),
         Instruction::NewTable { target, ty } => {
@@ -282,86 +271,86 @@ fn emit_instr(
                 // 1-based arena handle; 0 stays reserved for null
                 if float_tbl {
                     out.push_str(&format!(
-                        "{ind}tables.push(Box::new(Table::new_float()));\n\
-                         {ind}t_r{target} = tables.len() as i64;\n"
+                        "tables.push(Box::new(Table::new_float()));\n\
+                         t_r{target} = tables.len() as i64;\n"
                     ));
                 } else if str_tbl {
                     out.push_str(&format!(
-                        "{ind}tables.push(Box::new(Table::new_string()));\n\
-                         {ind}t_r{target} = tables.len() as i64;\n"
+                        "tables.push(Box::new(Table::new_string()));\n\
+                         t_r{target} = tables.len() as i64;\n"
                     ));
                 } else if bool_tbl {
                     out.push_str(&format!(
-                        "{ind}tables.push(Box::new(Table::new_bool()));\n\
-                         {ind}t_r{target} = tables.len() as i64;\n"
+                        "tables.push(Box::new(Table::new_bool()));\n\
+                         t_r{target} = tables.len() as i64;\n"
                     ));
                 } else {
                     out.push_str(&format!(
-                        "{ind}tables.push(Box::new(Table::new()));\n\
-                         {ind}t_r{target} = tables.len() as i64;\n"
+                        "tables.push(Box::new(Table::new()));\n\
+                         t_r{target} = tables.len() as i64;\n"
                     ));
                 }
             } else if float_tbl {
                 out.push_str(&format!(
-                    "{ind}let mut new_table = Box::new(Table::new_float());\n\
-                     {ind}t_r{target} = &mut *new_table as *mut Table;\n\
-                     {ind}tables.push(new_table);\n"
+                    "let mut new_table = Box::new(Table::new_float());\n\
+                     t_r{target} = &mut *new_table as *mut Table;\n\
+                     tables.push(new_table);\n"
                 ));
             } else if str_tbl {
                 out.push_str(&format!(
-                    "{ind}let mut new_table = Box::new(Table::new_string());\n\
-                     {ind}t_r{target} = &mut *new_table as *mut Table;\n\
-                     {ind}tables.push(new_table);\n"
+                    "let mut new_table = Box::new(Table::new_string());\n\
+                     t_r{target} = &mut *new_table as *mut Table;\n\
+                     tables.push(new_table);\n"
                 ));
             } else if bool_tbl {
                 out.push_str(&format!(
-                    "{ind}let mut new_table = Box::new(Table::new_bool());\n\
-                     {ind}t_r{target} = &mut *new_table as *mut Table;\n\
-                     {ind}tables.push(new_table);\n"
+                    "let mut new_table = Box::new(Table::new_bool());\n\
+                     t_r{target} = &mut *new_table as *mut Table;\n\
+                     tables.push(new_table);\n"
                 ));
             } else {
                 out.push_str(&format!(
-                    "{ind}let mut new_table = Box::new(Table::new());\n\
-                     {ind}t_r{target} = &mut *new_table as *mut Table;\n\
-                     {ind}tables.push(new_table);\n"
+                    "let mut new_table = Box::new(Table::new());\n\
+                     t_r{target} = &mut *new_table as *mut Table;\n\
+                     tables.push(new_table);\n"
                 ));
             }
         }
         Instruction::Move { target, source, ty } => match ty {
-            StaticType::Integer => out.push_str(&format!("{ind}i_r{target} = {};\n", iop_str!(*source, consts_i))),
-            StaticType::Boolean => out.push_str(&format!("{ind}b_r{target} = {};\n", bop_str!(*source, consts_b))),
-            StaticType::Float => out.push_str(&format!("{ind}f_r{target} = {};\n", fop_str!(*source))),
+            StaticType::Integer => out.push_str(&format!("i_r{target} = {};\n", iop_str!(*source, consts_i))),
+            StaticType::Boolean => out.push_str(&format!("b_r{target} = {};\n", bop_str!(*source, consts_b))),
+            StaticType::Float => out.push_str(&format!("f_r{target} = {};\n", fop_str!(*source))),
             // strings are owned: a Move clones (SSA semantics — the
             // source slot may still be read on another path)
-            StaticType::String => out.push_str(&format!("{ind}s_r{target} = {}.clone();\n", sop_str!(*source))),
-            StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("{ind}t_r{target} = t_r{source};\n")),
+            StaticType::String => out.push_str(&format!("s_r{target} = {}.clone();\n", sop_str!(*source))),
+            StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("t_r{target} = t_r{source};\n")),
         },
         Instruction::Add { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = {} + {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} + {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}i_r{target} = {} + {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} + {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Sub { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = {} - {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} - {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}i_r{target} = {} - {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} - {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Mul { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = {} * {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} * {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}i_r{target} = {} * {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} * {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Div { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = {} / {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} / {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}i_r{target} = {} / {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} / {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         // Lua floor division: `//` rounds toward negative infinity
@@ -376,10 +365,10 @@ fn emit_instr(
         // inside the leading L / R.
         Instruction::IntDiv { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = ({} / {}).floor();\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = ({} / {}).floor();\n", fop_str!(*left), fop_str!(*right)))
             } else {
                 out.push_str(&format!(
-                    "{ind}i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
+                    "i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i),
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i),
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
@@ -390,11 +379,11 @@ fn emit_instr(
         // the divisor exactly when the two signs disagree.
         Instruction::Mod { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = {} - ({} / {}).floor() * {};\n",
+                out.push_str(&format!("f_r{target} = {} - ({} / {}).floor() * {};\n",
                     fop_str!(*left), fop_str!(*left), fop_str!(*right), fop_str!(*right)))
             } else {
                 out.push_str(&format!(
-                    "{ind}i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",
+                    "i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i),
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i),
                     iop_str!(*left, consts_i), iop_str!(*right, consts_i),
@@ -403,30 +392,30 @@ fn emit_instr(
         }
         Instruction::Neg { target, source } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("{ind}f_r{target} = -{};\n", fop_str!(*source)))
+                out.push_str(&format!("f_r{target} = -{};\n", fop_str!(*source)))
             } else {
-                out.push_str(&format!("{ind}i_r{target} = -{};\n", iop_str!(*source, consts_i)))
+                out.push_str(&format!("i_r{target} = -{};\n", iop_str!(*source, consts_i)))
             }
         }
         Instruction::Less { target, left, right } => {
             if is_float_reg(*left, alloc) {
-                out.push_str(&format!("{ind}b_r{target} = {} < {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("b_r{target} = {} < {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}b_r{target} = {} < {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} < {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Leq { target, left, right } => {
             if is_float_reg(*left, alloc) {
-                out.push_str(&format!("{ind}b_r{target} = {} <= {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("b_r{target} = {} <= {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}b_r{target} = {} <= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} <= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Geq { target, left, right } => {
             if is_float_reg(*left, alloc) {
-                out.push_str(&format!("{ind}b_r{target} = {} >= {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("b_r{target} = {} >= {};\n", fop_str!(*left), fop_str!(*right)))
             } else {
-                out.push_str(&format!("{ind}b_r{target} = {} >= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} >= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         // The instruction's ty is the single source of truth for the
@@ -437,16 +426,16 @@ fn emit_instr(
         // variable entirely).
         Instruction::Eq { target, left, right, ty } => match ty {
             StaticType::Float =>
-                out.push_str(&format!("{ind}b_r{target} = {} == {};\n", fop_str!(*left), fop_str!(*right))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left), fop_str!(*right))),
             StaticType::String =>
-                out.push_str(&format!("{ind}b_r{target} = {} == {};\n", sop_str!(*left), sop_str!(*right))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", sop_str!(*left), sop_str!(*right))),
             StaticType::Boolean =>
-                out.push_str(&format!("{ind}b_r{target} = {} == {};\n", bop_str!(*left, consts_b), bop_str!(*right, consts_b))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", bop_str!(*left, consts_b), bop_str!(*right, consts_b))),
             _ =>
-                out.push_str(&format!("{ind}b_r{target} = {} == {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
         },
         Instruction::Not { target, source } =>
-            out.push_str(&format!("{ind}b_r{target} = !{};\n", bop_str!(*source, consts_b))),
+            out.push_str(&format!("b_r{target} = !{};\n", bop_str!(*source, consts_b))),
 
         // Runtime observation, Lua-style: the line prints exactly what
         // print received — the literal tag (first argument, when present)
@@ -520,13 +509,13 @@ fn emit_instr(
             }
             if fields.is_empty() {
                 // print(): a bare newline, exactly like Lua
-                out.push_str(&format!("{ind}println!();\n"));
+                out.push_str("println!();\n");
                 return;
             }
             // print("tag") needs no special case: the tag is an argument
             // like any operand, so a non-empty fields list always has one
             out.push_str(&format!(
-                "{ind}println!(\"{}\", {});\n",
+                "println!(\"{}\", {});\n",
                 fields.join("\\t"),
                 args.join(", ")
             ));
@@ -550,25 +539,25 @@ fn emit_instr(
             };
             if uses_handles {
                 out.push_str(&format!(
-                    "{ind}let lim = {lim};\n\
-                     {ind}if lim > 0 {{\n\
-                     {ind}    if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                     {ind}    let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     {ind}    if (lim as usize) > t.{fld}.len() {{\n\
-                     {ind}        t.{fld}.resize(lim as usize, {zero});\n\
-                     {ind}    }}\n\
-                     {ind}}}\n",
+                    "let lim = {lim};\n\
+                     if lim > 0 {{\n\
+                         if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         if (lim as usize) > t.{fld}.len() {{\n\
+                             t.{fld}.resize(lim as usize, {zero});\n\
+                         }}\n\
+                     }}\n",
                     lim = iop_str!(*limit, consts_i)
                 ));
             } else {
                 out.push_str(&format!(
-                    "{ind}let lim = {lim};\n\
-                     {ind}if lim > 0 {{\n\
-                     {ind}    let t = unsafe {{ &mut *t_r{table} }};\n\
-                     {ind}    if (lim as usize) > t.{fld}.len() {{\n\
-                     {ind}        t.{fld}.resize(lim as usize, {zero});\n\
-                     {ind}    }}\n\
-                     {ind}}}\n",
+                    "let lim = {lim};\n\
+                     if lim > 0 {{\n\
+                         let t = unsafe {{ &mut *t_r{table} }};\n\
+                         if (lim as usize) > t.{fld}.len() {{\n\
+                             t.{fld}.resize(lim as usize, {zero});\n\
+                         }}\n\
+                     }}\n",
                     lim = iop_str!(*limit, consts_i)
                 ));
             }
@@ -580,15 +569,15 @@ fn emit_instr(
                 else { "array" };
             if uses_handles {
                 out.push_str(&format!(
-                    "{ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                     {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     {ind}len_r{table} = t.{fld}.len();\n\
-                     {ind}p_r{table} = t.{fld}.as_mut_ptr();\n"
+                    "if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                     let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                     len_r{table} = t.{fld}.len();\n\
+                     p_r{table} = t.{fld}.as_mut_ptr();\n"
                 ));
             } else {
                 out.push_str(&format!(
-                    "{ind}len_r{table} = unsafe {{ (*t_r{table}).{fld}.len() }};\n\
-                     {ind}p_r{table} = unsafe {{ (*t_r{table}).{fld}.as_mut_ptr() }};\n"
+                    "len_r{table} = unsafe {{ (*t_r{table}).{fld}.len() }};\n\
+                     p_r{table} = unsafe {{ (*t_r{table}).{fld}.as_mut_ptr() }};\n"
                 ));
             }
         }
@@ -614,13 +603,13 @@ fn emit_instr(
                     ("array", "0", iop_str!(*val, consts_i).to_string())
                 };
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                     {ind}let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     {ind}if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
-                     {ind}unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                     let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                     if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
+                     unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
                     key = iop_str!(*key, consts_i)
                 ));
             } else {
@@ -634,12 +623,12 @@ fn emit_instr(
                     ("array", "0", iop_str!(*val, consts_i).to_string())
                 };
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}let t = unsafe {{ &mut *t_r{table} }};\n\
-                     {ind}if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
-                     {ind}unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     let t = unsafe {{ &mut *t_r{table} }};\n\
+                     if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
+                     unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
                     key = iop_str!(*key, consts_i)
                 ));
             }
@@ -652,21 +641,21 @@ fn emit_instr(
             if matches!(ty, StaticType::String) {
                 if uses_handles {
                     out.push_str(&format!(
-                        "{ind}let k = {key};\n\
-                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                         {ind}let idx = k as usize;\n\
-                         {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                         {ind}let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {ind}s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
+                        "let k = {key};\n\
+                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         let idx = k as usize;\n\
+                         if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
                         key = iop_str!(*key, consts_i)
                     ));
                 } else {
                     out.push_str(&format!(
-                        "{ind}let k = {key};\n\
-                         {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                         {ind}let idx = k as usize;\n\
-                         {ind}let t = unsafe {{ &*t_r{table} }};\n\
-                         {ind}s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
+                        "let k = {key};\n\
+                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         let idx = k as usize;\n\
+                         let t = unsafe {{ &*t_r{table} }};\n\
+                         s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
                         key = iop_str!(*key, consts_i)
                     ));
                 }
@@ -681,39 +670,39 @@ fn emit_instr(
                     ("array", "0", format!("i_r{target}"))
                 };
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                     {ind}let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     {ind}{target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                     let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                     {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
                     key = iop_str!(*key, consts_i)
                 ));
             } else if matches!(ty, StaticType::Float) {
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}let t = unsafe {{ &*t_r{table} }};\n\
-                     {ind}f_r{target} = if idx < t.farray.len() {{ unsafe {{ *t.farray.get_unchecked(idx) }} }} else {{ 0.0 }};\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     let t = unsafe {{ &*t_r{table} }};\n\
+                     f_r{target} = if idx < t.farray.len() {{ unsafe {{ *t.farray.get_unchecked(idx) }} }} else {{ 0.0 }};\n",
                     key = iop_str!(*key, consts_i)
                 ));
             } else if matches!(ty, StaticType::Boolean) {
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}let t = unsafe {{ &*t_r{table} }};\n\
-                     {ind}b_r{target} = if idx < t.barray.len() {{ unsafe {{ *t.barray.get_unchecked(idx) }} }} else {{ false }};\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     let t = unsafe {{ &*t_r{table} }};\n\
+                     b_r{target} = if idx < t.barray.len() {{ unsafe {{ *t.barray.get_unchecked(idx) }} }} else {{ false }};\n",
                     key = iop_str!(*key, consts_i)
                 ));
             } else {
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     {ind}let idx = k as usize;\n\
-                     {ind}let t = unsafe {{ &*t_r{table} }};\n\
-                     {ind}i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                     let idx = k as usize;\n\
+                     let t = unsafe {{ &*t_r{table} }};\n\
+                     i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
                     key = iop_str!(*key, consts_i)
                 ));
             }
@@ -732,13 +721,13 @@ fn emit_instr(
                 iop_str!(*val, consts_i).to_string()
             };
             out.push_str(&format!(
-                "{ind}let k = {key};\n\
-                 {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                 {ind}if (k as usize) < len_r{table} {{\n\
-                 {ind}    unsafe {{ *p_r{table}.add(k as usize) = {val_str}; }}\n\
-                 {ind}}} else {{\n\
-                 {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                 {ind}}}\n",
+                "let k = {key};\n\
+                 if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                 if (k as usize) < len_r{table} {{\n\
+                     unsafe {{ *p_r{table}.add(k as usize) = {val_str}; }}\n\
+                 }} else {{\n\
+                     panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                 }}\n",
                 key = iop_str!(*key, consts_i)
             ));
         }
@@ -748,13 +737,13 @@ fn emit_instr(
             // Vec, which the borrow checker (rightly) forbids.
             if matches!(ty, StaticType::String) {
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                     {ind}if (k as usize) < len_r{table} {{\n\
-                     {ind}    s_r{target} = unsafe {{ (*p_r{table}.add(k as usize)).clone() }};\n\
-                     {ind}}} else {{\n\
-                     {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                     {ind}}}\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                     if (k as usize) < len_r{table} {{\n\
+                         s_r{target} = unsafe {{ (*p_r{table}.add(k as usize)).clone() }};\n\
+                     }} else {{\n\
+                         panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                     }}\n",
                     key = iop_str!(*key, consts_i)
                 ));
             } else {
@@ -768,13 +757,13 @@ fn emit_instr(
                     format!("i_r{target}")
                 };
                 out.push_str(&format!(
-                    "{ind}let k = {key};\n\
-                     {ind}if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
-                     {ind}if (k as usize) < len_r{table} {{\n\
-                     {ind}    {target_str} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
-                     {ind}}} else {{\n\
-                     {ind}    panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
-                     {ind}}}\n",
+                    "let k = {key};\n\
+                     if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
+                     if (k as usize) < len_r{table} {{\n\
+                         {target_str} = unsafe {{ *p_r{table}.add(k as usize) }};\n\
+                     }} else {{\n\
+                         panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
+                     }}\n",
                     key = iop_str!(*key, consts_i)
                 ));
             }
@@ -823,7 +812,6 @@ fn emit_seq(
     b: BlockId,
     hdr: Option<BlockId>,
     stop: Option<BlockId>,
-    d: usize,
     emitted: &mut [bool],
 ) {
     let (program, _alloc, _consts_i, consts_b, _uses_handles) = env;
@@ -831,12 +819,12 @@ fn emit_seq(
     if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
     emitted[b] = true;
     let block = &program.blocks[b];
-    for i in &block.instrs { emit_instr(out, env, i, d); }
+    for i in &block.instrs { emit_instr(out, env, i); }
     match &block.terminator {
         None | Some(Terminator::Halt) => {
             // early return == the dispatcher's `break 'cfg`: there is no
             // code after Halt, so jumping to the end is exactly a return
-            out.push_str(&format!("{}return tables;\n", indent(d)));
+            out.push_str("return tables;\n");
         }
         Some(Terminator::Jump(t)) => {
             if Some(*t) == hdr {
@@ -852,25 +840,24 @@ fn emit_seq(
                         (*cond, *true_block, *false_block),
                     _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
                 };
-                emit_loop(out, env, *t, cond, tb, d, emitted);
-                emit_seq(out, env, fb, hdr, stop, d, emitted);
+                emit_loop(out, env, *t, cond, tb, emitted);
+                emit_seq(out, env, fb, hdr, stop, emitted);
             } else {
-                emit_seq(out, env, *t, hdr, stop, d, emitted);
+                emit_seq(out, env, *t, hdr, stop, emitted);
             }
         }
         Some(Terminator::Branch { cond, true_block, false_block }) if is_loop_header(program, b) => {
             // a header reached directly (not via its pre-header Jump):
             // same handling as the Jump-into-header case
-            emit_loop(out, env, b, *cond, *true_block, d, emitted);
-            emit_seq(out, env, *false_block, hdr, stop, d, emitted);
+            emit_loop(out, env, b, *cond, *true_block, emitted);
+            emit_seq(out, env, *false_block, hdr, stop, emitted);
         }
         Some(Terminator::Branch { cond, true_block, false_block }) => {
             // non-header branch = structured if/else. Both arms converge
             // on the join block, which the parent emits after the arms.
             let join = common_join(program, *true_block, *false_block);
-            let ind = indent(d);
-            out.push_str(&format!("{ind}if {} {{\n", bop_str!(*cond, consts_b)));
-            emit_seq(out, env, *true_block, hdr, join, d + 1, emitted);
+            out.push_str(&format!("if {} {{\n", bop_str!(*cond, consts_b)));
+            emit_seq(out, env, *true_block, hdr, join, emitted);
             // skip an `else` that would be empty: bare else-block with
             // no instructions jumping straight to the join. The block
             // is still CONSUMED — mark it emitted, or the orphan check
@@ -882,14 +869,14 @@ fn emit_seq(
                 && matches!(&program.blocks[*false_block].terminator,
                             Some(Terminator::Jump(t)) if Some(*t) == join);
             if !trivial_else {
-                out.push_str(&format!("{ind}}} else {{\n"));
-                emit_seq(out, env, *false_block, hdr, join, d + 1, emitted);
+                out.push_str("} else {\n");
+                emit_seq(out, env, *false_block, hdr, join, emitted);
             } else {
                 emitted[*false_block] = true;
             }
-            out.push_str(&format!("{ind}}}\n"));
+            out.push_str("}\n");
             if let Some(j) = join {
-                emit_seq(out, env, j, hdr, stop, d, emitted);
+                emit_seq(out, env, j, hdr, stop, emitted);
             }
         }
     }
@@ -901,7 +888,6 @@ fn emit_loop(
     h: BlockId,
     cond: RegId,
     body: BlockId,
-    d: usize,
     emitted: &mut [bool],
 ) {
     let (program, _alloc, consts_i, consts_b, _uses_handles) = env;
@@ -912,7 +898,6 @@ fn emit_loop(
     emitted[h] = true;
 
     let block = &program.blocks[h];
-    let ind = indent(d);
 
     // Pretty form: the header holds nothing (identifier condition, e.g.
     // phase I / bug16a) or exactly the Less computing the branch
@@ -930,20 +915,20 @@ fn emit_loop(
     } else { None };
 
     if let Some(c) = pretty {
-        out.push_str(&format!("{ind}while {c} {{\n"));
-        emit_seq(out, env, body, Some(h), None, d + 1, emitted);
-        out.push_str(&format!("{ind}}}\n"));
+        out.push_str(&format!("while {c} {{\n"));
+        emit_seq(out, env, body, Some(h), None, emitted);
+        out.push_str("}\n");
     } else {
         // General fallback: everything in the header runs every
         // iteration. Never fires on the current corpus — it exists so a
         // surprising CFG degrades to correct-but-ugly, not wrong.
-        out.push_str(&format!("{ind}loop {{\n"));
-        for i in &block.instrs { emit_instr(out, env, i, d + 1); }
-        out.push_str(&format!("{}if {} {{\n", indent(d + 1), bop_str!(cond, consts_b)));
-        emit_seq(out, env, body, Some(h), None, d + 2, emitted);
-        out.push_str(&format!("{}    }} else {{\n", indent(d + 1)));
-        out.push_str(&format!("{}        break;\n", indent(d + 1)));
-        out.push_str(&format!("{}    }}\n{ind}}}\n", indent(d + 1)));
+        out.push_str("loop {\n");
+        for i in &block.instrs { emit_instr(out, env, i); }
+        out.push_str(&format!("if {} {{\n", bop_str!(cond, consts_b)));
+        emit_seq(out, env, body, Some(h), None, emitted);
+        out.push_str("    } else {\n");
+        out.push_str("        break;\n");
+        out.push_str("    }\n}\n");
     }
 }
 
@@ -998,7 +983,7 @@ pub fn generate_rust_code(
 
     let env: EmitEnv = (program, alloc, consts_i, consts_b, uses_handles);
     let mut emitted = vec![false; program.blocks.len()];
-    emit_seq(&mut out, env, 0, None, None, 1, &mut emitted);
+    emit_seq(&mut out, env, 0, None, None, &mut emitted);
     let orphans: Vec<usize> = emitted.iter().enumerate()
         .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
     if !orphans.is_empty() {

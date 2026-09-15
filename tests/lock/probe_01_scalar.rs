@@ -4,22 +4,22 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r20 = 0i64;
-    let mut i_r21 = 0i64;
-    let mut f_r22 = 0f64;
-    let mut t_r20: *mut Table = std::ptr::null_mut();
+    let mut i_r18 = 0i64;
+    let mut i_r19 = 0i64;
+    let mut f_r20 = 0f64;
+    let mut t_r18: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    f_r22 = 2.5;
+    f_r20 = 2.5;
     let mut new_table = Box::new(Table::new());
-    t_r20 = &mut *new_table as *mut Table;
+    t_r18 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r20 };
+    let t = unsafe { &mut *t_r18 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
@@ -30,16 +30,16 @@ pub fn run_baked() -> Vec<Box<Table>> {
         "{}\t{}\t{:?}\t{}\ttable(len={})",
         "scalars",
         5,
-        f_r22,
+        f_r20,
         true,
-        unsafe { (*t_r20).array.len() }
+        unsafe { (*t_r18).array.len() }
     );
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r20 };
+    let t = unsafe { &mut *t_r18 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
@@ -51,8 +51,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r20 };
-    i_r20 = if idx < t.array.len() {
+    let t = unsafe { &*t_r18 };
+    i_r18 = if idx < t.array.len() {
         unsafe { *t.array.get_unchecked(idx) }
     } else {
         0
@@ -62,13 +62,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r20 };
-    i_r21 = if idx < t.array.len() {
+    let t = unsafe { &*t_r18 };
+    i_r19 = if idx < t.array.len() {
         unsafe { *t.array.get_unchecked(idx) }
     } else {
         0
     };
-    println!("{}\t{}\t{}", "after", i_r20, i_r21);
+    println!("{}\t{}\t{}", "after", i_r18, i_r19);
     return tables;
 }
 

@@ -4,43 +4,43 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r15 = 0i64;
-    let mut i_r16 = 0i64;
-    let mut b_r15 = false;
-    let mut t_r15: *mut Table = std::ptr::null_mut();
-    let mut p_r15: *mut i64 = std::ptr::null_mut();
-    let mut len_r15 = 0usize;
+    let mut i_r13 = 0i64;
+    let mut i_r14 = 0i64;
+    let mut b_r13 = false;
+    let mut t_r13: *mut Table = std::ptr::null_mut();
+    let mut p_r13: *mut i64 = std::ptr::null_mut();
+    let mut len_r13 = 0usize;
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r15 = &mut *new_table as *mut Table;
+    t_r13 = &mut *new_table as *mut Table;
     tables.push(new_table);
     let lim = 6;
     if lim > 0 {
-        let t = unsafe { &mut *t_r15 };
+        let t = unsafe { &mut *t_r13 };
         if (lim as usize) > t.array.len() {
             t.array.resize(lim as usize, 0);
         }
     }
-    len_r15 = unsafe { (*t_r15).array.len() };
-    p_r15 = unsafe { (*t_r15).array.as_mut_ptr() };
-    i_r15 = 0;
+    len_r13 = unsafe { (*t_r13).array.len() };
+    p_r13 = unsafe { (*t_r13).array.as_mut_ptr() };
+    i_r13 = 0;
     loop {
-        b_r15 = i_r15 < 6;
-        if b_r15 {
-            i_r16 = i_r15 + 1;
-            let k = i_r15;
+        b_r13 = i_r13 < 6;
+        if b_r13 {
+            i_r14 = i_r13 + 1;
+            let k = i_r13;
             if k < 0 {
                 panic!("Runtime Error: Negative index in fast path");
             }
-            if (k as usize) < len_r15 {
+            if (k as usize) < len_r13 {
                 unsafe {
-                    *p_r15.add(k as usize) = i_r16;
+                    *p_r13.add(k as usize) = i_r14;
                 }
             } else {
                 panic!("optimizer invariant violated: fast-path bounds check failed");
             }
-            i_r15 = i_r15 + 1;
+            i_r13 = i_r13 + 1;
         } else {
             break;
         }

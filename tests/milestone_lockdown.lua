@@ -9,123 +9,19 @@
 -- diff_lock.lua verifies against.
 --
 -- This script OVERWRITES tests/lock/* — git history is the audit trail.
--- Future milestones: adjust LOCKED_TESTS below, rerun (with `force` to skip
+-- Future milestones: adjust tests/listing.lua, rerun (with `force` to skip
 -- the confirmation prompt). It refuses to write the manifest unless every
 -- single build succeeded, so a half-executed lockdown leaves no usable lock.
 
 dofile("tests/helpers.lua")
 
--- THE MILESTONE-1 BASELINE. Mirrors tests/run_positive.lua's list at
--- lockdown time (35 tests, tier2_reg_limit.lua included). Keep in sync by
--- hand when reissuing a lockdown — diff_lock.lua does NOT read this table;
--- it reads the derived tests/lock/manifest.lua this script writes.
-local LOCKED_TESTS = {
-    "bug_01.lua",
-    "bug_02.lua",
-    "bug_03.lua",
-    "bug_04.lua",
-    "bug_06.lua",
-    "bug_07a.lua",
-    "bug_07b.lua",
-    "bug_08.lua",
-    "bug_09.lua",
-    "bug_10b.lua",
-    "bug_11.lua",
-    "bug_12.lua",
-    "bug_13.lua",
-    "optfast.lua",
-    "bug_16a.lua",
-    "bug_16b.lua",
-    "bug_17.lua",
-    "bug_18.lua",
-    "gauntlet_pA.lua",
-    "gauntlet_pB.lua",
-    "gauntlet_pC.lua",
-    "gauntlet_pD.lua",
-    "gauntlet_pE.lua",
-    "gauntlet_pF.lua",
-    "gauntlet_pG.lua",
-    "gauntlet_pH.lua",
-    "gauntlet_pI.lua",
-    "gauntlet_pJ.lua",
-    "gauntlet_pK.lua",
-    "gauntlet_pL.lua",
-    "gauntlet_pM.lua",
-    "opt_literal_bound.lua",
-    "region_table_resize.lua",
-    "hoist_ctx_showcase.lua",
-    "tier2_reg_limit.lua",
-    "firewall_abort_all.lua",
-    "firewall_global_offset.lua",
-    "firewall_neg_offset.lua",
-    "gauntlet_main.lua",
-    "gauntlet_float.lua",
-    "nested_01_success.lua",
-    "nested_05_dyn_loop.lua",
-    "nested_06_read_before_write.lua",
-    "nested_07_read_then_table_store.lua",
-    "nested_08_fresh_store.lua",
-    "nested_10_alias_shared.lua",
-    "nested_14_bool_element.lua",
-    "nested_15_read_then_fresh.lua",
-    "float_01_store_read.lua",
-    "float_02_loop_gate.lua",
-    "float_06_lazy_read.lua",
-    "float_09_fast_rw.lua",
-    "float_10_handle_mode.lua",
-    "float_14_add_store.lua",
-    "float_15_barista_space_cafe.lua",
-    "bool_01_store_read.lua",
-    "bool_02_fast_rw.lua",
-    "bool_03_handle_mode.lua",
-    "bool_04_deferred_while.lua",
-    "bool_05_deferred_eq.lua",
-    "tier4_01_flat_plus_nested.lua",
-    "tier4_02_nested_read.lua",
-    "tier4_03_rebind_decline.lua",
-    "tier4_04_zero_iter.lua",
-    "tier4_06_float_child.lua",
-    "tier4_07_reg_limit_decline.lua",
-    "tier4_08_zero_trip_init.lua",
-    "tier4_09_multihop.lua",
-    "tier4_10_matrix.lua",
-    "tier4_11_matrix_float.lua",
-    "tier4_12_unprovable_limit.lua",
-    "tier4_13_matrix_fast_row.lua",
-    "tier4_14_matrix_alias_decline.lua",
-    "tier4_15_matrix_copy_reach.lua",
-    "feat_if_01_phi_merge.lua",
-    "feat_ops_01_arith.lua",
-    "feat_ops_02_compare_bool.lua",
-    "feat_ops_03_fast_leq.lua",
-    "feat_ops_04_floor_neg.lua",
-    "feat_ops_05_cmp_corners.lua",
-    "feat_ops_06_bool_eq_variants.lua",
-    "feat_ops_07_neg_zero.lua",
-    "feat_ops_08_loop_forms.lua",
-    "feat_ops_09_paren_gate.lua",
-    "feat_ops_10_float_specials.lua",
-    "feat_ops_11_precedence.lua",
-    "feat_ops_12_if_store_gate.lua",
-    "feat_if_02_phi_variants.lua",
-    "feat_if_03_scope_shadow.lua",
-    "probe_01_scalar.lua",
-    "probe_02_loop_phi.lua",
-    "probe_03_ec_offset.lua",
-    "probe_04_leq_desugar_ec.lua",
-    "probe_05_hoist_stability.lua",
-    "probe_06_ssa_names.lua",
-    "probe_07_mint_child.lua",
-    "string_01_scalar.lua",
-    "string_02_table_loop.lua",
-    "string_03_nested.lua",
-    "fuzzer_01_paying_rent.lua",
-    "fuzzer_02_codegen_panic_1.lua",
-    "fuzzer_03_codegen_panic_2.lua",
-    "string_07_concat.lua",
-    "string_08_tag_escaping.lua",
-    "feat_local_multi.lua",
-}
+-- THE MILESTONE BASELINE. Locked set = the `positive` discipline from
+-- tests/listing.lua (LOCKED_TESTS == positive exactly today). If a future
+-- milestone needs to lock a diverging set, add a `locked` key to
+-- tests/listing.lua — never re-copy the list here. diff_lock.lua does NOT
+-- read this table; it reads the derived tests/lock/manifest.lua this
+-- script writes.
+local LOCKED_TESTS = dofile("tests/listing.lua").positive
 
 local LOCK_DIR = "tests/lock"
 

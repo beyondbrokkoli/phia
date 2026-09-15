@@ -4,15 +4,9 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut f_r4 = 0f64;
-    let mut s_r3 = String::new();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    f_r4 = 2.5;
-    s_r3 = "val=C:\\tmp\\x".to_string();
-    println!("{}\t{}", "a{b}c\\d", 1);
-    println!("{}\t{:?}", "C:\\path", f_r4);
-    println!("{}\t{}", s_r3, 7);
+    println!("{}\t{}", "dce_01", 40);
     return tables;
 }
 

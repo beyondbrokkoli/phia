@@ -11,8 +11,8 @@
 -- EXPECT_PRINT: iter	2	xooo	table(len=4)	xooo
 -- EXPECT_PRINT: iter	3	xoooo	table(len=4)	xoooo
 -- EXPECT_PRINT: exit	xoooo	table(len=4)
--- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r22 s_r23 len_r26 s_r22
--- EXPECT_PROBE: #1 tag="exit" b3 depth0 s_r23 len_r26
+-- EXPECT_PROBE: #0 tag="iter" b2 depth1 i_r20 s_r21 len_r24 s_r20
+-- EXPECT_PROBE: #1 tag="exit" b3 depth0 s_r21 len_r24
 -- EXPECT: TABLE 0 LEN 4 NZ 4 CHECKSUM -7302824913170803880
 -- EXPECT: NTABLES 1
 -- EXPECT: fast_sets=1

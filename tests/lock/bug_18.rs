@@ -4,27 +4,27 @@ use crate::memory::Table;
 
 #[allow(unused_variables, unused_mut, unused_assignments)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut i_r21 = 0i64;
-    let mut i_r22 = 0i64;
-    let mut i_r23 = 0i64;
-    let mut i_r24 = 0i64;
-    let mut b_r21 = false;
-    let mut t_r21: *mut Table = std::ptr::null_mut();
+    let mut i_r16 = 0i64;
+    let mut i_r17 = 0i64;
+    let mut i_r18 = 0i64;
+    let mut i_r19 = 0i64;
+    let mut b_r16 = false;
+    let mut t_r16: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new());
-    t_r21 = &mut *new_table as *mut Table;
+    t_r16 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    i_r21 = 1;
-    i_r22 = 2;
-    i_r23 = 0;
+    i_r16 = 1;
+    i_r17 = 2;
+    i_r18 = 0;
     loop {
-        b_r21 = i_r23 < 4;
-        if b_r21 {
-            i_r24 = i_r22;
-            i_r22 = i_r21 + 10;
-            i_r21 = i_r24;
-            i_r23 = i_r23 + 1;
+        b_r16 = i_r18 < 4;
+        if b_r16 {
+            i_r19 = i_r17;
+            i_r17 = i_r16 + 10;
+            i_r16 = i_r19;
+            i_r18 = i_r18 + 1;
         } else {
             break;
         }
@@ -34,24 +34,24 @@ pub fn run_baked() -> Vec<Box<Table>> {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r21 };
+    let t = unsafe { &mut *t_r16 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r21;
+        *t.array.get_unchecked_mut(idx) = i_r16;
     }
     let k = 1;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r21 };
+    let t = unsafe { &mut *t_r16 };
     if idx >= t.array.len() {
         t.array.resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r22;
+        *t.array.get_unchecked_mut(idx) = i_r17;
     }
     return tables;
 }

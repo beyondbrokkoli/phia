@@ -1,6 +1,6 @@
 // src/de_ssa.rs
 use std::collections::{HashMap};
-use crate::ir::{IrProgram, Instruction, Terminator, BlockId, RegId};
+use crate::ir::{IrProgram, Instruction, Terminator, BlockId, RegId, CONST_REG_BASE};
 use crate::ast::StaticType;
 
 fn resolve_via(map: &HashMap<RegId, RegId>, mut r: RegId) -> RegId {
@@ -17,6 +17,17 @@ fn single_def(defs: &HashMap<RegId, usize>, r: RegId) -> bool {
     defs.get(&r).copied() == Some(1)
 }
 
+// One gathered phi, pre-classified for resolve_phis. `shape` is Some((pre,
+// back)) when the args are exactly one edge from before the header and one
+// back edge (pre first) — the loop-header shape step 2 coalesces; the rest
+// takes the classic one-Move-per-edge lowering.
+struct GatheredPhi {
+    target: RegId,
+    ty: StaticType,
+    args: Vec<(BlockId, RegId)>,
+    shape: Option<((BlockId, RegId), (BlockId, RegId))>,
+}
+
 pub fn resolve_phis(program: &mut IrProgram) {
     // 0. def counts (a Phi counts as one def of its target)
     let mut defs: HashMap<RegId, usize> = HashMap::new();
@@ -28,15 +39,14 @@ pub fn resolve_phis(program: &mut IrProgram) {
 
     // 1. gather phis; recognize the loop-header shape: one pred before
     //    the header (preheader), one after (back edge)
-    let mut phis: Vec<(RegId, StaticType, Vec<(BlockId, RegId)>,
-                        Option<((BlockId, RegId), (BlockId, RegId))>)> = Vec::new();
+    let mut phis: Vec<GatheredPhi> = Vec::new();
     for b in &program.blocks {
         for i in &b.instrs {
             if let Instruction::Phi { target, ty, args } = i {
                 let shape = if args.len() == 2 && (args[0].0 < b.id) != (args[1].0 < b.id) {
                     Some(if args[0].0 < b.id { (args[0], args[1]) } else { (args[1], args[0]) })
                 } else { None };
-                phis.push((*target, ty.clone(), args.clone(), shape));
+                phis.push(GatheredPhi { target: *target, ty: ty.clone(), args: args.clone(), shape });
             }
         }
     }
@@ -58,20 +68,20 @@ pub fn resolve_phis(program: &mut IrProgram) {
     let mut rename: HashMap<RegId, RegId> = HashMap::new();
     let mut injects: Vec<(BlockId, RegId, RegId, StaticType)> = Vec::new();
 
-    for (target, ty, args, shape) in &phis {
+    for phi in &phis {
         let mut done = false;
-        if let Some((pre, back)) = shape {
+        if let Some((pre, back)) = phi.shape {
             let b_res = resolve_via(&rename, back.1);
-            if single_def(&defs, back.1) && b_res != *target {
-                rename.insert(*target, b_res);
-                injects.push((pre.0, back.1, pre.1, ty.clone()));
+            if single_def(&defs, back.1) && b_res != phi.target {
+                rename.insert(phi.target, b_res);
+                injects.push((pre.0, back.1, pre.1, phi.ty.clone()));
                 done = true;
             }
         }
         if !done {
             // plain phi: one Move per incoming edge (the classic lowering)
-            for (pred, src) in args {
-                injects.push((*pred, *target, *src, ty.clone()));
+            for (pred, src) in &phi.args {
+                injects.push((*pred, phi.target, *src, phi.ty.clone()));
             }
         }
     }
@@ -192,20 +202,20 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
                     // checked_div/rem: /0 and MIN/-1 stay unfolded
                     Instruction::IntDiv { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                if let (Some(q), Some(m)) = (l.checked_div(r), l.checked_rem(r)) {
-                                    let v = if m != 0 && ((m < 0) != (r < 0)) { q - 1 } else { q };
-                                    ci.insert(*target, v);
-                                }
+                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
+                                && let (Some(q), Some(m)) = (l.checked_div(r), l.checked_rem(r))
+                            {
+                                let v = if m != 0 && ((m < 0) != (r < 0)) { q - 1 } else { q };
+                                ci.insert(*target, v);
                             }
                         }
                     Instruction::Mod { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                if let Some(m) = l.checked_rem(r) {
-                                    let v = if m != 0 && ((m < 0) != (r < 0)) { m + r } else { m };
-                                    ci.insert(*target, v);
-                                }
+                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
+                                && let Some(m) = l.checked_rem(r)
+                            {
+                                let v = if m != 0 && ((m < 0) != (r < 0)) { m + r } else { m };
+                                ci.insert(*target, v);
                             }
                         }
                     Instruction::Move { target, source, ty }
@@ -226,6 +236,32 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
         }
         if ci.len() + cb.len() == before { break; }
     }
+
+    // REMINT — every folded id leaves the vreg namespace for the reserved
+    // const range (CONST_REG_BASE up), renumbering the maps' keys and every
+    // reference to them in the IR. The fold itself ran on original vreg ids
+    // (byte-identical discovery fixpoint); this pass only relocates the
+    // results, making const ids and vreg/physical ids disjoint ranges by
+    // construction. k-th SORTED folded id -> CONST_REG_BASE + k: HashMap
+    // iteration is random per process, and mint assignment must be
+    // deterministic (the reg_alloc `r`-tiebreak precedent).
+    let mut folded: Vec<RegId> = ci.keys().copied().chain(cb.keys().copied()).collect();
+    folded.sort_unstable();
+    let mint: HashMap<RegId, RegId> = folded.iter().enumerate()
+        .map(|(k, &old)| (old, CONST_REG_BASE + k as RegId))
+        .collect();
+    for b in &mut program.blocks {
+        for i in &mut b.instrs { i.remap_instr(&|r| *mint.get(&r).unwrap_or(&r)); }
+        // Branch conditions ride folded consts (`while true do` lowers the
+        // condition to the folded vreg): an unrenamed terminator misses the
+        // rekeyed maps and emits b_r<dead-id> — the exact hazard class
+        // resolve_phis documents for its own renames.
+        if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
+            if let Some(&m) = mint.get(cond) { *cond = m; }
+        }
+    }
+    ci = ci.into_iter().map(|(k, v)| (mint[&k], v)).collect();
+    cb = cb.into_iter().map(|(k, v)| (mint[&k], v)).collect();
     (ci, cb)
 }
 
@@ -242,12 +278,11 @@ pub fn simplify(program: &mut IrProgram) {
     let mut rename: HashMap<RegId, RegId> = HashMap::new();
     for b in &program.blocks {
         for i in &b.instrs {
-            if let Instruction::Move { target, source, .. } = i {
-                if target != source
-                    && defs.get(target) == Some(&1)
-                    && defs.get(source) == Some(&1)
-                { rename.insert(*target, *source); }
-            }
+            if let Instruction::Move { target, source, .. } = i
+                && target != source
+                && defs.get(target) == Some(&1)
+                && defs.get(source) == Some(&1)
+            { rename.insert(*target, *source); }
         }
     }
 
