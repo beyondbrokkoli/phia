@@ -46,10 +46,13 @@ pub type BlockId = usize;
 ///    range-disjoint from everything (reserved high), and layer C
 ///    rewrites the layer-A namespace out of the IR as it mints. The
 ///    spelled-out-in-code instances: reg_alloc's skip set (consts
-///    never enter a pool) and its remap-completeness assert (every
-///    non-const id MUST enter a pool before the rewrite — an unmapped
-///    vreg would survive and numerically collide with minted
-///    physicals). Any future consumer of raw ids over the whole IR
+///    never enter a pool); its TOTAL rewrite (the remap closure itself
+///    panics on any non-const id that never entered a pool — there is
+///    no identity fallback to drift out of coverage); and its
+///    post-alloc id-space audit (remint purity, membership, pool
+///    purity, bool conds, no dangling uses — the laws re-verified over
+///    the FINAL program, one scan, on every compile the pipeline ever
+///    runs). Any future consumer of raw ids over the whole IR
 ///    must make the same exclusions, or cite this law instead of
 ///    remembering the war story.
 /// 2. **Membership by range, value by map, kind by range (physicals) or

@@ -131,6 +131,8 @@ return {
         "fconst_04_floordiv_literal_cast.lua",
         "floatinf_01_infinity_literal.lua",
         "uniqueid_01_no_shared_ids.lua",
+        "fwhile_02_float_literal_bound.lua",
+        "opt_hoist_01_phi_carried_literal.lua",
     },
     negative = {
         "bug_10a.lua",

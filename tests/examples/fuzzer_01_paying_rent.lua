@@ -29,12 +29,22 @@
 --   probe that always fell through — the dump had shown a bogus
 --   `Add { target: f_r84 }` on an int Add.
 --
--- RE-VERIFY IF THIS BREAKS:
---   touch this file && PHIA_DEBUG_DUMP=final PHIA_SOURCE=tests/examples/fuzzer_01_paying_rent.lua cargo build --release
---   In ir_final_cfg.txt: a const-marker `v<id>` on a NON-foldable
---   instruction (GetTable/NewTable/arith on non-consts) = this bug class —
---   the invariant "physical id never equals a vreg id (const or not)" is
---   broken again.
+-- RE-VERIFY IF THIS BREAKS (updated for the zero-base world — the
+-- original fix's `max_const` base lift was superseded by the unique-id
+-- overhaul; the hazard is now closed structurally):
+--   The stale-key class is impossible rather than defended against:
+--   consts are REMINTED into layer B (>= CONST_REG_BASE, far above
+--   every physical), and reg_alloc's post-alloc id-space audit asserts
+--   remint purity on every compile — a low id in a consts map aborts
+--   the build with "id-space audit: consts map holds low id" before
+--   any codegen runs. If that audit ever fires, THIS file's history is
+--   the first place to look.
+--   Eye-check recipe: touch this file && PHIA_DEBUG_DUMP=final
+--   PHIA_SOURCE=tests/examples/fuzzer_01_paying_rent.lua cargo build --release
+--   In ir_final_cfg.txt: const-folded targets print as c{n} markers
+--   (layer-B ids); a c{n} on a NON-foldable instruction
+--   (GetTable/NewTable/arith on non-consts) is this bug class in its
+--   modern spelling.
 
 -- EXPECT: fast_sets=0
 -- EXPECT: fast_gets=0

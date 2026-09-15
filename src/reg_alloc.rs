@@ -342,36 +342,36 @@ pub fn allocate_registers(
         map.insert(r, phys);
     }
 
-    // 3.5 REMAP-COMPLETENESS TRIPWIRE. Every non-const id in the
-    //     program must be in `map` (or the skip set). An unmapped vreg
-    //     rides the identity fallback below and keeps its id — which
-    //     since the zero-base mint NUMERICALLY COLLIDES with minted
-    //     physicals and would silently read/write a declared local of
-    //     the wrong pool. (Pre-zero-base it rendered as a high,
-    //     undeclared id and failed the build loudly.) A real assert,
-    //     not debug_assert: silent wrong code is the one failure this
-    //     pass may never produce. Cost: one scan per compile.
-    for b in blocks {
-        for i in &b.instrs {
-            for r in i.use_regs().into_iter().chain(i.def_reg()) {
-                assert!(map.contains_key(&r) || is_const_reg(r),
-                    "reg_alloc: vreg {r} never entered a pool — it would \
-                     survive the rewrite and collide with physical ids");
-            }
+    // 4. rewrite references — TOTAL AND LOUD. Const vregs stay identity
+    //    (codegen looks them up in the const maps and never emits
+    //    them); every OTHER id must have entered a pool, and the
+    //    rewrite itself enforces it — the identity fallback is gone.
+    //    An unmapped vreg would keep its low id, NUMERICALLY COLLIDE
+    //    with a minted physical, and silently read/write a declared
+    //    local of the wrong pool (pre-zero-base it rendered as a high,
+    //    undeclared id and failed the build loudly), so the closure
+    //    panics instead. This IS the old 3.5 remap-completeness scan,
+    //    merged into the rewrite it guarded: coverage is exactly
+    //    remap_instr + branch conds — the positions that actually get
+    //    rewritten — so a future instruction kind cannot slip a
+    //    position past a use_regs/def_reg match that drifted out of
+    //    sync, and the extra scan per compile is gone. A real assert,
+    //    not debug_assert: silent wrong code is the one failure this
+    //    pass may never produce.
+    let rewrite = |r: RegId| -> RegId {
+        if is_const_reg(r) { return r; }
+        match map.get(&r) {
+            Some(&p) => p,
+            None => panic!(
+                "reg_alloc: vreg {r} never entered a pool — it would \
+                 survive the rewrite and collide with physical ids"),
         }
-        if let Some(Terminator::Branch { cond, .. }) = &b.terminator {
-            assert!(map.contains_key(cond) || is_const_reg(*cond),
-                "reg_alloc: branch cond {cond} never entered a pool — it would \
-                 survive the rewrite and collide with physical ids");
-        }
-    }
-
-    // 4. rewrite references (const vregs stay identity: codegen looks
-    //    them up in the const maps and never emits them)
+    };
     for b in &mut program.blocks {
-        for i in &mut b.instrs { i.remap_instr(&|r| *map.get(&r).unwrap_or(&r)); }
-        if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator
-            && let Some(&p) = map.get(&*cond) { *cond = p; }
+        for i in &mut b.instrs { i.remap_instr(&rewrite); }
+        if let Some(Terminator::Branch { cond, .. }) = &mut b.terminator {
+            *cond = rewrite(*cond);
+        }
     }
 
     // 5. self-copies are no-ops
@@ -380,7 +380,10 @@ pub fn allocate_registers(
             !matches!(i, Instruction::Move { target, source, .. } if target == source));
     }
 
-    AllocInfo {
+    // 6. post-alloc constitution audit — the FINAL program is what
+    //    emission silently leans on, so the final program is what gets
+    //    checked (audit_id_space below spells out the laws).
+    let info = AllocInfo {
         n_int: *count.entry(Pool::Int).or_insert(0),
         n_bool: *count.entry(Pool::Bool).or_insert(0),
         n_float: *count.entry(Pool::Float).or_insert(0),
@@ -397,6 +400,139 @@ pub fn allocate_registers(
         ftable_base,
         tstr_base,
         btable_base,
+    };
+    audit_id_space(program, &info, consts_i, consts_b, consts_f, consts_s);
+    info
+}
+
+/// POST-ALLOC ID-SPACE AUDIT — constitution laws 1 and 2 spelled out
+/// over the FINAL program: one scan (defs first, then uses), real
+/// asserts, no mutation. The emitted Rust leans on every claim here
+/// silently; the audit turns each into a loud, named failure. It runs
+/// inside allocate_registers, so the whole boss corpus, every lock
+/// regen, and every differential-fuzzer seed audits it on every
+/// compile — fuzzer_01_paying_rent.lua is the designated complicated
+/// witness, and if any generated shape can break the unique-id law, a
+/// fuzzer seed is where it surfaces first.
+///   * remint purity — every consts-map key is layer-B (>= the
+///     reserved base). The fuzzer_01 stale-key class dies here: a
+///     low id in a const map could shadow a minted physical at
+///     emission's const early-outs.
+///   * membership — every non-const def/use/branch-cond id lies
+///     inside a minted pool range; nothing unminted survives the
+///     rewrite.
+///   * pool purity — each def's target range matches the defining
+///     instruction's kind, and one id is never defined into two
+///     pools (the i_r12/b_r12 co-numbering class; impossible by the
+///     mint's construction, asserted anyway — the mint is the sort
+///     of code that regresses silently).
+///   * bool conds — a Branch cond is bool-pool or const (a non-bool
+///     cond would render as an undeclared b_r at emission).
+///   * no dangling uses — every non-const use/cond has a def
+///     somewhere (the undeclared-register class).
+///
+/// Slot reuse across DISJOINT intervals is legal and pinned
+/// (floatinf_01: sum coalesces onto neg's freed slot) — the law is
+/// one-id-one-pool, not one-id-one-def.
+pub fn audit_id_space(
+    program: &IrProgram,
+    alloc: &AllocInfo,
+    consts_i: &HashMap<RegId, i64>,
+    consts_b: &HashMap<RegId, bool>,
+    consts_f: &HashMap<RegId, f64>,
+    consts_s: &HashMap<RegId, String>,
+) {
+    use std::borrow::Cow;
+
+    for r in consts_i.keys().chain(consts_b.keys()).chain(consts_f.keys()).chain(consts_s.keys()) {
+        assert!(is_const_reg(*r),
+            "id-space audit: consts map holds low id {r} — layer B must be \
+             reminted above CONST_REG_BASE or emission's const early-outs \
+             can shadow a minted physical (the fuzzer_01 class)");
+    }
+
+    let end = alloc.btable_base + alloc.n_btable as RegId;
+    let ranges: [(RegId, RegId, Pool); 8] = [
+        (alloc.int_base, alloc.bool_base, Pool::Int),
+        (alloc.bool_base, alloc.table_base, Pool::Bool),
+        (alloc.table_base, alloc.str_base, Pool::Table),
+        (alloc.str_base, alloc.float_base, Pool::String),
+        (alloc.float_base, alloc.ftable_base, Pool::Float),
+        (alloc.ftable_base, alloc.tstr_base, Pool::TableFloat),
+        (alloc.tstr_base, alloc.btable_base, Pool::TableString),
+        (alloc.btable_base, end, Pool::TableBool),
+    ];
+    let classify = |r: RegId| -> Option<Pool> {
+        ranges.iter().find(|&&(lo, hi, _)| r >= lo && r < hi).map(|&(_, _, p)| p)
+    };
+    let classify_or_panic = |r: RegId| -> Pool {
+        classify(r).unwrap_or_else(|| panic!(
+            "id-space audit: id {r} is neither const nor inside any minted \
+             pool range — an unminted id survived the rewrite"))
+    };
+
+    // pass 1: defs (membership, per-instruction pool purity, and the
+    // one-id-one-pool accumulation across the whole program)
+    let mut def_pool: HashMap<RegId, Pool> = HashMap::new();
+    for b in &program.blocks {
+        for i in &b.instrs {
+            let Some(d) = i.def_reg() else { continue };
+            if is_const_reg(d) { continue; }
+            let actual = classify_or_panic(d);
+            let allowed: Cow<'static, [Pool]> = match i {
+                Instruction::LoadInt { .. } => Cow::Borrowed(&[Pool::Int]),
+                Instruction::LoadFloat { .. } => Cow::Borrowed(&[Pool::Float]),
+                Instruction::LoadBool { .. } => Cow::Borrowed(&[Pool::Bool]),
+                Instruction::LoadString { .. } | Instruction::Concat { .. }
+                    => Cow::Borrowed(&[Pool::String]),
+                Instruction::Less { .. } | Instruction::Leq { .. }
+                | Instruction::Geq { .. } | Instruction::Eq { .. }
+                | Instruction::Not { .. } => Cow::Borrowed(&[Pool::Bool]),
+                // arith is kind-polymorphic: int and float share the
+                // operator set, so either scalar range is legal
+                Instruction::Add { .. } | Instruction::Sub { .. }
+                | Instruction::Mul { .. } | Instruction::Div { .. }
+                | Instruction::IntDiv { .. } | Instruction::Mod { .. }
+                | Instruction::Neg { .. } => Cow::Borrowed(&[Pool::Int, Pool::Float]),
+                // ty is the TARGET's static type on all of these
+                // (NewTable carries the full table type, GetTable the
+                // element type, Move/Phi the value type)
+                Instruction::NewTable { ty, .. } | Instruction::GetTable { ty, .. }
+                | Instruction::GetTableFast { ty, .. } | Instruction::Move { ty, .. }
+                | Instruction::Phi { ty, .. } => Cow::Owned(vec![pool_of(ty)]),
+                _ => Cow::Borrowed(&[]),
+            };
+            assert!(allowed.contains(&actual),
+                "id-space audit: {i:?} defines {d} inside the {actual:?} range — \
+                 pool purity broken (one id, one pool)");
+            match def_pool.entry(d) {
+                std::collections::hash_map::Entry::Occupied(e) => assert!(*e.get() == actual,
+                    "id-space audit: id {d} defined in both {:?} and {actual:?} pools — \
+                     physical id collision", e.get()),
+                std::collections::hash_map::Entry::Vacant(e) => { e.insert(actual); }
+            }
+        }
+    }
+
+    // pass 2: uses and branch conds
+    for b in &program.blocks {
+        for i in &b.instrs {
+            for u in i.use_regs() {
+                if is_const_reg(u) { continue; }
+                classify_or_panic(u);
+                assert!(def_pool.contains_key(&u),
+                    "id-space audit: id {u} is used but never defined — \
+                     emission would render an undeclared register");
+            }
+        }
+        if let Some(Terminator::Branch { cond, .. }) = &b.terminator && !is_const_reg(*cond) {
+            let p = classify_or_panic(*cond);
+            assert!(p == Pool::Bool,
+                "id-space audit: branch cond {cond} is {p:?}-pool, not bool");
+            assert!(def_pool.contains_key(cond),
+                "id-space audit: branch cond {cond} is used but never defined — \
+                 emission would render an undeclared register");
+        }
     }
 }
 

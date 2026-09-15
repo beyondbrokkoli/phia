@@ -1045,8 +1045,11 @@ fn emit_loop(
     // Float operands DECLINE the pretty arm: iop_str! below would render
     // them as `i_r<id>` — undeclared registers, a program that does not
     // compile (fwhile_01's shape: identifier-bound float bounds put the
-    // bare Less alone in the header; literal bounds escape by loading in
-    // the header, which makes len()==2 decline here). Both the physical
+    // bare Less alone in the header. Literal float bounds no longer load
+    // in the header — the lowerer's loop-invariant load hoist relocates
+    // them to the pre-header — so fwhile_02's shape reaches this arm as
+    // a lone Less too, declined by the operand checks alone). Both the
+    // physical
     // float pool AND the const-float map are checked — a folded float
     // operand's layer-B id is outside every mint range. The fallback
     // emits the Less through emit_instr, whose float arm is correct —

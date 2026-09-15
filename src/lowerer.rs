@@ -1,5 +1,5 @@
 // src/lowerer.rs
-use std::collections::{HashMap, BTreeSet};
+use std::collections::{HashMap, HashSet, BTreeSet};
 use crate::ast::{Expr, Stmt, BinOp, UnOp, StaticType};
 use crate::ir::{Instruction, BasicBlock, Terminator, BlockId, RegId, IrProgram};
 
@@ -104,7 +104,11 @@ impl IrLowerer {
     /// Call this while `current_block` is still the loop pre-header.
     /// Returns `None` (and emits nothing) for any non-literal operand —
     /// those must be lowered inside the header, where loop-carried phis
-    /// are visible.
+    /// are visible. Int-only BY DESIGN: the consumers are the tier-4
+    /// `idx < invariant` gate shapes, which never apply to floats. Float
+    /// literal bounds are NOT materialized here — their header loads are
+    /// lifted out by the loop-invariant load hoist at the end of the
+    /// While arm instead (see there).
     fn materialize_bound(&mut self, operand: &Expr) -> Option<RegId> {
         if let Expr::Integer(v) = operand {
             let reg = self.next_reg();
@@ -214,11 +218,12 @@ impl IrLowerer {
             Stmt::TableAssign { table, index, expr } => {
                 // A bare `name[...]` lvalue reads the variable directly:
                 // lowering it as an expression would mint (and abandon) a
-                // fresh vreg. Since the zero-base physical mint that no
-                // longer renumbers any physical register — but an
-                // abandoned id is still dead weight in the vreg
-                // namespace (dump noise, def_map churn), so the
-                // avoidance stays as hygiene. Only genuine
+                // fresh vreg. The avoidance predates the zero-base mint,
+                // when a burned id shifted phys_base and renumbered every
+                // physical above it; today the mint is count-only and no
+                // physical moves — but an abandoned id is still dead
+                // weight in the vreg namespace (dump noise, def_map
+                // churn), so the avoidance stays as hygiene. Only genuine
                 // sub-expressions (nested lvalues like `t[0][i]`) lower.
                 let t_reg = match table {
                     Expr::Identifier(name) => self.read_var(name).reg,
@@ -363,6 +368,96 @@ impl IrLowerer {
                 for (var, phi_reg) in &phis {
                     self.update_var(var, *phi_reg);
                 }
+
+                // --- Loop-invariant literal loads -----------------------------
+                // Every Load* is pure and OPERAND-FREE, so any Load inside
+                // the loop is loop-invariant by construction — the one LICM
+                // case that needs no dependence analysis. Relocate them to
+                // the pre-header with instruction identity preserved (no
+                // renumbering, no minting): the const fold is id-keyed and
+                // position-blind, and folded uses render as literals either
+                // way, so the emitted code only changes for loads the fold
+                // DECLINES — an inf LoadFloat, which moves as a whole
+                // instruction above the loop (fwhile_02 pins it). Everywhere
+                // else the CFG and the dumps are the observable difference
+                // (fwhile_01's body LoadFloat 0.25 leaves block 2). Float
+                // literal bounds ride this too: materialize_bound stays
+                // int-only (the tier-4 gate it feeds is int-only), so
+                // `while f < 1.0` lowers its bound load into the header and
+                // THIS hoist is what lifts it out — leaving a lone float
+                // Less in the header that the pretty arm must still decline
+                // on operand kind, not on len()==2. NewTable is deliberately
+                // not hoisted: a per-iteration NewTable is a fresh table
+                // each iteration — table identity is semantic.
+                //
+                // THE CARRIED-VALUE EXCLUSION (fuzzer seeds 10/139/192): a
+                // Load whose target is ANY phi's arg is NOT hoistable —
+                // while-phi args directly (seed 10: `x = 11` on a
+                // loop-mutated variable is the back-edge arg; the coalescer
+                // renames the phi onto it and injects an initializing Move
+                // at pre-header END that a hoisted load would sit before),
+                // and just as fatally IF-JOIN args (seed 192: `if c then
+                // r = "gamma" end` inside the loop — the join phi's arg
+                // load hoisted out, the coalescer renamed the join phi onto
+                // it, the allocator reused one physical for both, and the
+                // per-iteration edge-Move degenerated into a deleted
+                // self-copy — the init value won forever). WHETHER a
+                // carried definition executed is semantic even for a pure
+                // load. A load that is NO phi's arg is provably safe: it is
+                // consumed only as a value by dominated ordinary uses.
+                // Nested loops need no extra care: a variable mutated at
+                // any depth gets the innermost loop's phi first, and
+                // if-join phis are minted during body lowering — both are
+                // inside the region this scan covers. The walk stays
+                // inside the loop: the header plus everything reachable
+                // from the body without re-crossing the header or entering
+                // the exit block (no break exists in the subset; the exit
+                // guard keeps the walk honest if one ever appears).
+                // Deterministic: blocks visited in ascending id order,
+                // instructions in program order.
+                let mut region = vec![body_block];
+                let mut i = 0;
+                while i < region.len() {
+                    let blk = region[i];
+                    i += 1;
+                    let succs: Vec<BlockId> = match &self.blocks[blk].terminator {
+                        Some(Terminator::Jump(t)) => vec![*t],
+                        Some(Terminator::Branch { true_block, false_block, .. }) =>
+                            vec![*true_block, *false_block],
+                        _ => vec![],
+                    };
+                    for t in succs {
+                        if t != header_block && t != exit_block && !region.contains(&t) {
+                            region.push(t);
+                        }
+                    }
+                }
+                region.push(header_block);
+                region.sort_unstable();
+                let mut carried: HashSet<RegId> = HashSet::new();
+                for blk in &region {
+                    for instr in &self.blocks[*blk].instrs {
+                        if let Instruction::Phi { target, args, .. } = instr {
+                            carried.insert(*target);
+                            for &(_, r) in args { carried.insert(r); }
+                        }
+                    }
+                }
+                let mut hoisted: Vec<Instruction> = Vec::new();
+                for blk in region {
+                    let mut kept = Vec::new();
+                    for instr in std::mem::take(&mut self.blocks[blk].instrs) {
+                        let target = instr.def_reg();
+                        if target.is_some_and(|t| !carried.contains(&t))
+                            && matches!(instr,
+                                Instruction::LoadInt { .. } | Instruction::LoadFloat { .. }
+                                | Instruction::LoadBool { .. } | Instruction::LoadString { .. })
+                        { hoisted.push(instr); }
+                        else { kept.push(instr); }
+                    }
+                    self.blocks[blk].instrs = kept;
+                }
+                self.blocks[pre_header].instrs.extend(hoisted);
 
                 self.current_block = exit_block;
                 self.loop_depth -= 1;
