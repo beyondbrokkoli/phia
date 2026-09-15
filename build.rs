@@ -168,6 +168,8 @@ fn render_final_ir(
     alloc: &reg_alloc::AllocInfo,
     consts_i: &HashMap<ir::RegId, i64>,
     consts_b: &HashMap<ir::RegId, bool>,
+    consts_f: &HashMap<ir::RegId, f64>,
+    consts_s: &HashMap<ir::RegId, String>,
 ) {
     use ast::StaticType;
     use ir::Instruction as I;
@@ -176,7 +178,9 @@ fn render_final_ir(
     let st_tbl = || StaticType::Table(Box::new(StaticType::Integer));
     // pool_prefixed bound to this dump's data: the match arms below
     // keep their old two-argument shape.
-    let pp = |r: ir::RegId, t: &StaticType| backend::pool_prefixed(r, t, consts_i, consts_b, alloc);
+    let pp = |r: ir::RegId, t: &StaticType| {
+        backend::pool_prefixed(r, t, consts_i, consts_b, consts_f, consts_s, alloc)
+    };
     for b in &program.blocks {
         let term = match &b.terminator {
             Some(ir::Terminator::Jump(t)) => format!("Jump(b{t})"),
@@ -209,12 +213,12 @@ fn render_final_ir(
                 I::Move { target, source, ty } =>
                     format!("Move {{ target: {}, source: {}, ty: {ty:?} }}",
                         pp(*target, ty), pp(*source, ty)),
-                I::Add { target, left, right } => arith(alloc, consts_i, consts_b, "Add", *target, *left, *right),
-                I::Sub { target, left, right } => arith(alloc, consts_i, consts_b, "Sub", *target, *left, *right),
-                I::Mul { target, left, right } => arith(alloc, consts_i, consts_b, "Mul", *target, *left, *right),
-                I::Div { target, left, right } => arith(alloc, consts_i, consts_b, "Div", *target, *left, *right),
-                I::IntDiv { target, left, right } => arith(alloc, consts_i, consts_b, "IntDiv", *target, *left, *right),
-                I::Mod { target, left, right } => arith(alloc, consts_i, consts_b, "Mod", *target, *left, *right),
+                I::Add { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Add", *target, *left, *right),
+                I::Sub { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Sub", *target, *left, *right),
+                I::Mul { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mul", *target, *left, *right),
+                I::Div { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Div", *target, *left, *right),
+                I::IntDiv { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "IntDiv", *target, *left, *right),
+                I::Mod { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mod", *target, *left, *right),
                 I::Neg { target, source } =>
                     format!("Neg {{ target: {}, source: {} }}", pp(*target, &st_i), pp(*source, &st_i)),
                 I::Less { target, left, right } =>
@@ -264,6 +268,8 @@ fn arith(
     alloc: &reg_alloc::AllocInfo,
     consts_i: &HashMap<ir::RegId, i64>,
     consts_b: &HashMap<ir::RegId, bool>,
+    consts_f: &HashMap<ir::RegId, f64>,
+    consts_s: &HashMap<ir::RegId, String>,
     name: &str,
     target: ir::RegId,
     left: ir::RegId,
@@ -280,9 +286,9 @@ fn arith(
         ast::StaticType::Integer
     };
     format!("{name} {{ target: {}, left: {}, right: {} }}",
-        backend::pool_prefixed(target, &t, consts_i, consts_b, alloc),
-        backend::pool_prefixed(left, &t, consts_i, consts_b, alloc),
-        backend::pool_prefixed(right, &t, consts_i, consts_b, alloc))
+        backend::pool_prefixed(target, &t, consts_i, consts_b, consts_f, consts_s, alloc),
+        backend::pool_prefixed(left, &t, consts_i, consts_b, consts_f, consts_s, alloc),
+        backend::pool_prefixed(right, &t, consts_i, consts_b, consts_f, consts_s, alloc))
 }
 
 fn main() {
@@ -385,11 +391,12 @@ fn main() {
 
     // Phase 6.5
     de_ssa::resolve_phis(&mut ir_program);
-    let (consts_i, consts_b) = de_ssa::propagate_constants(&mut ir_program);
+    let (consts_i, consts_b, consts_f, consts_s) = de_ssa::propagate_constants(&mut ir_program);
     de_ssa::simplify(&mut ir_program);
 
     // Phase 6.75
-    let alloc_info = reg_alloc::allocate_registers(&mut ir_program, &consts_i, &consts_b);
+    let alloc_info = reg_alloc::allocate_registers(
+        &mut ir_program, &consts_i, &consts_b, &consts_f, &consts_s);
 
     if dump_final {
         let mut s = String::from(
@@ -397,7 +404,7 @@ fn main() {
              == i_r/b_r/f_r/s_r/t_r name the exact Rust variable emission generates; pools share ids BY DESIGN ==\n\
              == (i_r49 and t_r49 are different variables). v marks const-skipped vregs (rendered as literals). ==\n",
         );
-        render_final_ir(&mut s, &ir_program, &alloc_info, &consts_i, &consts_b);
+        render_final_ir(&mut s, &ir_program, &alloc_info, &consts_i, &consts_b, &consts_f, &consts_s);
         std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();
     }
 
@@ -424,7 +431,8 @@ fn main() {
     }
 
     // 5. Code Generation
-    let mut final_code = backend::generate_rust_code(&ir_program, &alloc_info, &consts_i, &consts_b);
+    let mut final_code = backend::generate_rust_code(
+        &ir_program, &alloc_info, &consts_i, &consts_b, &consts_f, &consts_s);
 
     // Regression stats: computed from the FINAL CFG
     let (mut fs_, mut fg, mut ds, mut dg, mut ho) = (0, 0, 0, 0, 0);
@@ -448,8 +456,13 @@ fn main() {
     }
 
     let hoist_ctx = ctx_list.join(",");
+    // consts_* = per-kind fold counts (layer-B sizes): the per-pass
+    // observability rider — with consts_f/consts_s the fold's effect on
+    // emitted code is pinned by locks, and these counters pin the fold's
+    // REACH (EXPECT: consts_f=3 style pins).
     final_code.push_str(&format!(
-        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={hoist_ctx}\";\n"
+        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={hoist_ctx};consts_i={};consts_b={};consts_f={};consts_s={}\";\n",
+        consts_i.len(), consts_b.len(), consts_f.len(), consts_s.len()
     ));
 
     let out_dir = env::var("OUT_DIR").unwrap();

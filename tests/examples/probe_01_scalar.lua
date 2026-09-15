@@ -8,7 +8,7 @@
 -- allocator change must break those pins just as it breaks the byte locks.
 -- EXPECT_PRINT: scalars	5	2.5	true	table(len=1)
 -- EXPECT_PRINT: after	7	6
--- EXPECT_PROBE: #0 tag="scalars" b0 depth0 c0 f_r20 c1 len_r18
+-- EXPECT_PROBE: #0 tag="scalars" b0 depth0 c0 c1 c2 len_r18
 -- EXPECT_PROBE: #1 tag="after" b0 depth0 i_r18 i_r19
 -- EXPECT: NTABLES 1
 -- EXPECT: TABLE 0 LEN 2 NZ 2 CHECKSUM 19

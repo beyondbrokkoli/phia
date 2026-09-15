@@ -8,10 +8,10 @@
 -- EXPECT_PRINT: chain	pha-ia
 -- EXPECT_PRINT: eq	true	true
 -- EXPECT_PRINT: prec	true	true
--- EXPECT_PROBE: #0 tag="concat" b0 depth0 s_r30 s_r31 s_r32
--- EXPECT_PROBE: #1 tag="chain" b0 depth0 s_r32
--- EXPECT_PROBE: #2 tag="eq" b0 depth0 b_r30 b_r32
--- EXPECT_PROBE: #3 tag="prec" b0 depth0 b_r32 b_r30
+-- EXPECT_PROBE: #0 tag="concat" b0 depth0 c0 c1 c2
+-- EXPECT_PROBE: #1 tag="chain" b0 depth0 c3
+-- EXPECT_PROBE: #2 tag="eq" b0 depth0 c6 c8
+-- EXPECT_PROBE: #3 tag="prec" b0 depth0 c10 c14
 -- EXPECT: NTABLES 0
 local a = "pha"
 local b = "ia"

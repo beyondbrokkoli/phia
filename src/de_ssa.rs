@@ -118,7 +118,29 @@ pub fn resolve_phis(program: &mut IrProgram) {
 }
 
 
-pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, HashMap<RegId, bool>) {
+/// Constant propagation over the four scalar kinds (int, bool, float,
+/// string), returning (ci, cb, cf, cs) — the consts maps keyed by the
+/// REMINTED layer-B ids (see the id-space constitution in ir.rs; law 2:
+/// membership by range, value by map, kind by static type, rendering by
+/// layer).
+///
+/// FLOAT folding is exact by construction: the evaluator applies plain
+/// Rust f64 ops in the same left-associated tree the emitted templates
+/// spell (IntDiv = `(l / r).floor()`, Mod = `l - (l / r).floor() * r`),
+/// so a folded value is bit-identical to what the runtime would compute.
+/// The `is_finite` guard is load-bearing, not paranoia: `{:?}` renders
+/// non-finite f64s as `inf`/`NaN`, which are not valid Rust literals —
+/// the lexer's `d.d` shape keeps literals finite in practice, but
+/// extreme-magnitude decimals parse to inf, and folding itself is the
+/// main producer (`1.0/0.0`, `0.0/0.0` must stay runtime).
+///
+/// STRING folding is the allocation payoff: `"a" .. "b"` becomes a
+/// compile-time literal — no format!, no clone chain, no decl. Values
+/// render through `{:?}` at uses (the LoadString precedent: Debug
+/// escaping of raw user text always yields a valid Rust literal).
+pub fn propagate_constants(
+    program: &mut IrProgram,
+) -> (HashMap<RegId, i64>, HashMap<RegId, bool>, HashMap<RegId, f64>, HashMap<RegId, String>) {
     let mut defs: HashMap<RegId, usize> = HashMap::new();
     for b in &program.blocks {
         for i in &b.instrs {
@@ -128,12 +150,14 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
 
     let mut ci: HashMap<RegId, i64> = HashMap::new();
     let mut cb: HashMap<RegId, bool> = HashMap::new();
+    let mut cf: HashMap<RegId, f64> = HashMap::new();
+    let mut cs: HashMap<RegId, String> = HashMap::new();
 
     // Fixpoint: entries are only ever added (single-def regs are
     // immutable), and block-id order matches dominance order here, so
     // this converges in ~2 sweeps.
     loop {
-        let before = ci.len() + cb.len();
+        let before = ci.len() + cb.len() + cf.len() + cs.len();
         for b in &program.blocks {
             for i in &b.instrs {
                 match i {
@@ -141,100 +165,173 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
                         if single_def(&defs, *target) => { ci.insert(*target, *val); }
                     Instruction::LoadBool { target, val }
                         if single_def(&defs, *target) => { cb.insert(*target, *val); }
+                    Instruction::LoadFloat { target, val }
+                        if single_def(&defs, *target) && val.is_finite() => {
+                        cf.insert(*target, *val);
+                    }
+                    Instruction::LoadString { target, val }
+                        if single_def(&defs, *target) => {
+                        cs.insert(*target, val.clone());
+                    }
                     Instruction::Add { target, left, right }
                         if single_def(&defs, *target) => {
                         if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
                             ci.insert(*target, l.wrapping_add(r));
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = l + r;
+                            if v.is_finite() { cf.insert(*target, v); }
                         }
                     }
                     Instruction::Sub { target, left, right }
                         if single_def(&defs, *target) => {
                         if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
                             ci.insert(*target, l.wrapping_sub(r));
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = l - r;
+                            if v.is_finite() { cf.insert(*target, v); }
                         }
                     }
                     Instruction::Less { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                cb.insert(*target, l < r);
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                            cb.insert(*target, l < r);
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            cb.insert(*target, l < r);
                         }
+                    }
                     Instruction::Leq { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                cb.insert(*target, l <= r);
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                            cb.insert(*target, l <= r);
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            cb.insert(*target, l <= r);
                         }
+                    }
                     Instruction::Geq { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                cb.insert(*target, l >= r);
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                            cb.insert(*target, l >= r);
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            cb.insert(*target, l >= r);
                         }
-                    // Only INTEGER equality folds. Bool Eqs deliberately
-                    // stay unfolded (emission renders both-const bools as
-                    // literals anyway) — a byte-frozen choice.
-                    Instruction::Eq { target, left, right, ty: StaticType::Integer }
-                        if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                cb.insert(*target, l == r);
+                    }
+                    // Eq folds per operand kind — the instruction's ty is
+                    // the single source of truth (Int/Bool physicals share
+                    // one id range; nothing else disambiguates). Bool Eqs
+                    // deliberately stay unfolded (emission renders
+                    // both-const bools as literals anyway) — a
+                    // byte-frozen choice.
+                    Instruction::Eq { target, left, right, ty }
+                        if single_def(&defs, *target) => match ty {
+                            StaticType::Integer => {
+                                if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                                    cb.insert(*target, l == r);
+                                }
                             }
-                        }
+                            StaticType::Float => {
+                                if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                                    cb.insert(*target, l == r);
+                                }
+                            }
+                            StaticType::String => {
+                                if let (Some(l), Some(r)) = (cs.get(left), cs.get(right)) {
+                                    cb.insert(*target, l == r);
+                                }
+                            }
+                            _ => {}
+                        },
                     Instruction::Not { target, source }
                         if single_def(&defs, *target) => {
-                            if let Some(&v) = cb.get(source) {
-                                cb.insert(*target, !v);
-                            }
+                        if let Some(&v) = cb.get(source) {
+                            cb.insert(*target, !v);
                         }
+                    }
                     Instruction::Mul { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
-                                ci.insert(*target, l.wrapping_mul(r));
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right)) {
+                            ci.insert(*target, l.wrapping_mul(r));
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = l * r;
+                            if v.is_finite() { cf.insert(*target, v); }
                         }
+                    }
                     Instruction::Neg { target, source }
                         if single_def(&defs, *target) => {
-                            if let Some(&v) = ci.get(source) {
-                                ci.insert(*target, v.wrapping_neg());
-                            }
+                        if let Some(&v) = ci.get(source) {
+                            ci.insert(*target, v.wrapping_neg());
+                        } else if let Some(&v) = cf.get(source) {
+                            let val = -v;
+                            if val.is_finite() { cf.insert(*target, val); }
                         }
+                    }
                     // Lua floor semantics, matching the runtime templates;
-                    // checked_div/rem: /0 and MIN/-1 stay unfolded
+                    // checked_div/rem: /0 and MIN/-1 stay unfolded.
+                    // FLOAT side evaluates the emitted template verbatim:
+                    // `x // y` is `(x / y).floor()`.
                     Instruction::IntDiv { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
-                                && let (Some(q), Some(m)) = (l.checked_div(r), l.checked_rem(r))
-                            {
-                                let v = if m != 0 && ((m < 0) != (r < 0)) { q - 1 } else { q };
-                                ci.insert(*target, v);
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
+                            && let (Some(q), Some(m)) = (l.checked_div(r), l.checked_rem(r))
+                        {
+                            let v = if m != 0 && ((m < 0) != (r < 0)) { q - 1 } else { q };
+                            ci.insert(*target, v);
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = (l / r).floor();
+                            if v.is_finite() { cf.insert(*target, v); }
                         }
+                    }
+                    // FLOAT Mod likewise: the template is
+                    // `l - (l / r).floor() * r`, evaluated as spelled.
                     Instruction::Mod { target, left, right }
                         if single_def(&defs, *target) => {
-                            if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
-                                && let Some(m) = l.checked_rem(r)
-                            {
-                                let v = if m != 0 && ((m < 0) != (r < 0)) { m + r } else { m };
-                                ci.insert(*target, v);
-                            }
+                        if let (Some(&l), Some(&r)) = (ci.get(left), ci.get(right))
+                            && let Some(m) = l.checked_rem(r)
+                        {
+                            let v = if m != 0 && ((m < 0) != (r < 0)) { m + r } else { m };
+                            ci.insert(*target, v);
+                        } else if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = l - (l / r).floor() * r;
+                            if v.is_finite() { cf.insert(*target, v); }
                         }
+                    }
+                    // Float division only — INT Div never folds (a `/0`
+                    // must keep its runtime panic). On the float side /0
+                    // yields inf/NaN: the is_finite guard declines, keeping
+                    // the panic-free IEEE result a RUNTIME property
+                    // (fconst_02's boundary pin).
+                    Instruction::Div { target, left, right }
+                        if single_def(&defs, *target) => {
+                        if let (Some(&l), Some(&r)) = (cf.get(left), cf.get(right)) {
+                            let v = l / r;
+                            if v.is_finite() { cf.insert(*target, v); }
+                        }
+                    }
+                    Instruction::Concat { target, left, right }
+                        if single_def(&defs, *target) => {
+                        if let (Some(l), Some(r)) = (cs.get(left), cs.get(right)) {
+                            let mut v = String::with_capacity(l.len() + r.len());
+                            v.push_str(l);
+                            v.push_str(r);
+                            cs.insert(*target, v);
+                        }
+                    }
                     Instruction::Move { target, source, ty }
                         if single_def(&defs, *target) => match ty {
                             StaticType::Integer =>
                                 { if let Some(&v) = ci.get(source) { ci.insert(*target, v); } }
                             StaticType::Boolean =>
                                 { if let Some(&v) = cb.get(source) { cb.insert(*target, v); } }
-                            StaticType::Float => {}
-                            // string constant folding is not
-                            // implemented either — float precedent
-                            StaticType::String => {}
+                            StaticType::Float =>
+                                { if let Some(&v) = cf.get(source) { cf.insert(*target, v); } }
+                            StaticType::String =>
+                                { if let Some(v) = cs.get(source) { cs.insert(*target, v.clone()); } }
                             StaticType::Table(_) | StaticType::UnknownTable(_) => {}
                         },
                     _ => {}
                 }
             }
         }
-        if ci.len() + cb.len() == before { break; }
+        if ci.len() + cb.len() + cf.len() + cs.len() == before { break; }
     }
 
     // REMINT — every folded id leaves the vreg namespace for the reserved
@@ -244,8 +341,14 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
     // results, making const ids and vreg/physical ids disjoint ranges by
     // construction. k-th SORTED folded id -> CONST_REG_BASE + k: HashMap
     // iteration is random per process, and mint assignment must be
-    // deterministic (the reg_alloc `r`-tiebreak precedent).
-    let mut folded: Vec<RegId> = ci.keys().copied().chain(cb.keys().copied()).collect();
+    // deterministic (the reg_alloc `r`-tiebreak precedent). The union spans
+    // ALL FOUR maps — one sorted layer-B timeline (constitution law 1: one
+    // layer, one owner — propagate_constants mints every const id).
+    let mut folded: Vec<RegId> = ci.keys().copied()
+        .chain(cb.keys().copied())
+        .chain(cf.keys().copied())
+        .chain(cs.keys().copied())
+        .collect();
     folded.sort_unstable();
     let mint: HashMap<RegId, RegId> = folded.iter().enumerate()
         .map(|(k, &old)| (old, CONST_REG_BASE + k as RegId))
@@ -262,7 +365,9 @@ pub fn propagate_constants(program: &mut IrProgram) -> (HashMap<RegId, i64>, Has
     }
     ci = ci.into_iter().map(|(k, v)| (mint[&k], v)).collect();
     cb = cb.into_iter().map(|(k, v)| (mint[&k], v)).collect();
-    (ci, cb)
+    cf = cf.into_iter().map(|(k, v)| (mint[&k], v)).collect();
+    cs = cs.into_iter().map(|(k, v)| (mint[&k], v)).collect();
+    (ci, cb, cf, cs)
 }
 
 /// Copy propagation + DCE. Deliberately conservative: a Move is erased

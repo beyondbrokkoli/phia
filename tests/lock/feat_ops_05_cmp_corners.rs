@@ -2,16 +2,13 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r71 = 0i64;
     let mut i_r72 = 0i64;
     let mut i_r73 = 0i64;
     let mut i_r74 = 0i64;
     let mut b_r71 = false;
-    let mut f_r88 = 0f64;
-    let mut f_r89 = 0f64;
-    let mut f_r90 = 0f64;
     let mut t_r71: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
@@ -51,33 +48,25 @@ pub fn run_baked() -> Vec<Box<Table>> {
     } else {
         i_r74 = i_r71;
     }
-    f_r88 = 9007199254740992.0;
-    b_r71 = f_r88 <= f_r88;
-    if b_r71 {
+    if true {
         i_r73 = i_r74 + 10000;
         i_r71 = i_r73;
     } else {
         i_r71 = i_r74;
     }
-    b_r71 = f_r88 >= f_r88;
-    if b_r71 {
+    if true {
         i_r73 = i_r71 + 100000;
         i_r74 = i_r73;
     } else {
         i_r74 = i_r71;
     }
-    f_r89 = 9007199254740990.0;
-    f_r90 = 9007199254740990.0;
-    b_r71 = f_r89 <= f_r90;
-    if b_r71 {
+    if true {
         i_r73 = i_r74 + 1000000;
         i_r71 = i_r73;
     } else {
         i_r71 = i_r74;
     }
-    f_r90 = 9007199254740990.0;
-    b_r71 = f_r90 < f_r88;
-    if b_r71 {
+    if true {
         i_r73 = i_r71 + 10000000;
         i_r74 = i_r73;
     } else {
@@ -101,4 +90,4 @@ pub fn run_baked() -> Vec<Box<Table>> {
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=1;dyn_gets=0;hoists=0;hoist_ctx=";
+pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=1;dyn_gets=0;hoists=0;hoist_ctx=;consts_i=18;consts_b=5;consts_f=4;consts_s=0";

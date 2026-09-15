@@ -2,38 +2,15 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut b_r30 = false;
-    let mut b_r31 = false;
-    let mut b_r32 = false;
-    let mut s_r30 = String::new();
-    let mut s_r31 = String::new();
-    let mut s_r32 = String::new();
-    let mut s_r33 = String::new();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    s_r30 = "pha".to_string();
-    s_r31 = "ia".to_string();
-    s_r32 = format!("{}{}", s_r30, s_r31);
-    println!("{}\t{}\t{}\t{}", "concat", s_r30, s_r31, s_r32);
-    s_r32 = "-".to_string();
-    s_r33 = format!("{}{}", s_r30, s_r32);
-    s_r32 = format!("{}{}", s_r33, s_r31);
-    println!("{}\t{}", "chain", s_r32);
-    s_r32 = "pha".to_string();
-    b_r30 = s_r30 == s_r32;
-    b_r31 = s_r30 == s_r31;
-    b_r32 = !b_r31;
-    println!("{}\t{}\t{}", "eq", b_r30, b_r32);
-    s_r32 = "x".to_string();
-    s_r33 = format!("{}{}", s_r30, s_r32);
-    s_r32 = "phax".to_string();
-    b_r32 = s_r33 == s_r32;
-    b_r31 = s_r30 == s_r31;
-    b_r30 = !b_r31;
-    println!("{}\t{}\t{}", "prec", b_r32, b_r30);
+    println!("{}\t{}\t{}\t{}", "concat", "pha", "ia", "phaia");
+    println!("{}\t{}", "chain", "pha-ia");
+    println!("{}\t{}\t{}", "eq", true, true);
+    println!("{}\t{}\t{}", "prec", true, true);
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=0;hoists=0;hoist_ctx=";
+pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=0;hoists=0;hoist_ctx=;consts_i=0;consts_b=6;consts_f=0;consts_s=10";

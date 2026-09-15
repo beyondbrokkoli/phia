@@ -2,7 +2,7 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r324 = 0i64;
     let mut i_r325 = 0i64;
@@ -820,4 +820,4 @@ pub fn run_baked() -> Vec<Box<Table>> {
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=17;fast_gets=3;dyn_sets=9;dyn_gets=5;hoists=16;hoist_ctx=0,1,0,0,0,0,1,0,0,0,0,0,0,0,2,0";
+pub const STATS: &str = "fast_sets=17;fast_gets=3;dyn_sets=9;dyn_gets=5;hoists=16;hoist_ctx=0,1,0,0,0,0,1,0,0,0,0,0,0,0,2,0;consts_i=96;consts_b=1;consts_f=0;consts_s=0";

@@ -2,15 +2,13 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut i_r18 = 0i64;
     let mut i_r19 = 0i64;
-    let mut f_r20 = 0f64;
     let mut t_r18: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    f_r20 = 2.5;
     let mut new_table = Box::new(Table::new());
     t_r18 = &mut *new_table as *mut Table;
     tables.push(new_table);
@@ -30,7 +28,7 @@ pub fn run_baked() -> Vec<Box<Table>> {
         "{}\t{}\t{:?}\t{}\ttable(len={})",
         "scalars",
         5,
-        f_r20,
+        2.5,
         true,
         unsafe { (*t_r18).array.len() }
     );
@@ -72,4 +70,4 @@ pub fn run_baked() -> Vec<Box<Table>> {
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=2;dyn_gets=2;hoists=0;hoist_ctx=";
+pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=2;dyn_gets=2;hoists=0;hoist_ctx=;consts_i=8;consts_b=1;consts_f=1;consts_s=0";

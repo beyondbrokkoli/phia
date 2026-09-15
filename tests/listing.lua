@@ -123,6 +123,10 @@ return {
         "feat_local_multi.lua",
         "dce_01_dead_scalars.lua",
         "fwhile_01_float_ident_bound.lua",
+        "fconst_01_literal_fold.lua",
+        "fconst_02_nonfinite_boundary.lua",
+        "fconst_03_chain_table_checksum.lua",
+        "sconst_01_concat_fold.lua",
     },
     negative = {
         "bug_10a.lua",

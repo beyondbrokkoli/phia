@@ -2,18 +2,14 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
-    let mut f_r4 = 0f64;
-    let mut s_r3 = String::new();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
-    f_r4 = 2.5;
-    s_r3 = "val=C:\\tmp\\x".to_string();
     println!("{}\t{}", "a{b}c\\d", 1);
-    println!("{}\t{:?}", "C:\\path", f_r4);
-    println!("{}\t{}", s_r3, 7);
+    println!("{}\t{:?}", "C:\\path", 2.5);
+    println!("{}\t{}", "val=C:\\tmp\\x", 7);
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=0;hoists=0;hoist_ctx=";
+pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=0;dyn_gets=0;hoists=0;hoist_ctx=;consts_i=2;consts_b=0;consts_f=1;consts_s=1";

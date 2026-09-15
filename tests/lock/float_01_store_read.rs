@@ -2,34 +2,33 @@
 
 use crate::memory::Table;
 
-#[allow(unused_variables, unused_mut, unused_assignments)]
+#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]
 pub fn run_baked() -> Vec<Box<Table>> {
     let mut f_r4 = 0f64;
-    let mut t_r6: *mut Table = std::ptr::null_mut();
+    let mut t_r5: *mut Table = std::ptr::null_mut();
     let mut tables = Vec::<Box<Table>>::with_capacity(128);
 
     let mut new_table = Box::new(Table::new_float());
-    t_r6 = &mut *new_table as *mut Table;
+    t_r5 = &mut *new_table as *mut Table;
     tables.push(new_table);
-    f_r4 = 1.5;
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &mut *t_r6 };
+    let t = unsafe { &mut *t_r5 };
     if idx >= t.farray.len() {
         t.farray.resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r4;
+        *t.farray.get_unchecked_mut(idx) = 1.5;
     }
     let k = 0;
     if k < 0 {
         panic!("Runtime Error: Negative table index");
     }
     let idx = k as usize;
-    let t = unsafe { &*t_r6 };
+    let t = unsafe { &*t_r5 };
     f_r4 = if idx < t.farray.len() {
         unsafe { *t.farray.get_unchecked(idx) }
     } else {
@@ -38,4 +37,4 @@ pub fn run_baked() -> Vec<Box<Table>> {
     return tables;
 }
 
-pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=1;dyn_gets=1;hoists=0;hoist_ctx=";
+pub const STATS: &str = "fast_sets=0;fast_gets=0;dyn_sets=1;dyn_gets=1;hoists=0;hoist_ctx=;consts_i=2;consts_b=0;consts_f=1;consts_s=0";

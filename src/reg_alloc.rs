@@ -97,14 +97,25 @@ pub struct AllocInfo {
     pub tstr_base: RegId, pub btable_base: RegId
 }
 
-pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64>, consts_b: &HashMap<RegId, bool>) -> AllocInfo {
+pub fn allocate_registers(
+    program: &mut IrProgram,
+    consts_i: &HashMap<RegId, i64>,
+    consts_b: &HashMap<RegId, bool>,
+    consts_f: &HashMap<RegId, f64>,
+    consts_s: &HashMap<RegId, String>,
+) -> AllocInfo {
     let blocks = &program.blocks;
 
     // Const vregs never get a physical slot: all their uses render as
     // literals. Excluded so a vreg id can never be confused with a
-    // physical id at codegen time.
+    // physical id at codegen time. All FOUR scalar kinds — the skip set
+    // is exactly layer-B membership (constitution law 2); the base scan
+    // below is already layer-guarded, so nothing else changes.
     let skip: HashSet<RegId> = consts_i.keys().copied()
-        .chain(consts_b.keys().copied()).collect();
+        .chain(consts_b.keys().copied())
+        .chain(consts_f.keys().copied())
+        .chain(consts_s.keys().copied())
+        .collect();
 
     // 1. types
     // The arithmetic ops are untyped in the IR: their targets inherit
@@ -128,6 +139,20 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
     }
     loop {
         let mut changed = false;
+        // An arith operand that const-folded carries its pool in the
+        // CONST MAP, not in ty (skip excludes it). A folded operand is
+        // invisible to the fixpoint below — and an arith target whose
+        // operands are ALL const while its own result stayed runtime
+        // (the is_finite guard declining inf/NaN, or a multi-def slot)
+        // would otherwise mint NO physical at all and render as an
+        // undeclared register (feat_ops_10: `inf = a / b` after consts_f).
+        // Const bools/strings can never be arith operands (the checker
+        // rejects them), so ci/cf membership is a complete answer.
+        let const_pool = |r: RegId| {
+            if consts_f.contains_key(&r) { Some(Pool::Float) }
+            else if consts_i.contains_key(&r) { Some(Pool::Int) }
+            else { None }
+        };
         for b in blocks {
             for i in &b.instrs {
                 let (target, src_pools) = match i {
@@ -137,9 +162,12 @@ pub fn allocate_registers(program: &mut IrProgram, consts_i: &HashMap<RegId, i64
                     | Instruction::Div { target, left, right, .. }
                     | Instruction::IntDiv { target, left, right, .. }
                     | Instruction::Mod { target, left, right, .. } =>
-                        (*target, [ty.get(left).copied(), ty.get(right).copied()]),
+                        (*target, [
+                            ty.get(left).copied().or_else(|| const_pool(*left)),
+                            ty.get(right).copied().or_else(|| const_pool(*right)),
+                        ]),
                     Instruction::Neg { target, source, .. } =>
-                        (*target, [ty.get(source).copied(), None]),
+                        (*target, [ty.get(source).copied().or_else(|| const_pool(*source)), None]),
                     _ => continue,
                 };
                 if skip.contains(&target) || ty.contains_key(&target) { continue; }

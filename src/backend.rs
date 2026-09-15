@@ -89,30 +89,41 @@ macro_rules! bop_str {
         Formatter($consts, $r)
     }};
 }
-// Floats are never compile-time folded (no consts_f), so a float
-// operand is always a physical register.
+// Floats fold under consts_f: a float operand renders as its `{:?}`
+// literal (finite only — the fold guard declines inf/NaN, which do not
+// spell valid Rust literals) or its physical register.
 macro_rules! fop_str {
-    ($r:expr) => {{
-        struct Formatter(RegId);
-        impl std::fmt::Display for Formatter {
+    ($r:expr, $consts:expr) => {{
+        struct Formatter<'a>(&'a HashMap<RegId, f64>, RegId);
+        impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "f_r{}", self.0)
+                match self.0.get(&self.1) {
+                    Some(v) => write!(f, "{:?}", v),
+                    None => write!(f, "f_r{}", self.1),
+                }
             }
         }
-        Formatter($r)
+        Formatter($consts, $r)
     }};
 }
-// Strings likewise: no const folding (float precedent), so a string
-// operand is always a physical register.
+// Strings likewise (consts_s): a string operand renders as its
+// Debug-escaped literal (the LoadString invariant: raw user text always
+// renders a valid Rust literal) or its physical register. Sites that need
+// an OWNED value must special-case the const arm — `.clone()` on a
+// literal resolves to &str's Clone and yields the wrong type; those sites
+// render `"...".to_string()` instead (LoadFloat/LoadString precedent).
 macro_rules! sop_str {
-    ($r:expr) => {{
-        struct Formatter(RegId);
-        impl std::fmt::Display for Formatter {
+    ($r:expr, $consts:expr) => {{
+        struct Formatter<'a>(&'a HashMap<RegId, String>, RegId);
+        impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "s_r{}", self.0)
+                match self.0.get(&self.1) {
+                    Some(v) => write!(f, "{:?}", v),
+                    None => write!(f, "s_r{}", self.1),
+                }
             }
         }
-        Formatter($r)
+        Formatter($consts, $r)
     }};
 }
 
@@ -125,9 +136,12 @@ pub fn pool_prefixed(
     t: &StaticType,
     consts_i: &HashMap<RegId, i64>,
     consts_b: &HashMap<RegId, bool>,
+    consts_f: &HashMap<RegId, f64>,
+    consts_s: &HashMap<RegId, String>,
     alloc: &AllocInfo,
 ) -> String {
-    if consts_i.contains_key(&r) || consts_b.contains_key(&r) {
+    if consts_i.contains_key(&r) || consts_b.contains_key(&r)
+        || consts_f.contains_key(&r) || consts_s.contains_key(&r) {
         return format!("c{}", r - crate::ir::CONST_REG_BASE);
     }
     if is_float_reg(r, alloc) {
@@ -214,10 +228,10 @@ fn emit_table_decl(out: &mut String, alloc: &AllocInfo, r: RegId, uses_handles: 
     }
 }
 
-// The read-only emission environment: program, allocation, both const
-// maps, and the handle-mode flag. A tuple alias, not a state struct —
-// it is assembled once in generate_rust_code, passed by value (all
-// fields Copy) through the recursive emit_* chain, and each frame
+// The read-only emission environment: program, allocation, the four
+// const maps, and the handle-mode flag. A tuple alias, not a state
+// struct — it is assembled once in generate_rust_code, passed by value
+// (all fields Copy) through the recursive emit_* chain, and each frame
 // destructures only the projections it reads itself, handing the whole
 // tuple down unchanged.
 type EmitEnv<'a> = (
@@ -225,6 +239,8 @@ type EmitEnv<'a> = (
     &'a AllocInfo,
     &'a HashMap<RegId, i64>,
     &'a HashMap<RegId, bool>,
+    &'a HashMap<RegId, f64>,
+    &'a HashMap<RegId, String>,
     bool,
 );
 
@@ -233,10 +249,11 @@ fn emit_instr(
     env: EmitEnv,
     instr: &Instruction,
 ) {
-    let (_, alloc, consts_i, consts_b, uses_handles) = env;
+    let (_, alloc, consts_i, consts_b, consts_f, consts_s, uses_handles) = env;
     // compile-time-computed defs emit nothing: their uses are literals
     if let Some(t) = instr.def_reg()
-        && (consts_i.contains_key(&t) || consts_b.contains_key(&t))
+        && (consts_i.contains_key(&t) || consts_b.contains_key(&t)
+            || consts_f.contains_key(&t) || consts_s.contains_key(&t))
     {
         return;
     }
@@ -259,7 +276,7 @@ fn emit_instr(
         Instruction::Concat { target, left, right } =>
             out.push_str(&format!(
                 "s_r{target} = format!(\"{{}}{{}}\", {}, {});\n",
-                sop_str!(*left), sop_str!(*right)
+                sop_str!(*left, consts_s), sop_str!(*right, consts_s)
             )),
         Instruction::NewTable { target, ty } => {
             // A table is monomorphic: its static element type picks the
@@ -319,36 +336,45 @@ fn emit_instr(
         Instruction::Move { target, source, ty } => match ty {
             StaticType::Integer => out.push_str(&format!("i_r{target} = {};\n", iop_str!(*source, consts_i))),
             StaticType::Boolean => out.push_str(&format!("b_r{target} = {};\n", bop_str!(*source, consts_b))),
-            StaticType::Float => out.push_str(&format!("f_r{target} = {};\n", fop_str!(*source))),
+            StaticType::Float => out.push_str(&format!("f_r{target} = {};\n", fop_str!(*source, consts_f))),
             // strings are owned: a Move clones (SSA semantics — the
-            // source slot may still be read on another path)
-            StaticType::String => out.push_str(&format!("s_r{target} = {}.clone();\n", sop_str!(*source))),
+            // source slot may still be read on another path). A CONST
+            // source cannot ride `.clone()` — that resolves to &str's
+            // Clone and yields the wrong type — so it materializes with
+            // .to_string(), the LoadString emission shape.
+            StaticType::String => {
+                if let Some(v) = consts_s.get(source) {
+                    out.push_str(&format!("s_r{target} = {v:?}.to_string();\n"));
+                } else {
+                    out.push_str(&format!("s_r{target} = {}.clone();\n", sop_str!(*source, consts_s)));
+                }
+            }
             StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("t_r{target} = t_r{source};\n")),
         },
         Instruction::Add { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} + {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} + {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("i_r{target} = {} + {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Sub { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} - {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} - {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("i_r{target} = {} - {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Mul { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} * {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} * {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("i_r{target} = {} * {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Div { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} / {};\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = {} / {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("i_r{target} = {} / {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
@@ -365,7 +391,7 @@ fn emit_instr(
         // inside the leading L / R.
         Instruction::IntDiv { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = ({} / {}).floor();\n", fop_str!(*left), fop_str!(*right)))
+                out.push_str(&format!("f_r{target} = ({} / {}).floor();\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
@@ -380,7 +406,7 @@ fn emit_instr(
         Instruction::Mod { target, left, right } => {
             if is_float_reg(*target, alloc) {
                 out.push_str(&format!("f_r{target} = {} - ({} / {}).floor() * {};\n",
-                    fop_str!(*left), fop_str!(*left), fop_str!(*right), fop_str!(*right)))
+                    fop_str!(*left, consts_f), fop_str!(*left, consts_f), fop_str!(*right, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",
@@ -392,28 +418,32 @@ fn emit_instr(
         }
         Instruction::Neg { target, source } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = -{};\n", fop_str!(*source)))
+                out.push_str(&format!("f_r{target} = -{};\n", fop_str!(*source, consts_f)))
             } else {
                 out.push_str(&format!("i_r{target} = -{};\n", iop_str!(*source, consts_i)))
             }
         }
         Instruction::Less { target, left, right } => {
-            if is_float_reg(*left, alloc) {
-                out.push_str(&format!("b_r{target} = {} < {};\n", fop_str!(*left), fop_str!(*right)))
+            // operand-based float fork: a CONST-float left (layer-B id) is
+            // not in the float pool's mint range, so the map check rides
+            // shotgun — without it a multi-def Less over folded floats
+            // renders i_r<const-id>, an undeclared register
+            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
+                out.push_str(&format!("b_r{target} = {} < {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("b_r{target} = {} < {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Leq { target, left, right } => {
-            if is_float_reg(*left, alloc) {
-                out.push_str(&format!("b_r{target} = {} <= {};\n", fop_str!(*left), fop_str!(*right)))
+            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
+                out.push_str(&format!("b_r{target} = {} <= {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("b_r{target} = {} <= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
         }
         Instruction::Geq { target, left, right } => {
-            if is_float_reg(*left, alloc) {
-                out.push_str(&format!("b_r{target} = {} >= {};\n", fop_str!(*left), fop_str!(*right)))
+            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
+                out.push_str(&format!("b_r{target} = {} >= {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
             } else {
                 out.push_str(&format!("b_r{target} = {} >= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
             }
@@ -426,9 +456,9 @@ fn emit_instr(
         // variable entirely).
         Instruction::Eq { target, left, right, ty } => match ty {
             StaticType::Float =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left), fop_str!(*right))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f))),
             StaticType::String =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", sop_str!(*left), sop_str!(*right))),
+                out.push_str(&format!("b_r{target} = {} == {};\n", sop_str!(*left, consts_s), sop_str!(*right, consts_s))),
             StaticType::Boolean =>
                 out.push_str(&format!("b_r{target} = {} == {};\n", bop_str!(*left, consts_b), bop_str!(*right, consts_b))),
             _ =>
@@ -473,7 +503,7 @@ fn emit_instr(
                     }
                     StaticType::Float => {
                         fields.push("{:?}".to_string());
-                        args.push(fop_str!(r).to_string());
+                        args.push(fop_str!(r, consts_f).to_string());
                     }
                     StaticType::Boolean => {
                         fields.push("{}".to_string());
@@ -481,7 +511,7 @@ fn emit_instr(
                     }
                     StaticType::String => {
                         fields.push("{}".to_string());
-                        args.push(sop_str!(r).to_string());
+                        args.push(sop_str!(r, consts_s).to_string());
                     }
                     StaticType::Table(_) | StaticType::UnknownTable(_) => {
                         let fld = if is_ftable_reg(r, alloc) { "farray" }
@@ -590,13 +620,20 @@ fn emit_instr(
                 let (fld, zero, val_str) = if is_tbl(ty) {
                     ("array", "0", format!("t_r{val}"))
                 } else if matches!(ty, StaticType::Float) {
-                    ("farray", "0.0", format!("f_r{val}"))
+                    ("farray", "0.0", fop_str!(*val, consts_f).to_string())
                 } else if matches!(ty, StaticType::String) {
                     // clone: a store COPIES the immutable value in
                     // (a move would kill the source slot — the borrow
                     // checker rejects it at build time, and the source
-                    // is exactly what a loop-carried string is)
-                    ("sarray", "String::new()", format!("s_r{val}.clone()"))
+                    // is exactly what a loop-carried string is). A CONST
+                    // val materializes with .to_string() — `.clone()` on
+                    // a literal resolves to &str's Clone (the Move-arm
+                    // hazard, same fix).
+                    ("sarray", "String::new()",
+                        match consts_s.get(val) {
+                            Some(v) => format!("{v:?}.to_string()"),
+                            None => format!("{}.clone()", sop_str!(*val, consts_s)),
+                        })
                 } else if matches!(ty, StaticType::Boolean) {
                     ("barray", "false", bop_str!(*val, consts_b).to_string())
                 } else {
@@ -614,9 +651,13 @@ fn emit_instr(
                 ));
             } else {
                 let (fld, zero, val_str) = if matches!(ty, StaticType::Float) {
-                    ("farray", "0.0", fop_str!(*val).to_string())
+                    ("farray", "0.0", fop_str!(*val, consts_f).to_string())
                 } else if matches!(ty, StaticType::String) {
-                    ("sarray", "String::new()", format!("{}.clone()", sop_str!(*val)))
+                    ("sarray", "String::new()",
+                        match consts_s.get(val) {
+                            Some(v) => format!("{v:?}.to_string()"),
+                            None => format!("{}.clone()", sop_str!(*val, consts_s)),
+                        })
                 } else if matches!(ty, StaticType::Boolean) {
                     ("barray", "false", bop_str!(*val, consts_b).to_string())
                 } else {
@@ -711,10 +752,15 @@ fn emit_instr(
             let val_str = if uses_handles && is_tbl(ty) {
                 format!("t_r{val}")
             } else if matches!(ty, StaticType::Float) {
-                fop_str!(*val).to_string()
+                fop_str!(*val, consts_f).to_string()
             } else if matches!(ty, StaticType::String) {
-                // clone — same immutable-copy semantics as the dyn store
-                format!("{}.clone()", sop_str!(*val))
+                // clone — same immutable-copy semantics as the dyn store;
+                // const vals materialize via .to_string() (same &str-Clone
+                // hazard, same fix)
+                match consts_s.get(val) {
+                    Some(v) => format!("{v:?}.to_string()"),
+                    None => format!("{}.clone()", sop_str!(*val, consts_s)),
+                }
             } else if matches!(ty, StaticType::Boolean) {
                 bop_str!(*val, consts_b).to_string()
             } else {
@@ -814,7 +860,7 @@ fn emit_seq(
     stop: Option<BlockId>,
     emitted: &mut [bool],
 ) {
-    let (program, _alloc, _consts_i, consts_b, _uses_handles) = env;
+    let (program, _alloc, _consts_i, consts_b, _consts_f, _consts_s, _uses_handles) = env;
     if Some(b) == stop { return; }
     if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
     emitted[b] = true;
@@ -890,7 +936,7 @@ fn emit_loop(
     body: BlockId,
     emitted: &mut [bool],
 ) {
-    let (program, alloc, consts_i, consts_b, _uses_handles) = env;
+    let (program, alloc, consts_i, consts_b, consts_f, _consts_s, _uses_handles) = env;
     if !is_loop_header(program, h) {
         panic!("structured codegen: Branch in block {h} is not a loop header");
     }
@@ -908,17 +954,20 @@ fn emit_loop(
     // them as `i_r<id>` — undeclared registers, a program that does not
     // compile (fwhile_01's shape: identifier-bound float bounds put the
     // bare Less alone in the header; literal bounds escape by loading in
-    // the header, which makes len()==2 decline here). The fallback emits
-    // the Less through emit_instr, whose float arm is correct — exactly
-    // what it exists for. Only Less needs the guard: Leq/Geq never ride
-    // the pretty arm, and bool/string cannot be `<` operands.
+    // the header, which makes len()==2 decline here). Both the physical
+    // float pool AND the const-float map are checked — a folded float
+    // operand's layer-B id is outside every mint range. The fallback
+    // emits the Less through emit_instr, whose float arm is correct —
+    // exactly what it exists for. Only Less needs the guard: Leq/Geq
+    // never ride the pretty arm, and bool/string cannot be `<` operands.
     let pretty = if block.instrs.is_empty() {
         Some(bop_str!(cond, consts_b).to_string())
     } else if block.instrs.len() == 1 {
         match &block.instrs[0] {
             Instruction::Less { target, left, right }
                 if *target == cond && reg_uses(program, cond) == 1
-                    && !is_float_reg(*left, alloc) =>
+                    && !is_float_reg(*left, alloc)
+                    && !consts_f.contains_key(left) =>
                 Some(format!("{} < {}", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
             _ => None,
         }
@@ -930,7 +979,8 @@ fn emit_loop(
         out.push_str("}\n");
     } else {
         // General fallback: everything in the header runs every
-        // iteration. Never fires on the current corpus — it exists so a
+        // iteration. Float loop conditions land here since the
+        // pretty-arm decline (fwhile_01 pins the shape) — it exists so a
         // surprising CFG degrades to correct-but-ugly, not wrong.
         out.push_str("loop {\n");
         for i in &block.instrs { emit_instr(out, env, i); }
@@ -947,6 +997,8 @@ pub fn generate_rust_code(
     alloc: &AllocInfo,
     consts_i: &HashMap<RegId, i64>,
     consts_b: &HashMap<RegId, bool>,
+    consts_f: &HashMap<RegId, f64>,
+    consts_s: &HashMap<RegId, String>,
 ) -> String {
     // AllocInfo is a named tuple of pool counts + base ids — pull out
     // every value once up front; emission below only reads these.
@@ -964,7 +1016,12 @@ pub fn generate_rust_code(
     let mut out = String::new();
     out.push_str("// target/release/build/phia-*/out/baked_native.rs\n\n");
     out.push_str("use crate::memory::Table;\n\n");
-    out.push_str("#[allow(unused_variables, unused_mut, unused_assignments)]\n");
+    // clippy::eq_op rides the fn-level allow: consts fold can leave a
+    // live Less/Div whose OPERANDS both folded to the same literal
+    // (`b_r326 = 0 < 0;`) — deny-by-default on generated code otherwise
+    // fails `cargo clippy` on artifacts the compiler emitted on purpose
+    // (the deliberate relock choice (b); target/ filtering was (a)).
+    out.push_str("#[allow(unused_variables, unused_mut, unused_assignments, clippy::eq_op)]\n");
     out.push_str("pub fn run_baked() -> Vec<Box<Table>> {\n");
 
     let mut fast_phys: HashSet<RegId> = HashSet::new();
@@ -991,7 +1048,7 @@ pub fn generate_rust_code(
     for r in tbbase..tbbase + n_tb { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
-    let env: EmitEnv = (program, alloc, consts_i, consts_b, uses_handles);
+    let env: EmitEnv = (program, alloc, consts_i, consts_b, consts_f, consts_s, uses_handles);
     let mut emitted = vec![false; program.blocks.len()];
     emit_seq(&mut out, env, 0, None, None, &mut emitted);
     let orphans: Vec<usize> = emitted.iter().enumerate()
