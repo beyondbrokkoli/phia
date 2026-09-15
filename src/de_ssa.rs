@@ -128,11 +128,14 @@ pub fn resolve_phis(program: &mut IrProgram) {
 /// Rust f64 ops in the same left-associated tree the emitted templates
 /// spell (IntDiv = `(l / r).floor()`, Mod = `l - (l / r).floor() * r`),
 /// so a folded value is bit-identical to what the runtime would compute.
-/// The `is_finite` guard is load-bearing, not paranoia: `{:?}` renders
-/// non-finite f64s as `inf`/`NaN`, which are not valid Rust literals —
-/// the lexer's `d.d` shape keeps literals finite in practice, but
-/// extreme-magnitude decimals parse to inf, and folding itself is the
-/// main producer (`1.0/0.0`, `0.0/0.0` must stay runtime).
+/// The `is_finite` guard is load-bearing, not paranoia — it keeps
+/// non-finite floats RUNTIME entities. Folding is one producer
+/// (`1.0/0.0`, `0.0/0.0` must stay runtime); overflowing literals are
+/// the other (an extreme `d.d` decimal parses to inf — declined here,
+/// the LoadFloat instead emits `f64::INFINITY`, the Lua-faithful
+/// rendering pinned by floatinf_01). With the guard, cf is
+/// finite-only by construction, which is exactly what use-site const
+/// rendering relies on to spell valid Rust literals.
 ///
 /// STRING folding is the allocation payoff: `"a" .. "b"` becomes a
 /// compile-time literal — no format!, no clone chain, no decl. Values

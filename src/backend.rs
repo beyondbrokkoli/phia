@@ -296,6 +296,28 @@ fn floor_div_str(
     }
 }
 
+// Lua-faithful float literal rendering: Rust's `{:?}` spells
+// non-finite f64s `inf`/`-inf`/`NaN`, none of which is a Rust
+// expression, so they render as the named constants instead — the
+// Lua rule (strtod semantics) is that an overflowing numeral IS its
+// infinite value. The lexer's `d.d` shape can only overflow to +inf
+// (negation is a separate Neg op, NaN has no literal spelling), but
+// the renderer is total over all four cases for the day the lexer
+// grows exponents.
+fn render_f64(val: f64) -> String {
+    if val.is_nan() {
+        "f64::NAN".to_string()
+    } else if val.is_infinite() {
+        if val.is_sign_negative() {
+            "f64::NEG_INFINITY".to_string()
+        } else {
+            "f64::INFINITY".to_string()
+        }
+    } else {
+        format!("{val:?}")
+    }
+}
+
 fn emit_instr(
     out: &mut String,
     env: EmitEnv,
@@ -319,7 +341,11 @@ fn emit_instr(
         Instruction::LoadInt { target, val } =>
             out.push_str(&format!("i_r{target} = {val};\n")),
         Instruction::LoadFloat { target, val } =>
-            out.push_str(&format!("f_r{target} = {val:?};\n")),
+            // non-finite literals reach here (extreme decimals the
+            // lexer parses to inf; the fold declines them — cf is
+            // finite-only), so the rendering must be the named
+            // constants, never `{:?}`'s bare `inf`
+            out.push_str(&format!("f_r{target} = {};\n", render_f64(*val))),
         Instruction::LoadBool { target, val } =>
             out.push_str(&format!("b_r{target} = {val};\n")),
         Instruction::LoadString { target, val } =>
