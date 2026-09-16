@@ -120,9 +120,8 @@ pub fn resolve_phis(program: &mut IrProgram) {
 
 /// Constant propagation over the four scalar kinds (int, bool, float,
 /// string), returning (ci, cb, cf, cs) — the consts maps keyed by the
-/// REMINTED layer-B ids (see the id-space constitution in ir.rs; law 2:
-/// membership by range, value by map, kind by static type, rendering by
-/// layer).
+/// REMINTED layer-B ids (see the id-space spec in ir.rs; Invariant 2:
+/// folded ids are reminted above CONST_REG_BASE and never reused).
 ///
 /// FLOAT folding is exact by construction: the evaluator applies plain
 /// Rust f64 ops in the same left-associated tree the emitted templates
@@ -344,8 +343,8 @@ pub fn propagate_constants(
     // construction. k-th SORTED folded id -> CONST_REG_BASE + k: HashMap
     // iteration is random per process, and mint assignment must be
     // deterministic (the reg_alloc `r`-tiebreak precedent). The union spans
-    // ALL FOUR maps — one sorted layer-B timeline (constitution law 1: one
-    // layer, one owner — propagate_constants mints every const id).
+    // ALL FOUR maps — one sorted layer-B timeline (Invariant 2, ir.rs:
+    // propagate_constants is the sole minter of layer-B ids).
     let mut folded: Vec<RegId> = ci.keys().copied()
         .chain(cb.keys().copied())
         .chain(cf.keys().copied())

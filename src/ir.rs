@@ -5,80 +5,116 @@ use crate::ast::StaticType;
 
 pub type BlockId = usize;
 
-/// THE ID-SPACE CONSTITUTION.
+/// ARCHITECTURAL SPEC — THE RegId ID-SPACE.
 ///
-/// RegId is a layered namespace. Every layer has exactly one owner phase,
-/// and ownership follows pipeline order — and layers NEVER COEXIST
-/// QUERYABLE: layer B is range-disjoint from everything by its
-/// reserved-high base, and layer C replaces layer A wholesale (the
-/// rewrite erases A's ids in the same pass that mints C's), so no two
-/// live layers ever share a range:
+/// RegId is a layered namespace. Every layer has exactly one owner
+/// phase, ownership follows pipeline order, and no two layers are ever
+/// simultaneously queryable: layer B is range-disjoint from everything
+/// by its reserved-high base, and layer C replaces layer A wholesale —
+/// the rewrite erases A's ids in the same pass that mints C's — so no
+/// two live layers ever share a range.
 ///
 /// ```text
-/// layer A   vregs      [0, V)                owner: lowerer (+ optimizer's
-///                                              next_vreg mints into it);
-///                                              dies at allocate_registers
-/// layer B   consts     [CONST_REG_BASE, …)   owner: propagate_constants
-///                                              (the remint; reserved high
-///                                              range, disjoint from every
-///                                              other layer numerically)
-/// layer C   physicals  [0, P)                owner: allocate_registers
-///                   minted from ZERO — the pass rewrites the layer-A
-///                   ids out of the IR as it mints, so A and C never
-///                   coexist and the numeric overlap of [0,V) and
-///                   [0,P) is unobservable (the old base = max-vreg+1
-///                   layout carried the scars of the vreg namespace
-///                   into every program's physical numbering)
-///                   sub-layered in mint order — int, bool, table,
-///                   string, float, ftable, tstr, btable — EIGHT
-///                   consecutive per-pool ranges on ONE global
-///                   timeline: every physical id belongs to exactly
-///                   one pool, and no two physical registers ever
-///                   share a number (i_r12/b_r12 co-numbering is
-///                   gone; pool membership is a pure range check)
+/// layer A   vregs      [0, V)               owner: lowerer (the
+///                                             optimizer's next_vreg
+///                                             mints into it); destroyed
+///                                             by allocate_registers
+/// layer B   consts     [CONST_REG_BASE, …)  owner: propagate_constants
+///                                             (the remint; reserved
+///                                             high range, numerically
+///                                             disjoint from A and C)
+/// layer C   physicals  [0, P)               owner: allocate_registers;
+///                                             minted from ZERO (not
+///                                             max-vreg+1 — physical
+///                                             numbering inherits no
+///                                             offset from the vreg
+///                                             namespace) in EIGHT
+///                                             consecutive per-pool
+///                                             ranges on ONE global
+///                                             timeline: int, bool,
+///                                             table, string, float,
+///                                             ftable, tstr, btable
 /// ```
+/// The numeric overlap of [0,V) and [0,P) is unobservable: A and C
+/// never coexist (Invariant 1).
 ///
-/// The three laws:
+/// THE FOUR INVARIANTS.
 ///
-/// 1. **One layer, one owner, pipeline order — and overlapping layers
-///    never coexist.** Ownership follows the pipeline; disjointness is
-///    a VISIBILITY property, not just base arithmetic: layer B is
-///    range-disjoint from everything (reserved high), and layer C
-///    rewrites the layer-A namespace out of the IR as it mints. The
-///    spelled-out-in-code instances: reg_alloc's skip set (consts
-///    never enter a pool); its TOTAL rewrite (the remap closure itself
-///    panics on any non-const id that never entered a pool — there is
-///    no identity fallback to drift out of coverage); and its
-///    post-alloc id-space audit (remint purity, membership, pool
-///    purity, bool conds, no dangling uses — the laws re-verified over
-///    the FINAL program, one scan, on every compile the pipeline ever
-///    runs). Any future consumer of raw ids over the whole IR
-///    must make the same exclusions, or cite this law instead of
-///    remembering the war story.
-/// 2. **Membership by range, value by map, kind by range (physicals) or
-///    static type (vregs), rendering by layer.** Four orthogonal
-///    questions, four mechanisms, never mixed: `is_const_reg` answers
-///    membership; the consts maps answer value; an id's POOL RANGE
-///    answers its kind once layer C has minted it (pre-alloc, vregs
-///    have no ranges — there the operand's `StaticType` is the only
-///    kind source, which is why Eq and DebugProbe carry types at all);
-///    `c{n}` / literal vs `i_r{n}` follows the layer.
-/// 3. **Ids never migrate.** A folded vreg is REMINTED into layer B, never
-///    reused; layer C ids are never queried against const maps except as
-///    tautologically-false range checks.
+/// 1. TOTAL REWRITE — NO IDENTITY FALLBACK. Layer C replaces layer A
+///    wholesale. The remap closure in `allocate_registers` rewrites
+///    every def, use, and branch condition through the vreg→physical
+///    map and panics on any non-const id the map lacks; the identity
+///    fallback `_ => r` was removed by design. An unmapped vreg would
+///    keep its low id, numerically collide with a minted physical, and
+///    silently access a declared local of the wrong pool. Coverage is
+///    exactly `remap_instr` + branch conds — the positions actually
+///    rewritten — so a future instruction kind cannot slip a position
+///    past a `use_regs`/`def_reg` match that has drifted out of sync.
 ///
-/// A future id consumer asks "which layers does my scan see, and do any
-/// two of them coexist?" — consts_f and consts_s minted from the same
-/// layer B under the same law, and the zero-base mint touched no base
-/// math outside allocate_registers itself.
+/// 2. CONSTANT REMINTING — LAYER-B ISOLATION. Ids never migrate: a
+///    folded vreg is reminted above `CONST_REG_BASE`, never reused, and
+///    all four const maps are keyed by the reminted ids, so a const-map
+///    key can never name a vreg or a physical (Boundary Defense B1).
+///    Layer B is disjoint by construction, not by defense. The `skip`
+///    set in `allocate_registers` is exactly layer-B membership: const
+///    ids never enter a liveness interval and never receive a physical
+///    slot; every use renders as a literal. Symmetrically, layer-C ids
+///    reach the const maps only through `is_const_reg`, which is
+///    tautologically false below the reserved base.
+///
+/// 3. POOL RANGES AS TYPES. An operand's kind has exactly one source,
+///    chosen by layer. Pre-alloc (layers A/B) the operand's
+///    `StaticType` is the sole kind source — vreg ids carry no ranges;
+///    this is why `Eq` carries `ty` (the const fold's arm selector) and
+///    `DebugProbe` carries per-operand kinds (the pool map's seed).
+///    Post-alloc (layer C) the ID RANGE IS THE TYPE: eight consecutive
+///    per-pool ranges on one global mint timeline give every physical
+///    id exactly one pool, so pool membership is a pure integer range
+///    check and `i_r12`/`b_r12` co-numbering cannot arise (Boundary
+///    Defense B3). Four orthogonal questions, four mechanisms, never
+///    mixed: `is_const_reg` answers membership; the const maps answer
+///    value; pool range (C) or `StaticType` (A/B) answers kind;
+///    `c{n}`/literal vs `i_r{n}` rendering follows the layer.
+///
+/// 4. THE FINAL-CFG AUDIT. `audit_id_space` (reg_alloc.rs) re-verifies
+///    invariants 1–3 over the FINAL program — one scan, real asserts,
+///    no mutation: remint purity, membership, pool purity, bool branch
+///    conds, no dangling uses. It runs inside `allocate_registers` on
+///    every compile and is the required regression harness for any
+///    future IR mutation; tests/reg_alloc_audit.rs pins its failure
+///    modes.
+///
+/// BOUNDARY DEFENSES — recorded hazard classes, each impossible by
+/// construction and asserted anyway:
+///
+///   * B1 (fuzzer_01, stale-key): a const map keyed on a pre-remint low
+///     id would shadow a minted physical at emission's const early-outs
+///     — a map outliving its namespace. Prevented by the remint
+///     (Invariant 2); re-checked by remint purity (Invariant 4).
+///   * B2 (feat_ops_10): an arith target whose operands all const-folded
+///     while its own result stayed runtime (the `is_finite` guard
+///     declining inf/NaN, or a multi-def slot) mints no physical unless
+///     the type fixpoint consults the const maps (`const_pool` in
+///     reg_alloc) — the one deliberate bridge from layer B into the
+///     pool map; it reads pool facts without reusing any layer-A id.
+///   * B3 (co-numbered pools): a shared id range across
+///     Int/Bool/Table/String made every "which pool is this id?"
+///     question type-context-dependent. Prevented by the one global
+///     mint timeline (Invariant 3); re-checked by pool purity
+///     (Invariant 4).
+///
+/// Any future consumer of raw ids across the whole IR must make these
+/// layer exclusions explicitly or cite the invariant that guarantees
+/// them: the question is always "which layers does my scan see, and do
+/// any two of them coexist?" consts_f and consts_s mint from the same
+/// layer B under the same law; the zero-base mint touches no base math
+/// outside allocate_registers itself.
 pub type RegId = u32;
 
-/// Layer B's base: const-folded register ids mint from this reserved high
-/// range, disjoint from the vreg/physical low half BY CONSTRUCTION — the
-/// two namespaces can never collide numerically (the fuzzer_01
-/// stale-key/physical collision class is impossible rather than defended
-/// against). Realistic id counts are in the hundreds; nothing else ever
-/// mints this high.
+/// Layer B's base: const-folded register ids mint from this reserved
+/// high range, disjoint from the vreg/physical low half by construction
+/// (Boundary Defense B1). Realistic id counts are in the hundreds;
+/// nothing else ever mints this high.
 pub const CONST_REG_BASE: RegId = 1 << 31;
 
 pub fn is_const_reg(r: RegId) -> bool { r >= CONST_REG_BASE }

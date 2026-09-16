@@ -136,11 +136,12 @@ pub fn allocate_registers(
 ) -> AllocInfo {
     let blocks = &program.blocks;
 
-    // Const vregs never get a physical slot: all their uses render as
-    // literals. Excluded so a vreg id can never be confused with a
-    // physical id at codegen time. All FOUR scalar kinds — the skip set
-    // is exactly layer-B membership (constitution law 2); the base scan
-    // below is already layer-guarded, so nothing else changes.
+    // The skip set is exactly layer-B membership (Invariant 2, ir.rs):
+    // const ids never enter a liveness interval, never receive a
+    // physical slot — every use renders as a literal — so no const id
+    // can be confused with a physical at emission. All FOUR scalar
+    // kinds; the base scan below is already layer-guarded, so nothing
+    // else changes.
     let skip: HashSet<RegId> = consts_i.keys().copied()
         .chain(consts_b.keys().copied())
         .chain(consts_f.keys().copied())
@@ -175,9 +176,10 @@ pub fn allocate_registers(
         // operands are ALL const while its own result stayed runtime
         // (the is_finite guard declining inf/NaN, or a multi-def slot)
         // would otherwise mint NO physical at all and render as an
-        // undeclared register (feat_ops_10: `inf = a / b` after consts_f).
-        // Const bools/strings can never be arith operands (the checker
-        // rejects them), so ci/cf membership is a complete answer.
+        // undeclared register (Boundary Defense B2, ir.rs — feat_ops_10:
+        // `inf = a / b` after consts_f). Const bools/strings can never
+        // be arith operands (the checker rejects them), so ci/cf
+        // membership is a complete answer.
         let const_pool = |r: RegId| {
             if consts_f.contains_key(&r) { Some(Pool::Float) }
             else if consts_i.contains_key(&r) { Some(Pool::Int) }
@@ -259,33 +261,31 @@ pub fn allocate_registers(
     let (_, live_out) = compute_liveness(blocks);
     let iv = live_intervals(blocks, &live_out);
 
-    // 3. mint physical ids from ZERO — the scars of the vreg namespace
-    //    are gone (the old base was max-vreg+1, so every program's
-    //    physicals carried an arbitrary offset). Layer C does not sit
-    //    ABOVE layer A; it REPLACES it: the remap in step 4 rewrites
-    //    every def, use and branch cond through `map`, erasing the
-    //    vreg namespace from the IR in the same pass that mints the
-    //    physicals. The numeric overlap of [0, V) and [0, P) is
-    //    therefore unobservable — the only cross-layer keys still
-    //    alive at emission are the CONST maps, and layer B is the
-    //    reserved high range, disjoint from every physical by
-    //    construction. (Seed-43/fuzzer_01 is the cautionary tale for
-    //    a map outliving its namespace; vregs have no map.)
-    //    Consts never get a physical slot: all their uses render as
-    //    literals (the skip set is exactly layer-B membership,
-    //    constitution law 2).
+    // 3. mint physical ids from ZERO (not max-vreg+1 — physical
+    //    numbering inherits no offset from the vreg namespace).
+    //    Layer C does not sit ABOVE layer A; it REPLACES it
+    //    (Invariant 1, ir.rs): the remap in step 4 rewrites every def,
+    //    use and branch cond through `map`, erasing the vreg namespace
+    //    from the IR in the same pass that mints the physicals, so the
+    //    numeric overlap of [0, V) and [0, P) is unobservable. The only
+    //    cross-layer keys still alive at emission are the CONST maps,
+    //    and their keys are reminted layer-B ids, disjoint from every
+    //    physical by construction (Boundary Defense B1) — vregs carry
+    //    no map of their own that could outlive the namespace. Consts
+    //    never get a physical slot: every use renders as a literal
+    //    (the skip set is exactly layer-B membership, Invariant 2).
 
-    // ONE GLOBAL TIMELINE of physical ids: eight consecutive per-pool
-    // ranges, minted in fixed order — int, bool, table, string, float,
-    // ftable, tstr, btable. Every physical id belongs to exactly one
-    // pool and no two physical registers ever share a number (the
-    // SSA spirit carried into the physical namespace): `i_r12` and
-    // `b_r12` can no longer coexist, so pool membership is a pure
-    // range check and nothing downstream needs a carried StaticType
-    // to disambiguate a scalar operand. The old layout co-numbered
-    // Int/Bool/Table/String from one shared range — every
-    // "which pool is this id?" hazard (Eq's ty, probe operand kinds,
-    // the pretty-while bool-context counter) traces to that sharing.
+    // ONE GLOBAL TIMELINE of physical ids — Invariant 3 (ir.rs):
+    // eight consecutive per-pool ranges minted in fixed order — int,
+    // bool, table, string, float, ftable, tstr, btable. Every physical
+    // id belongs to exactly one pool and no two physical registers
+    // share a number, so `i_r12`/`b_r12` co-numbering cannot arise,
+    // pool membership is a pure range check, and nothing downstream
+    // needs a carried StaticType to disambiguate a scalar operand.
+    // (The superseded layout co-numbered Int/Bool/Table/String from
+    // one shared range; Eq's ty, probe operand kinds, and the
+    // pretty-while bool-context counter were all type-context
+    // workarounds for that sharing — Boundary Defense B3.)
     let pool_count = |p: Pool| ty.values().filter(|&&q| q == p).count();
     let int_base: RegId = 0;
     let bool_base = int_base + pool_count(Pool::Int) as RegId;
@@ -342,22 +342,19 @@ pub fn allocate_registers(
         map.insert(r, phys);
     }
 
-    // 4. rewrite references — TOTAL AND LOUD. Const vregs stay identity
-    //    (codegen looks them up in the const maps and never emits
-    //    them); every OTHER id must have entered a pool, and the
-    //    rewrite itself enforces it — the identity fallback is gone.
-    //    An unmapped vreg would keep its low id, NUMERICALLY COLLIDE
-    //    with a minted physical, and silently read/write a declared
-    //    local of the wrong pool (pre-zero-base it rendered as a high,
-    //    undeclared id and failed the build loudly), so the closure
-    //    panics instead. This IS the old 3.5 remap-completeness scan,
-    //    merged into the rewrite it guarded: coverage is exactly
-    //    remap_instr + branch conds — the positions that actually get
-    //    rewritten — so a future instruction kind cannot slip a
-    //    position past a use_regs/def_reg match that drifted out of
-    //    sync, and the extra scan per compile is gone. A real assert,
-    //    not debug_assert: silent wrong code is the one failure this
-    //    pass may never produce.
+    // 4. rewrite references — the Total Rewrite, Invariant 1 (ir.rs).
+    //    Const ids keep their identity (emission resolves them through
+    //    the const maps and never emits a register); every OTHER id
+    //    must have entered a pool, and the closure itself enforces it
+    //    — there is no identity fallback. An unmapped vreg would keep
+    //    its low id, numerically collide with a minted physical, and
+    //    silently read/write a declared local of the wrong pool, so
+    //    the closure panics instead. Coverage is exactly remap_instr +
+    //    branch conds — the positions that actually get rewritten — so
+    //    a future instruction kind cannot slip a position past a
+    //    use_regs/def_reg match that has drifted out of sync. A real
+    //    assert, not debug_assert: silent wrong code is the one
+    //    failure mode this pass forbids.
     let rewrite = |r: RegId| -> RegId {
         if is_const_reg(r) { return r; }
         match map.get(&r) {
@@ -380,9 +377,9 @@ pub fn allocate_registers(
             !matches!(i, Instruction::Move { target, source, .. } if target == source));
     }
 
-    // 6. post-alloc constitution audit — the FINAL program is what
-    //    emission silently leans on, so the final program is what gets
-    //    checked (audit_id_space below spells out the laws).
+    // 6. post-alloc id-space audit (Invariant 4, ir.rs) — emission
+    //    leans on the invariants silently, so the FINAL program is
+    //    what gets checked; audit_id_space below spells them out.
     let info = AllocInfo {
         n_int: *count.entry(Pool::Int).or_insert(0),
         n_bool: *count.entry(Pool::Bool).or_insert(0),
@@ -405,35 +402,33 @@ pub fn allocate_registers(
     info
 }
 
-/// POST-ALLOC ID-SPACE AUDIT — constitution laws 1 and 2 spelled out
-/// over the FINAL program: one scan (defs first, then uses), real
-/// asserts, no mutation. The emitted Rust leans on every claim here
-/// silently; the audit turns each into a loud, named failure. It runs
-/// inside allocate_registers, so the whole boss corpus, every lock
-/// regen, and every differential-fuzzer seed audits it on every
-/// compile — fuzzer_01_paying_rent.lua is the designated complicated
-/// witness, and if any generated shape can break the unique-id law, a
+/// POST-ALLOC ID-SPACE AUDIT — Invariant 4 (ir.rs): invariants 1–3
+/// re-verified over the FINAL program in one scan (defs first, then
+/// uses and branch conds), real asserts, no mutation. Emission relies
+/// on every claim here silently; the audit turns each into a named
+/// failure. It runs inside allocate_registers, so every corpus run,
+/// every lock regen, and every differential-fuzzer seed audits every
+/// compile — fuzzer_01_paying_rent.lua is the designated complex
+/// witness: if any generated shape can break the unique-id law, a
 /// fuzzer seed is where it surfaces first.
 ///   * remint purity — every consts-map key is layer-B (>= the
-///     reserved base). The fuzzer_01 stale-key class dies here: a
-///     low id in a const map could shadow a minted physical at
-///     emission's const early-outs.
+///     reserved base). Boundary Defense B1: a low id in a const map
+///     could shadow a minted physical at emission's const early-outs.
 ///   * membership — every non-const def/use/branch-cond id lies
 ///     inside a minted pool range; nothing unminted survives the
 ///     rewrite.
 ///   * pool purity — each def's target range matches the defining
-///     instruction's kind, and one id is never defined into two
-///     pools (the i_r12/b_r12 co-numbering class; impossible by the
-///     mint's construction, asserted anyway — the mint is the sort
-///     of code that regresses silently).
+///     instruction's kind, and one id is never defined into two pools
+///     (Boundary Defense B3; guaranteed by the mint's construction,
+///     asserted anyway).
 ///   * bool conds — a Branch cond is bool-pool or const (a non-bool
 ///     cond would render as an undeclared b_r at emission).
 ///   * no dangling uses — every non-const use/cond has a def
 ///     somewhere (the undeclared-register class).
 ///
 /// Slot reuse across DISJOINT intervals is legal and pinned
-/// (floatinf_01: sum coalesces onto neg's freed slot) — the law is
-/// one-id-one-pool, not one-id-one-def.
+/// (floatinf_01: sum coalesces onto neg's freed slot) — the invariant
+/// is one-id-one-pool, not one-id-one-def.
 pub fn audit_id_space(
     program: &IrProgram,
     alloc: &AllocInfo,
