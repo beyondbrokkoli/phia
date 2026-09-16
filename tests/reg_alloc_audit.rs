@@ -21,12 +21,11 @@
 
 use std::collections::HashMap;
 use ast::StaticType;
-use ir::{BasicBlock, Instruction, IrProgram, RegId, Terminator};
+use ir::{BasicBlock, Instruction, IrProgram, ConstVal, RegId, Terminator};
 use reg_alloc::{AllocInfo, allocate_registers, audit_id_space};
 
-fn empty_consts() -> (HashMap<RegId, i64>, HashMap<RegId, bool>,
-                      HashMap<RegId, f64>, HashMap<RegId, String>) {
-    (HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new())
+fn empty_consts() -> HashMap<RegId, ConstVal> {
+    HashMap::new()
 }
 
 // one int physical, everything else empty: id 0 mints Int, nothing
@@ -51,7 +50,6 @@ fn one_int_alloc() -> AllocInfo {
 #[test]
 #[should_panic(expected = "never entered a pool")]
 fn unmapped_vreg_trips_the_rewrite() {
-    let (ci, cb, cf, cs) = empty_consts();
     let mut program = IrProgram { blocks: vec![
         BasicBlock::new(0, 0),
         BasicBlock::new(1, 1),
@@ -63,7 +61,8 @@ fn unmapped_vreg_trips_the_rewrite() {
         args: vec![(0, 1)], // vreg 1: defined nowhere, typed nowhere
     });
     program.blocks[1].terminator = Some(Terminator::Halt);
-    allocate_registers(&mut program, &ci, &cb, &cf, &cs);
+    let consts = empty_consts();
+    allocate_registers(&mut program, &consts);
 }
 
 /// Pool-purity pin: a bool-producing instruction defining an id in the
@@ -75,8 +74,8 @@ fn wrong_pool_def_trips_the_audit() {
     let mut program = IrProgram { blocks: vec![BasicBlock::new(0, 0)] };
     program.blocks[0].instrs.push(Instruction::LoadBool { target: 0, val: true });
     program.blocks[0].terminator = Some(Terminator::Halt);
-    let (ci, cb, cf, cs) = empty_consts();
-    audit_id_space(&program, &one_int_alloc(), &ci, &cb, &cf, &cs);
+    let consts = empty_consts();
+    audit_id_space(&program, &one_int_alloc(), &consts);
 }
 
 /// Membership pin: a use of an id outside every minted range means
@@ -91,6 +90,6 @@ fn unminted_use_trips_the_audit() {
         target: 0, source: 7, ty: StaticType::Integer, // 7: never minted
     });
     program.blocks[0].terminator = Some(Terminator::Halt);
-    let (ci, cb, cf, cs) = empty_consts();
-    audit_id_space(&program, &one_int_alloc(), &ci, &cb, &cf, &cs);
+    let consts = empty_consts();
+    audit_id_space(&program, &one_int_alloc(), &consts);
 }

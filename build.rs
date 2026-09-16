@@ -166,17 +166,14 @@ fn render_final_ir(
     out: &mut String,
     program: &ir::IrProgram,
     alloc: &reg_alloc::AllocInfo,
-    consts_i: &HashMap<ir::RegId, i64>,
-    consts_b: &HashMap<ir::RegId, bool>,
-    consts_f: &HashMap<ir::RegId, f64>,
-    consts_s: &HashMap<ir::RegId, String>,
+    consts: &HashMap<ir::RegId, ir::ConstVal>,
 ) {
     use ir::Instruction as I;
     // pool_prefixed bound to this dump's data. One argument: the id
     // alone answers the pool (one global timeline, one range per
     // pool), so no StaticType hint rides along anymore.
     let pp = |r: ir::RegId| {
-        backend::pool_prefixed(r, consts_i, consts_b, consts_f, consts_s, alloc)
+        backend::pool_prefixed(r, consts, alloc)
     };
     for b in &program.blocks {
         let term = match &b.terminator {
@@ -210,12 +207,12 @@ fn render_final_ir(
                 I::Move { target, source, ty } =>
                     format!("Move {{ target: {}, source: {}, ty: {ty:?} }}",
                         pp(*target), pp(*source)),
-                I::Add { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Add", *target, *left, *right),
-                I::Sub { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Sub", *target, *left, *right),
-                I::Mul { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mul", *target, *left, *right),
-                I::Div { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Div", *target, *left, *right),
-                I::IntDiv { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "IntDiv", *target, *left, *right),
-                I::Mod { target, left, right } => arith(alloc, consts_i, consts_b, consts_f, consts_s, "Mod", *target, *left, *right),
+                I::Add { target, left, right } => arith(alloc, consts, "Add", *target, *left, *right),
+                I::Sub { target, left, right } => arith(alloc, consts, "Sub", *target, *left, *right),
+                I::Mul { target, left, right } => arith(alloc, consts, "Mul", *target, *left, *right),
+                I::Div { target, left, right } => arith(alloc, consts, "Div", *target, *left, *right),
+                I::IntDiv { target, left, right } => arith(alloc, consts, "IntDiv", *target, *left, *right),
+                I::Mod { target, left, right } => arith(alloc, consts, "Mod", *target, *left, *right),
                 I::Neg { target, source } =>
                     format!("Neg {{ target: {}, source: {} }}", pp(*target), pp(*source)),
                 I::Less { target, left, right } =>
@@ -261,10 +258,7 @@ fn render_final_ir(
 
 fn arith(
     alloc: &reg_alloc::AllocInfo,
-    consts_i: &HashMap<ir::RegId, i64>,
-    consts_b: &HashMap<ir::RegId, bool>,
-    consts_f: &HashMap<ir::RegId, f64>,
-    consts_s: &HashMap<ir::RegId, String>,
+    consts: &HashMap<ir::RegId, ir::ConstVal>,
     name: &str,
     target: ir::RegId,
     left: ir::RegId,
@@ -276,7 +270,7 @@ fn arith(
     // probe the TARGET's pool first and smear that hint over the
     // operands — a workaround for the days when ids carried no pools.
     let p = |r: ir::RegId| {
-        backend::pool_prefixed(r, consts_i, consts_b, consts_f, consts_s, alloc)
+        backend::pool_prefixed(r, consts, alloc)
     };
     format!("{name} {{ target: {}, left: {}, right: {} }}", p(target), p(left), p(right))
 }
@@ -381,12 +375,11 @@ fn main() {
 
     // Phase 6.5
     de_ssa::resolve_phis(&mut ir_program);
-    let (consts_i, consts_b, consts_f, consts_s) = de_ssa::propagate_constants(&mut ir_program);
+    let consts = de_ssa::propagate_constants(&mut ir_program);
     de_ssa::simplify(&mut ir_program);
 
     // Phase 6.75
-    let alloc_info = reg_alloc::allocate_registers(
-        &mut ir_program, &consts_i, &consts_b, &consts_f, &consts_s);
+    let alloc_info = reg_alloc::allocate_registers(&mut ir_program, &consts);
 
     if dump_final {
         let mut s = String::from(
@@ -395,7 +388,7 @@ fn main() {
              == (one global timeline, one pool per range — no two variables share a number). c{n} marks const-folded ==\n\
              == regs (layer-B ids; their uses render as literals). ==\n",
         );
-        render_final_ir(&mut s, &ir_program, &alloc_info, &consts_i, &consts_b, &consts_f, &consts_s);
+        render_final_ir(&mut s, &ir_program, &alloc_info, &consts);
         std::fs::write(Path::new(&dump_dir).join("ir_final_cfg.txt"), s).unwrap();
     }
 
@@ -422,8 +415,7 @@ fn main() {
     }
 
     // 5. Code Generation
-    let mut final_code = backend::generate_rust_code(
-        &ir_program, &alloc_info, &consts_i, &consts_b, &consts_f, &consts_s);
+    let mut final_code = backend::generate_rust_code(&ir_program, &alloc_info, &consts);
 
     // Regression stats: computed from the FINAL CFG
     let (mut fs_, mut fg, mut ds, mut dg, mut ho) = (0, 0, 0, 0, 0);
@@ -448,12 +440,21 @@ fn main() {
 
     let hoist_ctx = ctx_list.join(",");
     // consts_* = per-kind fold counts (layer-B sizes): the per-pass
-    // observability rider — with consts_f/consts_s the fold's effect on
-    // emitted code is pinned by locks, and these counters pin the fold's
-    // REACH (EXPECT: consts_f=3 style pins).
+    // observability rider — with the float/string folds the fold's
+    // effect on emitted code is pinned by locks, and these counters
+    // pin the fold's REACH (EXPECT: consts_f=3 style pins). One map,
+    // four variants — the counts come off the variant discriminant.
+    let (mut ci_n, mut cb_n, mut cf_n, mut cs_n) = (0usize, 0usize, 0usize, 0usize);
+    for v in consts.values() {
+        match v {
+            ir::ConstVal::Int(_) => ci_n += 1,
+            ir::ConstVal::Bool(_) => cb_n += 1,
+            ir::ConstVal::Float(_) => cf_n += 1,
+            ir::ConstVal::String(_) => cs_n += 1,
+        }
+    }
     final_code.push_str(&format!(
-        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={hoist_ctx};consts_i={};consts_b={};consts_f={};consts_s={}\";\n",
-        consts_i.len(), consts_b.len(), consts_f.len(), consts_s.len()
+        "\npub const STATS: &str = \"fast_sets={fs_};fast_gets={fg};dyn_sets={ds};dyn_gets={dg};hoists={ho};hoist_ctx={hoist_ctx};consts_i={ci_n};consts_b={cb_n};consts_f={cf_n};consts_s={cs_n}\";\n"
     ));
 
     let out_dir = env::var("OUT_DIR").unwrap();

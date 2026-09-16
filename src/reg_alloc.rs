@@ -1,5 +1,5 @@
 // src/register_alloc.rs
-use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, RegId, CONST_REG_BASE, is_const_reg};
+use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, RegId, ConstVal, CONST_REG_BASE, is_const_reg};
 use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
 
@@ -18,11 +18,14 @@ enum Pool { Int, Float, Bool, String, Table, TableFloat, TableString, TableBool 
 ///  2. memory.rs       : storage side + is_* flag + constructor.
 ///  3. reg_alloc.rs    : pool_of arm; disjoint base range; AllocInfo field;
 ///     mint arm; decl-range comment.
-///  4. backend.rs      : is_*table_reg predicate; pool_prefixed; decl
-///     ptr_ty; NewTable (handle AND pointer mode); SetTable (both modes);
-///     GetTable (handle tuple arm + pointer branch); SetTableFast;
-///     GetTableFast; EnsureCapacity (fld, zero); HoistRawPtr (fld);
-///     DebugProbe (fld token).
+///  4. backend.rs      : the table-side ORACLE — table_fld /
+///     table_fld_zero / table_ptr_ty answer every storage-side question
+///     (decl ptr, NewTable ctor, Set/Get dyn + fast, EC, HR, probe
+///     token); operand_kind kinds scalar operands (Eq renderer, probe
+///     fields, stored-value rendering). No site re-derives the side on
+///     its own, and every instruction that still carries a ty runs
+///     assert_fld / the operand-kind assert against the pool — the
+///     emission-side pool==ty tripwires.
 ///  5. main.rs         : dump branch (order: is_string -> is_float -> is_bool
 ///     -> int; flags mutually exclusive by NewTable).
 ///  6. Corpus          : positive dyn / fast / handle-mode / deferred-bind
@@ -129,24 +132,17 @@ pub struct AllocInfo {
 
 pub fn allocate_registers(
     program: &mut IrProgram,
-    consts_i: &HashMap<RegId, i64>,
-    consts_b: &HashMap<RegId, bool>,
-    consts_f: &HashMap<RegId, f64>,
-    consts_s: &HashMap<RegId, String>,
+    consts: &HashMap<RegId, ConstVal>,
 ) -> AllocInfo {
     let blocks = &program.blocks;
 
     // The skip set is exactly layer-B membership (Invariant 2, ir.rs):
     // const ids never enter a liveness interval, never receive a
     // physical slot — every use renders as a literal — so no const id
-    // can be confused with a physical at emission. All FOUR scalar
-    // kinds; the base scan below is already layer-guarded, so nothing
-    // else changes.
-    let skip: HashSet<RegId> = consts_i.keys().copied()
-        .chain(consts_b.keys().copied())
-        .chain(consts_f.keys().copied())
-        .chain(consts_s.keys().copied())
-        .collect();
+    // can be confused with a physical at emission. All four scalar
+    // kinds ride the one map (the variant is the kind); the base scan
+    // below is already layer-guarded, so nothing else changes.
+    let skip: HashSet<RegId> = consts.keys().copied().collect();
 
     // 1. types
     // The arithmetic ops are untyped in the IR: their targets inherit
@@ -171,19 +167,19 @@ pub fn allocate_registers(
     loop {
         let mut changed = false;
         // An arith operand that const-folded carries its pool in the
-        // CONST MAP, not in ty (skip excludes it). A folded operand is
-        // invisible to the fixpoint below — and an arith target whose
-        // operands are ALL const while its own result stayed runtime
-        // (the is_finite guard declining inf/NaN, or a multi-def slot)
-        // would otherwise mint NO physical at all and render as an
-        // undeclared register (Boundary Defense B2, ir.rs — feat_ops_10:
-        // `inf = a / b` after consts_f). Const bools/strings can never
-        // be arith operands (the checker rejects them), so ci/cf
-        // membership is a complete answer.
-        let const_pool = |r: RegId| {
-            if consts_f.contains_key(&r) { Some(Pool::Float) }
-            else if consts_i.contains_key(&r) { Some(Pool::Int) }
-            else { None }
+        // CONST MAP's variant, not in ty (skip excludes it). A folded
+        // operand is invisible to the fixpoint below — and an arith
+        // target whose operands are ALL const while its own result
+        // stayed runtime (the is_finite guard declining inf/NaN, or a
+        // multi-def slot) would otherwise mint NO physical at all and
+        // render as an undeclared register (Boundary Defense B2, ir.rs
+        // — feat_ops_10: `inf = a / b` after consts_f). Const bools/
+        // strings can never be arith operands (the checker rejects
+        // them), so the Float/Int variants are a complete answer.
+        let const_pool = |r: RegId| match consts.get(&r) {
+            Some(ConstVal::Float(_)) => Some(Pool::Float),
+            Some(ConstVal::Int(_)) => Some(Pool::Int),
+            _ => None,
         };
         for b in blocks {
             for i in &b.instrs {
@@ -398,7 +394,7 @@ pub fn allocate_registers(
         tstr_base,
         btable_base,
     };
-    audit_id_space(program, &info, consts_i, consts_b, consts_f, consts_s);
+    audit_id_space(program, &info, consts);
     info
 }
 
@@ -432,14 +428,11 @@ pub fn allocate_registers(
 pub fn audit_id_space(
     program: &IrProgram,
     alloc: &AllocInfo,
-    consts_i: &HashMap<RegId, i64>,
-    consts_b: &HashMap<RegId, bool>,
-    consts_f: &HashMap<RegId, f64>,
-    consts_s: &HashMap<RegId, String>,
+    consts: &HashMap<RegId, ConstVal>,
 ) {
     use std::borrow::Cow;
 
-    for r in consts_i.keys().chain(consts_b.keys()).chain(consts_f.keys()).chain(consts_s.keys()) {
+    for r in consts.keys() {
         assert!(is_const_reg(*r),
             "id-space audit: consts map holds low id {r} — layer B must be \
              reminted above CONST_REG_BASE or emission's const early-outs \

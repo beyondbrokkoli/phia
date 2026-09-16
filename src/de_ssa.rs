@@ -1,6 +1,6 @@
 // src/de_ssa.rs
 use std::collections::{HashMap};
-use crate::ir::{IrProgram, Instruction, Terminator, BlockId, RegId, CONST_REG_BASE};
+use crate::ir::{IrProgram, Instruction, Terminator, BlockId, RegId, ConstVal, CONST_REG_BASE};
 use crate::ast::StaticType;
 
 fn resolve_via(map: &HashMap<RegId, RegId>, mut r: RegId) -> RegId {
@@ -119,9 +119,13 @@ pub fn resolve_phis(program: &mut IrProgram) {
 
 
 /// Constant propagation over the four scalar kinds (int, bool, float,
-/// string), returning (ci, cb, cf, cs) — the consts maps keyed by the
-/// REMINTED layer-B ids (see the id-space spec in ir.rs; Invariant 2:
-/// folded ids are reminted above CONST_REG_BASE and never reused).
+/// string), returning the unified const map — `HashMap<RegId, ConstVal>`
+/// keyed by the REMINTED layer-B ids (see the id-space spec in ir.rs;
+/// Invariant 2: folded ids are reminted above CONST_REG_BASE and never
+/// reused). The fixpoint itself works kind-locally (four maps, indexed
+/// by the operands' StaticType — pre-alloc, ty is the only kind source,
+/// Invariant 3); the artifact crossing the pipeline boundary is one map
+/// whose variant IS the kind.
 ///
 /// FLOAT folding is exact by construction: the evaluator applies plain
 /// Rust f64 ops in the same left-associated tree the emitted templates
@@ -142,7 +146,7 @@ pub fn resolve_phis(program: &mut IrProgram) {
 /// escaping of raw user text always yields a valid Rust literal).
 pub fn propagate_constants(
     program: &mut IrProgram,
-) -> (HashMap<RegId, i64>, HashMap<RegId, bool>, HashMap<RegId, f64>, HashMap<RegId, String>) {
+) -> HashMap<RegId, ConstVal> {
     let mut defs: HashMap<RegId, usize> = HashMap::new();
     for b in &program.blocks {
         for i in &b.instrs {
@@ -364,11 +368,16 @@ pub fn propagate_constants(
             if let Some(&m) = mint.get(cond) { *cond = m; }
         }
     }
-    ci = ci.into_iter().map(|(k, v)| (mint[&k], v)).collect();
-    cb = cb.into_iter().map(|(k, v)| (mint[&k], v)).collect();
-    cf = cf.into_iter().map(|(k, v)| (mint[&k], v)).collect();
-    cs = cs.into_iter().map(|(k, v)| (mint[&k], v)).collect();
-    (ci, cb, cf, cs)
+    // ONE published map: the kind-local fold tables rekey onto the
+    // remint timeline and merge — layer B is one namespace (one sorted
+    // mint timeline above), so its artifact is one HashMap<RegId,
+    // ConstVal>; the variant carries the kind the four tables knew by
+    // map choice.
+    ci.into_iter().map(|(k, v)| (mint[&k], ConstVal::Int(v)))
+        .chain(cb.into_iter().map(|(k, v)| (mint[&k], ConstVal::Bool(v))))
+        .chain(cf.into_iter().map(|(k, v)| (mint[&k], ConstVal::Float(v))))
+        .chain(cs.into_iter().map(|(k, v)| (mint[&k], ConstVal::String(v))))
+        .collect()
 }
 
 /// Copy propagation + DCE. Deliberately conservative: a Move is erased

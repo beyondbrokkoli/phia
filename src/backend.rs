@@ -1,5 +1,5 @@
 // src/backend.rs
-use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, BlockId, RegId};
+use crate::ir::{IrProgram, Instruction, Terminator, BasicBlock, BlockId, RegId, ConstVal};
 use std::collections::{HashMap, HashSet};
 use crate::ast::StaticType;
 use crate::reg_alloc::AllocInfo;
@@ -70,24 +70,154 @@ fn is_btable_reg(r: RegId, alloc: &AllocInfo) -> bool {
     r >= alloc.btable_base && r < alloc.btable_base + alloc.n_btable as RegId
 }
 
+// ---- THE STORAGE-SIDE ORACLE + THE pool==ty VERIFICATION FRONTIER ----
+//
+// Element kind of a table physical is answered ONCE, by the pool the id
+// was minted into (Layer C: the range is the type). Every emission site
+// that needs "which struct field / pointer type / resize zero?" asks
+// these functions — the decl block's p_r type, NewTable's constructor,
+// the dyn getter/setters' fld, EC's (fld, zero), HR's fld, and the
+// probe's length token — so two sites can no longer disagree by
+// construction. That was the wrong-fld hazard class: the answers used
+// to be re-derived at six sites, half from the instruction-carried
+// StaticType, half from the pool, and a divergence between the two
+// derivations emits a program that compiles and reads the wrong Vec at
+// runtime.
+//
+// The carried StaticType is not silently ignored either — it is
+// VERIFIED. Wherever an instruction still rides a ty (NewTable, the
+// dyn/fast table ops, Eq, probe operands), emission asserts the
+// ty-derived answer equals the pool-derived one; a mismatch means the
+// id-space law broke upstream and fails the build HERE, at the
+// emission site, rather than downstream as wrong code. This is the
+// gradual frontier: pre-alloc consumers (the const fold, reg_alloc's
+// pool map) still CONSUME ty — pre-alloc, ids carry no ranges and ty is
+// the only kind source (Invariant 3, ir.rs) — and emission's Move/Phi
+// arms still render by ty. The sites below are where the pool already
+// answers, so the ty riding along is pure tripwire.
+
+// Storage side (Table struct field) of a table physical, by pool. The
+// plain-table range is the i64 side: integer elements and nested-table
+// handles (handle mode) share it.
+fn table_fld(r: RegId, alloc: &AllocInfo) -> &'static str {
+    if is_ftable_reg(r, alloc) { "farray" }
+    else if is_tstr_reg(r, alloc) { "sarray" }
+    else if is_btable_reg(r, alloc) { "barray" }
+    else { "array" }
+}
+
+// Storage side plus the pool's resize zero (EC and the dyn ops' grow
+// path): the absent-key default of the element pool.
+fn table_fld_zero(r: RegId, alloc: &AllocInfo) -> (&'static str, &'static str) {
+    if is_ftable_reg(r, alloc) { ("farray", "0.0") }
+    else if is_tstr_reg(r, alloc) { ("sarray", "String::new()") }
+    else if is_btable_reg(r, alloc) { ("barray", "false") }
+    else { ("array", "0") }
+}
+
+// Hoisted-pointer element type — the decl block's p_r declaration and
+// the fast ops' raw pointer base.
+fn table_ptr_ty(r: RegId, alloc: &AllocInfo) -> &'static str {
+    if is_ftable_reg(r, alloc) { "*mut f64" }
+    else if is_tstr_reg(r, alloc) { "*mut String" }
+    else if is_btable_reg(r, alloc) { "*mut bool" }
+    else { "*mut i64" }
+}
+
+// The same storage-side question asked of an instruction-carried
+// ELEMENT type — the pre-alloc spelling (where ty is the only kind
+// source). Integer elements and nested-table handles share the i64
+// side; an UnknownTable element is an undecided element, i.e. the i64
+// side's pool.
+fn elem_fld(elem: &StaticType) -> &'static str {
+    match elem {
+        StaticType::Float => "farray",
+        StaticType::String => "sarray",
+        StaticType::Boolean => "barray",
+        _ => "array",
+    }
+}
+
+// pool == ty, asserted wherever an instruction carries both. The panic
+// is a tripwire, not defense: audit_id_space already enforces the law
+// over the final CFG, so a hit here means the law broke between the
+// audit and this emission site — fail the build, never emit the
+// wrong-fld program.
+fn assert_fld(table: RegId, elem: &StaticType, alloc: &AllocInfo, op: &str) {
+    let (pool, ty) = (table_fld(table, alloc), elem_fld(elem));
+    assert!(pool == ty,
+        "{op}: table physical {table} sits on the {pool} side but its carried \
+         element type {elem:?} says {ty} — pool/ty divergence, the id-space \
+         law broke upstream (audit_id_space should have named it first)");
+}
+
+// Post-alloc operand kind: the id ALONE answers (Invariant 3). A const
+// id (layer B) sits outside every mint range — its ConstVal variant is
+// its kind; a physical id's pool range is its kind. Panic on an id in
+// no layer (pool_prefixed precedent): audit_id_space guarantees every
+// emission operand is classified, so a hit means the law broke between
+// the audit and this site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OpKind { Int, Bool, Float, Str, Table }
+
+fn operand_kind(r: RegId, consts: &HashMap<RegId, ConstVal>, alloc: &AllocInfo) -> OpKind {
+    match consts.get(&r) {
+        Some(ConstVal::Int(_)) => return OpKind::Int,
+        Some(ConstVal::Bool(_)) => return OpKind::Bool,
+        Some(ConstVal::Float(_)) => return OpKind::Float,
+        Some(ConstVal::String(_)) => return OpKind::Str,
+        _ => {}
+    }
+    if is_float_reg(r, alloc) { OpKind::Float }
+    else if is_bool_reg(r, alloc) { OpKind::Bool }
+    else if is_str_reg(r, alloc) { OpKind::Str }
+    else if is_table_reg(r, alloc) || is_ftable_reg(r, alloc)
+        || is_tstr_reg(r, alloc) || is_btable_reg(r, alloc) { OpKind::Table }
+    else if is_int_reg(r, alloc) { OpKind::Int }
+    else { panic!("operand_kind: reg {r} is neither const nor any pool's physical — \
+                   post-allocation id-space law violated") }
+}
+
+// The kind an instruction-carried StaticType claims — the ty half of
+// the verification.
+fn ty_kind(t: &StaticType) -> OpKind {
+    match t {
+        StaticType::Integer => OpKind::Int,
+        StaticType::Float => OpKind::Float,
+        StaticType::Boolean => OpKind::Bool,
+        StaticType::String => OpKind::Str,
+        StaticType::Table(_) | StaticType::UnknownTable(_) => OpKind::Table,
+    }
+}
+
+// Float-operand test for the comparison forks and the pretty-while
+// decline: the float POOL range plus the const map's Float variant (a
+// folded float's layer-B id sits outside every range).
+fn is_float_operand(r: RegId, consts: &HashMap<RegId, ConstVal>, alloc: &AllocInfo) -> bool {
+    is_float_reg(r, alloc) || matches!(consts.get(&r), Some(ConstVal::Float(_)))
+}
+
 // A const-folded vreg renders as its literal; everything else renders
 // as its pool-prefixed physical register. Renderers are MACROS, not
 // functions: each expansion defines a tiny block-local Display wrapper
-// — a value that owns the register id (and, for the const-folding
-// pools, a shared reference to the const map) — so the lookup happens
-// inside fmt() and no intermediate String is ever allocated. The
-// wrapper is used directly as a format! argument in the hot path; at
-// the few sites where the value must be stored or mixed with plain
-// format! arms, the call site appends .to_string() (one allocation —
-// exactly the value the old helper returned).
+// — a value that owns the register id and a shared reference to the
+// unified const map — so the lookup happens inside fmt() and no
+// intermediate String is ever allocated. Each macro answers with its
+// OWN ConstVal variant only (the map is one, the kinds are four — the
+// variant IS the kind, Invariant 3's layer-B half); anything else in
+// the slot falls through to the physical spelling. The wrapper is used
+// directly as a format! argument in the hot path; at the few sites
+// where the value must be stored or mixed with plain format! arms, the
+// call site appends .to_string() (one allocation — exactly the value
+// the old helper returned).
 macro_rules! iop_str {
     ($r:expr, $consts:expr) => {{
-        struct Formatter<'a>(&'a HashMap<RegId, i64>, RegId);
+        struct Formatter<'a>(&'a HashMap<RegId, ConstVal>, RegId);
         impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self.0.get(&self.1) {
-                    Some(v) => write!(f, "{}", v),
-                    None => write!(f, "i_r{}", self.1),
+                    Some(ConstVal::Int(v)) => write!(f, "{v}"),
+                    _ => write!(f, "i_r{}", self.1),
                 }
             }
         }
@@ -96,49 +226,50 @@ macro_rules! iop_str {
 }
 macro_rules! bop_str {
     ($r:expr, $consts:expr) => {{
-        struct Formatter<'a>(&'a HashMap<RegId, bool>, RegId);
+        struct Formatter<'a>(&'a HashMap<RegId, ConstVal>, RegId);
         impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self.0.get(&self.1) {
-                    Some(v) => write!(f, "{}", v),
-                    None => write!(f, "b_r{}", self.1),
+                    Some(ConstVal::Bool(v)) => write!(f, "{v}"),
+                    _ => write!(f, "b_r{}", self.1),
                 }
             }
         }
         Formatter($consts, $r)
     }};
 }
-// Floats fold under consts_f: a float operand renders as its `{:?}`
-// literal (finite only — the fold guard declines inf/NaN, which do not
-// spell valid Rust literals) or its physical register.
+// Floats fold under the Float variant: a float operand renders as its
+// `{:?}` literal (finite only — the fold guard declines inf/NaN, which
+// do not spell valid Rust literals) or its physical register.
 macro_rules! fop_str {
     ($r:expr, $consts:expr) => {{
-        struct Formatter<'a>(&'a HashMap<RegId, f64>, RegId);
+        struct Formatter<'a>(&'a HashMap<RegId, ConstVal>, RegId);
         impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self.0.get(&self.1) {
-                    Some(v) => write!(f, "{:?}", v),
-                    None => write!(f, "f_r{}", self.1),
+                    Some(ConstVal::Float(v)) => write!(f, "{:?}", v),
+                    _ => write!(f, "f_r{}", self.1),
                 }
             }
         }
         Formatter($consts, $r)
     }};
 }
-// Strings likewise (consts_s): a string operand renders as its
-// Debug-escaped literal (the LoadString invariant: raw user text always
-// renders a valid Rust literal) or its physical register. Sites that need
-// an OWNED value must special-case the const arm — `.clone()` on a
-// literal resolves to &str's Clone and yields the wrong type; those sites
-// render `"...".to_string()` instead (LoadFloat/LoadString precedent).
+// Strings likewise (the String variant): a string operand renders as
+// its Debug-escaped literal (the LoadString invariant: raw user text
+// always renders a valid Rust literal) or its physical register. Sites
+// that need an OWNED value must special-case the const arm — `.clone()`
+// on a literal resolves to &str's Clone and yields the wrong type;
+// those sites render `"...".to_string()` instead (LoadFloat/LoadString
+// precedent).
 macro_rules! sop_str {
     ($r:expr, $consts:expr) => {{
-        struct Formatter<'a>(&'a HashMap<RegId, String>, RegId);
+        struct Formatter<'a>(&'a HashMap<RegId, ConstVal>, RegId);
         impl<'a> std::fmt::Display for Formatter<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self.0.get(&self.1) {
-                    Some(v) => write!(f, "{:?}", v),
-                    None => write!(f, "s_r{}", self.1),
+                    Some(ConstVal::String(v)) => write!(f, "{:?}", v),
+                    _ => write!(f, "s_r{}", self.1),
                 }
             }
         }
@@ -160,14 +291,10 @@ macro_rules! sop_str {
 // exist.
 pub fn pool_prefixed(
     r: RegId,
-    consts_i: &HashMap<RegId, i64>,
-    consts_b: &HashMap<RegId, bool>,
-    consts_f: &HashMap<RegId, f64>,
-    consts_s: &HashMap<RegId, String>,
+    consts: &HashMap<RegId, ConstVal>,
     alloc: &AllocInfo,
 ) -> String {
-    if consts_i.contains_key(&r) || consts_b.contains_key(&r)
-        || consts_f.contains_key(&r) || consts_s.contains_key(&r) {
+    if consts.contains_key(&r) {
         return format!("c{}", r - crate::ir::CONST_REG_BASE);
     }
     if is_int_reg(r, alloc) { return format!("i_r{r}"); }
@@ -254,17 +381,14 @@ fn emit_table_decl(out: &mut String, alloc: &AllocInfo, r: RegId, uses_handles: 
         out.push_str(&format!("    let mut t_r{r}: *mut Table = std::ptr::null_mut();\n"));
     }
     if fast_phys.contains(&r) {
-        let ptr_ty = if is_ftable_reg(r, alloc) { "*mut f64" }
-            else if is_tstr_reg(r, alloc) { "*mut String" }
-            else if is_btable_reg(r, alloc) { "*mut bool" }
-            else { "*mut i64" };
+        let ptr_ty = table_ptr_ty(r, alloc);
         out.push_str(&format!("    let mut p_r{r}: {ptr_ty} = std::ptr::null_mut();\n"));
         out.push_str(&format!("    let mut len_r{r} = 0usize;\n"));
     }
 }
 
-// The read-only emission environment: program, allocation, the four
-// const maps, and the handle-mode flag. A tuple alias, not a state
+// The read-only emission environment: program, allocation, the unified
+// const map, and the handle-mode flag. A tuple alias, not a state
 // struct — it is assembled once in generate_rust_code, passed by value
 // (all fields Copy) through the recursive emit_* chain, and each frame
 // destructures only the projections it reads itself, handing the whole
@@ -272,10 +396,7 @@ fn emit_table_decl(out: &mut String, alloc: &AllocInfo, r: RegId, uses_handles: 
 type EmitEnv<'a> = (
     &'a IrProgram,
     &'a AllocInfo,
-    &'a HashMap<RegId, i64>,
-    &'a HashMap<RegId, bool>,
-    &'a HashMap<RegId, f64>,
-    &'a HashMap<RegId, String>,
+    &'a HashMap<RegId, ConstVal>,
     bool,
 );
 
@@ -287,12 +408,13 @@ type EmitEnv<'a> = (
 fn floor_div_str(
     left: RegId,
     right: RegId,
-    consts_f: &HashMap<RegId, f64>,
+    consts: &HashMap<RegId, ConstVal>,
 ) -> String {
-    if consts_f.contains_key(&left) && consts_f.contains_key(&right) {
-        format!("(({} / {}) as f64)", fop_str!(left, consts_f), fop_str!(right, consts_f))
+    let fconst = |r: RegId| matches!(consts.get(&r), Some(ConstVal::Float(_)));
+    if fconst(left) && fconst(right) {
+        format!("(({} / {}) as f64)", fop_str!(left, consts), fop_str!(right, consts))
     } else {
-        format!("({} / {})", fop_str!(left, consts_f), fop_str!(right, consts_f))
+        format!("({} / {})", fop_str!(left, consts), fop_str!(right, consts))
     }
 }
 
@@ -323,20 +445,17 @@ fn emit_instr(
     env: EmitEnv,
     instr: &Instruction,
 ) {
-    let (_, alloc, consts_i, consts_b, consts_f, consts_s, uses_handles) = env;
+    let (_, alloc, consts, uses_handles) = env;
     // compile-time-computed defs emit nothing: their uses are literals
-    if let Some(t) = instr.def_reg()
-        && (consts_i.contains_key(&t) || consts_b.contains_key(&t)
-            || consts_f.contains_key(&t) || consts_s.contains_key(&t))
-    {
+    if let Some(t) = instr.def_reg() && consts.contains_key(&t) {
         return;
     }
-    // In handle mode a table-typed operand renders as its t_r handle reg.
-    // Checked arena resolution (tables.get/get_mut + nil panic) instead of
-    // get_unchecked: even a hypothetical checker bug degrades to a clean
-    // "Runtime Error", never UB. Handle mode only — the pointer templates
-    // below are frozen, byte-identical to the milestone locks.
-    let is_tbl = |ty: &StaticType| matches!(ty, StaticType::Table(_) | StaticType::UnknownTable(_));
+    // In handle mode a table-typed operand renders as its t_r handle
+    // reg, resolved through checked arena access (tables.get/get_mut +
+    // nil panic) instead of get_unchecked: even a hypothetical checker
+    // bug degrades to a clean "Runtime Error", never UB. Handle mode
+    // only — the pointer templates below are frozen, byte-identical to
+    // the milestone locks.
     match instr {
         Instruction::LoadInt { target, val } =>
             out.push_str(&format!("i_r{target} = {val};\n")),
@@ -354,107 +473,82 @@ fn emit_instr(
         Instruction::Concat { target, left, right } =>
             out.push_str(&format!(
                 "s_r{target} = format!(\"{{}}{{}}\", {}, {});\n",
-                sop_str!(*left, consts_s), sop_str!(*right, consts_s)
+                sop_str!(*left, consts), sop_str!(*right, consts)
             )),
         Instruction::NewTable { target, ty } => {
-            // A table is monomorphic: its static element type picks the
-            // storage side at construction and it never changes.
-            let float_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::Float));
-            let str_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::String));
-            let bool_tbl = matches!(ty, StaticType::Table(inner) if matches!(**inner, StaticType::Boolean));
+            // A table is monomorphic: its pool — minted from the static
+            // element type — picks the storage side at construction and
+            // it never changes. The constructor is derived from the
+            // TARGET's pool (the one oracle); the carried table type is
+            // verified against it, never consulted for the choice.
+            let elem: &StaticType = match ty {
+                StaticType::Table(inner) => inner,
+                // an undecided element kinds as the i64 side's pool
+                other => other,
+            };
+            assert_fld(*target, elem, alloc, "NewTable");
+            let ctor = if is_ftable_reg(*target, alloc) { "Table::new_float()" }
+                else if is_tstr_reg(*target, alloc) { "Table::new_string()" }
+                else if is_btable_reg(*target, alloc) { "Table::new_bool()" }
+                else { "Table::new()" };
             if uses_handles {
                 // 1-based arena handle; 0 stays reserved for null
-                if float_tbl {
-                    out.push_str(&format!(
-                        "tables.push(Box::new(Table::new_float()));\n\
-                         t_r{target} = tables.len() as i64;\n"
-                    ));
-                } else if str_tbl {
-                    out.push_str(&format!(
-                        "tables.push(Box::new(Table::new_string()));\n\
-                         t_r{target} = tables.len() as i64;\n"
-                    ));
-                } else if bool_tbl {
-                    out.push_str(&format!(
-                        "tables.push(Box::new(Table::new_bool()));\n\
-                         t_r{target} = tables.len() as i64;\n"
-                    ));
-                } else {
-                    out.push_str(&format!(
-                        "tables.push(Box::new(Table::new()));\n\
-                         t_r{target} = tables.len() as i64;\n"
-                    ));
-                }
-            } else if float_tbl {
                 out.push_str(&format!(
-                    "let mut new_table = Box::new(Table::new_float());\n\
-                     t_r{target} = &mut *new_table as *mut Table;\n\
-                     tables.push(new_table);\n"
-                ));
-            } else if str_tbl {
-                out.push_str(&format!(
-                    "let mut new_table = Box::new(Table::new_string());\n\
-                     t_r{target} = &mut *new_table as *mut Table;\n\
-                     tables.push(new_table);\n"
-                ));
-            } else if bool_tbl {
-                out.push_str(&format!(
-                    "let mut new_table = Box::new(Table::new_bool());\n\
-                     t_r{target} = &mut *new_table as *mut Table;\n\
-                     tables.push(new_table);\n"
+                    "tables.push(Box::new({ctor}));\n\
+                     t_r{target} = tables.len() as i64;\n"
                 ));
             } else {
                 out.push_str(&format!(
-                    "let mut new_table = Box::new(Table::new());\n\
+                    "let mut new_table = Box::new({ctor});\n\
                      t_r{target} = &mut *new_table as *mut Table;\n\
                      tables.push(new_table);\n"
                 ));
             }
         }
         Instruction::Move { target, source, ty } => match ty {
-            StaticType::Integer => out.push_str(&format!("i_r{target} = {};\n", iop_str!(*source, consts_i))),
-            StaticType::Boolean => out.push_str(&format!("b_r{target} = {};\n", bop_str!(*source, consts_b))),
-            StaticType::Float => out.push_str(&format!("f_r{target} = {};\n", fop_str!(*source, consts_f))),
+            StaticType::Integer => out.push_str(&format!("i_r{target} = {};\n", iop_str!(*source, consts))),
+            StaticType::Boolean => out.push_str(&format!("b_r{target} = {};\n", bop_str!(*source, consts))),
+            StaticType::Float => out.push_str(&format!("f_r{target} = {};\n", fop_str!(*source, consts))),
             // strings are owned: a Move clones (SSA semantics — the
             // source slot may still be read on another path). A CONST
             // source cannot ride `.clone()` — that resolves to &str's
             // Clone and yields the wrong type — so it materializes with
             // .to_string(), the LoadString emission shape.
             StaticType::String => {
-                if let Some(v) = consts_s.get(source) {
+                if let Some(ConstVal::String(v)) = consts.get(source) {
                     out.push_str(&format!("s_r{target} = {v:?}.to_string();\n"));
                 } else {
-                    out.push_str(&format!("s_r{target} = {}.clone();\n", sop_str!(*source, consts_s)));
+                    out.push_str(&format!("s_r{target} = {}.clone();\n", sop_str!(*source, consts)));
                 }
             }
             StaticType::Table(_) | StaticType::UnknownTable(_) => out.push_str(&format!("t_r{target} = t_r{source};\n")),
         },
         Instruction::Add { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} + {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                out.push_str(&format!("f_r{target} = {} + {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("i_r{target} = {} + {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} + {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Sub { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} - {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                out.push_str(&format!("f_r{target} = {} - {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("i_r{target} = {} - {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} - {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Mul { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} * {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                out.push_str(&format!("f_r{target} = {} * {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("i_r{target} = {} * {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} * {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Div { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = {} / {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                out.push_str(&format!("f_r{target} = {} / {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("i_r{target} = {} / {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("i_r{target} = {} / {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         // Lua floor division: `//` rounds toward negative infinity
@@ -469,18 +563,18 @@ fn emit_instr(
         // inside the leading L / R. The float templates pin an
         // all-literal division with `as f64`: `.floor()` on {float}
         // is f32/f64-ambiguous (E0689) — a register operand types the
-        // division, but consts_f folding can leave BOTH operands
+        // division, but the float fold can leave BOTH operands
         // literal (fuzzer seed 65; fconst_04 pins it).
         Instruction::IntDiv { target, left, right } => {
             if is_float_reg(*target, alloc) {
-                let div = floor_div_str(*left, *right, consts_f);
+                let div = floor_div_str(*left, *right, consts);
                 out.push_str(&format!("f_r{target} = {div}.floor();\n"))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} / {} - i64::from({} % {} != 0 && ({} < 0) != ({} < 0));\n",
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i),
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i),
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                    iop_str!(*left, consts), iop_str!(*right, consts),
+                    iop_str!(*left, consts), iop_str!(*right, consts),
+                    iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         // Lua modulo: result takes the divisor's sign (-7 % 3 == 2),
@@ -490,23 +584,23 @@ fn emit_instr(
             if is_float_reg(*target, alloc) {
                 // same E0689 pin as IntDiv: the inner (l / r) riding
                 // .floor() is all-literal when both operands folded
-                let div = floor_div_str(*left, *right, consts_f);
+                let div = floor_div_str(*left, *right, consts);
                 out.push_str(&format!("f_r{target} = {} - {div}.floor() * {};\n",
-                    fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+                    fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
                 out.push_str(&format!(
                     "i_r{target} = {} % {} + i64::from({} % {} != 0 && ({} % {} < 0) != ({} < 0)) * {};\n",
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i),
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i),
-                    iop_str!(*left, consts_i), iop_str!(*right, consts_i),
-                    iop_str!(*right, consts_i), iop_str!(*right, consts_i)))
+                    iop_str!(*left, consts), iop_str!(*right, consts),
+                    iop_str!(*left, consts), iop_str!(*right, consts),
+                    iop_str!(*left, consts), iop_str!(*right, consts),
+                    iop_str!(*right, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Neg { target, source } => {
             if is_float_reg(*target, alloc) {
-                out.push_str(&format!("f_r{target} = -{};\n", fop_str!(*source, consts_f)))
+                out.push_str(&format!("f_r{target} = -{};\n", fop_str!(*source, consts)))
             } else {
-                out.push_str(&format!("i_r{target} = -{};\n", iop_str!(*source, consts_i)))
+                out.push_str(&format!("i_r{target} = -{};\n", iop_str!(*source, consts)))
             }
         }
         Instruction::Less { target, left, right } => {
@@ -514,47 +608,56 @@ fn emit_instr(
             // not in the float pool's mint range, so the map check rides
             // shotgun — without it a multi-def Less over folded floats
             // renders i_r<const-id>, an undeclared register
-            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
-                out.push_str(&format!("b_r{target} = {} < {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+            if is_float_operand(*left, consts, alloc) {
+                out.push_str(&format!("b_r{target} = {} < {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("b_r{target} = {} < {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} < {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Leq { target, left, right } => {
-            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
-                out.push_str(&format!("b_r{target} = {} <= {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+            if is_float_operand(*left, consts, alloc) {
+                out.push_str(&format!("b_r{target} = {} <= {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("b_r{target} = {} <= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} <= {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
         Instruction::Geq { target, left, right } => {
-            if is_float_reg(*left, alloc) || consts_f.contains_key(left) {
-                out.push_str(&format!("b_r{target} = {} >= {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f)))
+            if is_float_operand(*left, consts, alloc) {
+                out.push_str(&format!("b_r{target} = {} >= {};\n", fop_str!(*left, consts), fop_str!(*right, consts)))
             } else {
-                out.push_str(&format!("b_r{target} = {} >= {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i)))
+                out.push_str(&format!("b_r{target} = {} >= {};\n", iop_str!(*left, consts), iop_str!(*right, consts)))
             }
         }
-        // The instruction's ty drives the rendering here. Since the
-        // one-global-timeline mint it is a convenience rather than a
-        // necessity (the operands' own pool ranges would answer too),
-        // but the ty is already carried for the const FOLD, which runs
-        // pre-alloc where ids have no ranges — rendering rides it for
-        // free. History: under the old shared Int/Bool range this match
-        // was the ONLY correct disambiguator (a const-bool-on-the-left
-        // Eq used to render undeclared i_rN registers, and an aliased
-        // physical bool rendered the wrong variable entirely).
-        Instruction::Eq { target, left, right, ty } => match ty {
-            StaticType::Float =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left, consts_f), fop_str!(*right, consts_f))),
-            StaticType::String =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", sop_str!(*left, consts_s), sop_str!(*right, consts_s))),
-            StaticType::Boolean =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", bop_str!(*left, consts_b), bop_str!(*right, consts_b))),
-            _ =>
-                out.push_str(&format!("b_r{target} = {} == {};\n", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
-        },
+        // The OPERANDS' layer drives the rendering (pool range or const
+        // variant — the id alone answers); the carried ty is VERIFIED,
+        // not consulted. It is still carried for the const FOLD, which
+        // runs pre-alloc where ids carry no ranges (Invariant 3), and
+        // the checker guarantees Eq is homogeneous with a scalar ty —
+        // so left's kind is the instruction's kind. History: under the
+        // old shared Int/Bool range, ty was the ONLY correct
+        // disambiguator here; the unique-id mint made the operands'
+        // own pools authoritative, and the assert keeps the two
+        // answers from ever drifting apart silently.
+        Instruction::Eq { target, left, right, ty } => {
+            let kind = operand_kind(*left, consts, alloc);
+            assert!(kind == ty_kind(ty),
+                "Eq: operand {left} kinds as {kind:?} but the instruction carries \
+                 ty {ty:?} — pool/ty divergence, the id-space law broke upstream");
+            match kind {
+                OpKind::Float =>
+                    out.push_str(&format!("b_r{target} = {} == {};\n", fop_str!(*left, consts), fop_str!(*right, consts))),
+                OpKind::Str =>
+                    out.push_str(&format!("b_r{target} = {} == {};\n", sop_str!(*left, consts), sop_str!(*right, consts))),
+                OpKind::Bool =>
+                    out.push_str(&format!("b_r{target} = {} == {};\n", bop_str!(*left, consts), bop_str!(*right, consts))),
+                // Int — the checker's only remaining scalar; table
+                // comparisons never reach emission (checker rejection)
+                _ =>
+                    out.push_str(&format!("b_r{target} = {} == {};\n", iop_str!(*left, consts), iop_str!(*right, consts))),
+            }
+        }
         Instruction::Not { target, source } =>
-            out.push_str(&format!("b_r{target} = !{};\n", bop_str!(*source, consts_b))),
+            out.push_str(&format!("b_r{target} = !{};\n", bop_str!(*source, consts))),
 
         // Runtime observation, Lua-style: the line prints exactly what
         // print received — the literal tag (first argument, when present)
@@ -585,28 +688,34 @@ fn emit_instr(
                 args.push(format!("{:?}", tag));
             }
             for &(r, ref t) in operands {
-                match t {
-                    StaticType::Integer => {
+                // The operand's own layer kinds it (pool range or const
+                // variant); the carried kind is asserted, not consulted
+                // — the same pool==ty frontier as Eq. reg_alloc's pool
+                // map seeds probe operands FROM these kinds, so the
+                // assert can only fire if the law broke after minting.
+                let kind = operand_kind(r, consts, alloc);
+                assert!(kind == ty_kind(t),
+                    "DebugProbe: operand {r} kinds as {kind:?} but carries {t:?} — \
+                     pool/ty divergence, the id-space law broke upstream");
+                match kind {
+                    OpKind::Int => {
                         fields.push("{}".to_string());
-                        args.push(iop_str!(r, consts_i).to_string());
+                        args.push(iop_str!(r, consts).to_string());
                     }
-                    StaticType::Float => {
+                    OpKind::Float => {
                         fields.push("{:?}".to_string());
-                        args.push(fop_str!(r, consts_f).to_string());
+                        args.push(fop_str!(r, consts).to_string());
                     }
-                    StaticType::Boolean => {
+                    OpKind::Bool => {
                         fields.push("{}".to_string());
-                        args.push(bop_str!(r, consts_b).to_string());
+                        args.push(bop_str!(r, consts).to_string());
                     }
-                    StaticType::String => {
+                    OpKind::Str => {
                         fields.push("{}".to_string());
-                        args.push(sop_str!(r, consts_s).to_string());
+                        args.push(sop_str!(r, consts).to_string());
                     }
-                    StaticType::Table(_) | StaticType::UnknownTable(_) => {
-                        let fld = if is_ftable_reg(r, alloc) { "farray" }
-                            else if is_tstr_reg(r, alloc) { "sarray" }
-                            else if is_btable_reg(r, alloc) { "barray" }
-                            else { "array" };
+                    OpKind::Table => {
+                        let fld = table_fld(r, alloc);
                         if uses_handles {
                             fields.push("{}".to_string());
                             args.push(format!(
@@ -641,21 +750,10 @@ fn emit_instr(
         }
 
         Instruction::EnsureCapacity { table, limit } => {
-            // Storage side comes from the table's pool: float-element
-            // tables resize the farray with 0.0 zeros, string-element
-            // tables the sarray with empty strings, bool-element tables
-            // the barray with false, handle tables the frozen integer
-            // template. Monomorphism guarantees the fast ops riding this
-            // EC agree with the pool.
-            let (fld, zero) = if is_ftable_reg(*table, alloc) {
-                ("farray", "0.0")
-            } else if is_tstr_reg(*table, alloc) {
-                ("sarray", "String::new()")
-            } else if is_btable_reg(*table, alloc) {
-                ("barray", "false")
-            } else {
-                ("array", "0")
-            };
+            // Storage side and resize zero from the table's pool (the
+            // one oracle). Monomorphism guarantees the fast ops riding
+            // this EC agree — they ask the same oracle.
+            let (fld, zero) = table_fld_zero(*table, alloc);
             if uses_handles {
                 out.push_str(&format!(
                     "let lim = {lim};\n\
@@ -666,7 +764,7 @@ fn emit_instr(
                              t.{fld}.resize(lim as usize, {zero});\n\
                          }}\n\
                      }}\n",
-                    lim = iop_str!(*limit, consts_i)
+                    lim = iop_str!(*limit, consts)
                 ));
             } else {
                 out.push_str(&format!(
@@ -677,15 +775,12 @@ fn emit_instr(
                              t.{fld}.resize(lim as usize, {zero});\n\
                          }}\n\
                      }}\n",
-                    lim = iop_str!(*limit, consts_i)
+                    lim = iop_str!(*limit, consts)
                 ));
             }
         }
         Instruction::HoistRawPtr { table } => {
-            let fld = if is_ftable_reg(*table, alloc) { "farray" }
-                else if is_tstr_reg(*table, alloc) { "sarray" }
-                else if is_btable_reg(*table, alloc) { "barray" }
-                else { "array" };
+            let fld = table_fld(*table, alloc);
             if uses_handles {
                 out.push_str(&format!(
                     "if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
@@ -702,15 +797,21 @@ fn emit_instr(
         }
 
         Instruction::SetTable { table, key, val, ty } => {
-            // Element-kind selects storage side and zero. The integer and
-            // table cases render byte-identically to the frozen templates
-            // (fld="array", zero="0"); floats take the f64 side.
-            if uses_handles {
-                let (fld, zero, val_str) = if is_tbl(ty) {
-                    ("array", "0", format!("t_r{val}"))
-                } else if matches!(ty, StaticType::Float) {
-                    ("farray", "0.0", fop_str!(*val, consts_f).to_string())
-                } else if matches!(ty, StaticType::String) {
+            // Storage side from the TABLE's pool, value rendering from
+            // the VALUE operand's own layer (pool range or const
+            // variant); the carried element type is verified against
+            // the pool, never consulted for the choice. Integer and
+            // table-element stores render byte-identically to the
+            // frozen templates (fld="array", zero="0"); floats,
+            // strings, bools take their own sides.
+            assert_fld(*table, ty, alloc, "SetTable");
+            let (fld, zero) = table_fld_zero(*table, alloc);
+            let val_str = match operand_kind(*val, consts, alloc) {
+                // a stored table is a raw handle copy (handle mode —
+                // pure pointer programs never store tables)
+                OpKind::Table => format!("t_r{val}"),
+                OpKind::Float => fop_str!(*val, consts).to_string(),
+                OpKind::Str =>
                     // clone: a store COPIES the immutable value in
                     // (a move would kill the source slot — the borrow
                     // checker rejects it at build time, and the source
@@ -718,16 +819,14 @@ fn emit_instr(
                     // val materializes with .to_string() — `.clone()` on
                     // a literal resolves to &str's Clone (the Move-arm
                     // hazard, same fix).
-                    ("sarray", "String::new()",
-                        match consts_s.get(val) {
-                            Some(v) => format!("{v:?}.to_string()"),
-                            None => format!("{}.clone()", sop_str!(*val, consts_s)),
-                        })
-                } else if matches!(ty, StaticType::Boolean) {
-                    ("barray", "false", bop_str!(*val, consts_b).to_string())
-                } else {
-                    ("array", "0", iop_str!(*val, consts_i).to_string())
-                };
+                    match consts.get(val) {
+                        Some(ConstVal::String(v)) => format!("{v:?}.to_string()"),
+                        _ => format!("{}.clone()", sop_str!(*val, consts)),
+                    },
+                OpKind::Bool => bop_str!(*val, consts).to_string(),
+                OpKind::Int => iop_str!(*val, consts).to_string(),
+            };
+            if uses_handles {
                 out.push_str(&format!(
                     "let k = {key};\n\
                      if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
@@ -736,22 +835,9 @@ fn emit_instr(
                      let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
                      if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
                      unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
-                    key = iop_str!(*key, consts_i)
+                    key = iop_str!(*key, consts)
                 ));
             } else {
-                let (fld, zero, val_str) = if matches!(ty, StaticType::Float) {
-                    ("farray", "0.0", fop_str!(*val, consts_f).to_string())
-                } else if matches!(ty, StaticType::String) {
-                    ("sarray", "String::new()",
-                        match consts_s.get(val) {
-                            Some(v) => format!("{v:?}.to_string()"),
-                            None => format!("{}.clone()", sop_str!(*val, consts_s)),
-                        })
-                } else if matches!(ty, StaticType::Boolean) {
-                    ("barray", "false", bop_str!(*val, consts_b).to_string())
-                } else {
-                    ("array", "0", iop_str!(*val, consts_i).to_string())
-                };
                 out.push_str(&format!(
                     "let k = {key};\n\
                      if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
@@ -759,16 +845,20 @@ fn emit_instr(
                      let t = unsafe {{ &mut *t_r{table} }};\n\
                      if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
                      unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
-                    key = iop_str!(*key, consts_i)
+                    key = iop_str!(*key, consts)
                 ));
             }
         }
         Instruction::GetTable { target, table, key, ty } => {
-            // String elements are owned, not Copy: every read CLONES
-            // out of the Vec (dyn and fast), and the absent-key
-            // default is the empty string — nil-as-absence compiled
-            // to the pool's zero, exactly like 0 and 0.0.
-            if matches!(ty, StaticType::String) {
+            // Storage side from the TABLE's pool, target register from
+            // the TARGET's own pool; the carried element type is
+            // verified, never consulted. String elements are owned,
+            // not Copy: every read CLONES out of the Vec (dyn and
+            // fast), and the absent-key default is the empty string —
+            // nil-as-absence compiled to the pool's zero, exactly like
+            // 0 and 0.0.
+            assert_fld(*table, ty, alloc, "GetTable");
+            if operand_kind(*target, consts, alloc) == OpKind::Str {
                 if uses_handles {
                     out.push_str(&format!(
                         "let k = {key};\n\
@@ -777,7 +867,7 @@ fn emit_instr(
                          if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
                          s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
-                        key = iop_str!(*key, consts_i)
+                        key = iop_str!(*key, consts)
                     ));
                 } else {
                     out.push_str(&format!(
@@ -786,74 +876,60 @@ fn emit_instr(
                          let idx = k as usize;\n\
                          let t = unsafe {{ &*t_r{table} }};\n\
                          s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
-                        key = iop_str!(*key, consts_i)
+                        key = iop_str!(*key, consts)
                     ));
                 }
-            } else if uses_handles {
-                let (fld, zero, target_str) = if is_tbl(ty) {
-                    ("array", "0", format!("t_r{target}"))
-                } else if matches!(ty, StaticType::Float) {
-                    ("farray", "0.0", format!("f_r{target}"))
-                } else if matches!(ty, StaticType::Boolean) {
-                    ("barray", "false", format!("b_r{target}"))
-                } else {
-                    ("array", "0", format!("i_r{target}"))
-                };
-                out.push_str(&format!(
-                    "let k = {key};\n\
-                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     let idx = k as usize;\n\
-                     if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
-                     let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
-                    key = iop_str!(*key, consts_i)
-                ));
-            } else if matches!(ty, StaticType::Float) {
-                out.push_str(&format!(
-                    "let k = {key};\n\
-                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     let idx = k as usize;\n\
-                     let t = unsafe {{ &*t_r{table} }};\n\
-                     f_r{target} = if idx < t.farray.len() {{ unsafe {{ *t.farray.get_unchecked(idx) }} }} else {{ 0.0 }};\n",
-                    key = iop_str!(*key, consts_i)
-                ));
-            } else if matches!(ty, StaticType::Boolean) {
-                out.push_str(&format!(
-                    "let k = {key};\n\
-                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     let idx = k as usize;\n\
-                     let t = unsafe {{ &*t_r{table} }};\n\
-                     b_r{target} = if idx < t.barray.len() {{ unsafe {{ *t.barray.get_unchecked(idx) }} }} else {{ false }};\n",
-                    key = iop_str!(*key, consts_i)
-                ));
             } else {
-                out.push_str(&format!(
-                    "let k = {key};\n\
-                     if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
-                     let idx = k as usize;\n\
-                     let t = unsafe {{ &*t_r{table} }};\n\
-                     i_r{target} = if idx < t.array.len() {{ unsafe {{ *t.array.get_unchecked(idx) }} }} else {{ 0 }};\n",
-                    key = iop_str!(*key, consts_i)
-                ));
+                let (fld, zero) = table_fld_zero(*table, alloc);
+                let target_str = match operand_kind(*target, consts, alloc) {
+                    OpKind::Table => format!("t_r{target}"),
+                    OpKind::Float => format!("f_r{target}"),
+                    OpKind::Bool => format!("b_r{target}"),
+                    _ => format!("i_r{target}"),
+                };
+                if uses_handles {
+                    out.push_str(&format!(
+                        "let k = {key};\n\
+                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         let idx = k as usize;\n\
+                         if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
+                         let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
+                         {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                        key = iop_str!(*key, consts)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "let k = {key};\n\
+                         if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
+                         let idx = k as usize;\n\
+                         let t = unsafe {{ &*t_r{table} }};\n\
+                         {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                        key = iop_str!(*key, consts)
+                    ));
+                }
             }
         }
         Instruction::SetTableFast { table, key, val, ty } => {
-            let val_str = if uses_handles && is_tbl(ty) {
-                format!("t_r{val}")
-            } else if matches!(ty, StaticType::Float) {
-                fop_str!(*val, consts_f).to_string()
-            } else if matches!(ty, StaticType::String) {
-                // clone — same immutable-copy semantics as the dyn store;
-                // const vals materialize via .to_string() (same &str-Clone
-                // hazard, same fix)
-                match consts_s.get(val) {
-                    Some(v) => format!("{v:?}.to_string()"),
-                    None => format!("{}.clone()", sop_str!(*val, consts_s)),
-                }
-            } else if matches!(ty, StaticType::Boolean) {
-                bop_str!(*val, consts_b).to_string()
-            } else {
-                iop_str!(*val, consts_i).to_string()
+            // The store rides p_r{table} — a pointer whose type the DECL
+            // block derived from the table's pool — so the value's own
+            // layer must render it; the carried element type is verified
+            // against the pool (a divergence is a generated-code type
+            // error at best, memory corruption at worst — now it is a
+            // build-time tripwire instead).
+            assert_fld(*table, ty, alloc, "SetTableFast");
+            let val_str = match operand_kind(*val, consts, alloc) {
+                OpKind::Table => format!("t_r{val}"),
+                OpKind::Float => fop_str!(*val, consts).to_string(),
+                OpKind::Str =>
+                    // clone — same immutable-copy semantics as the dyn store;
+                    // const vals materialize via .to_string() (same &str-Clone
+                    // hazard, same fix)
+                    match consts.get(val) {
+                        Some(ConstVal::String(v)) => format!("{v:?}.to_string()"),
+                        _ => format!("{}.clone()", sop_str!(*val, consts)),
+                    },
+                OpKind::Bool => bop_str!(*val, consts).to_string(),
+                OpKind::Int => iop_str!(*val, consts).to_string(),
             };
             out.push_str(&format!(
                 "let k = {key};\n\
@@ -863,14 +939,18 @@ fn emit_instr(
                  }} else {{\n\
                      panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
                  }}\n",
-                key = iop_str!(*key, consts_i)
+                key = iop_str!(*key, consts)
             ));
         }
         Instruction::GetTableFast { target, table, key, ty } => {
-            // String fast reads clone through the hoisted pointer —
-            // the shared template's plain deref would move out of the
-            // Vec, which the borrow checker (rightly) forbids.
-            if matches!(ty, StaticType::String) {
+            // The load rides p_r{table} (pool-typed in the decl block);
+            // the target register's own pool picks its spelling, the
+            // carried element type is verified. String fast reads clone
+            // through the hoisted pointer — the shared template's plain
+            // deref would move out of the Vec, which the borrow checker
+            // (rightly) forbids.
+            assert_fld(*table, ty, alloc, "GetTableFast");
+            if operand_kind(*target, consts, alloc) == OpKind::Str {
                 out.push_str(&format!(
                     "let k = {key};\n\
                      if k < 0 {{ panic!(\"Runtime Error: Negative index in fast path\"); }}\n\
@@ -879,17 +959,14 @@ fn emit_instr(
                      }} else {{\n\
                          panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
                      }}\n",
-                    key = iop_str!(*key, consts_i)
+                    key = iop_str!(*key, consts)
                 ));
             } else {
-                let target_str = if uses_handles && is_tbl(ty) {
-                    format!("t_r{target}")
-                } else if matches!(ty, StaticType::Float) {
-                    format!("f_r{target}")
-                } else if matches!(ty, StaticType::Boolean) {
-                    format!("b_r{target}")
-                } else {
-                    format!("i_r{target}")
+                let target_str = match operand_kind(*target, consts, alloc) {
+                    OpKind::Table => format!("t_r{target}"),
+                    OpKind::Float => format!("f_r{target}"),
+                    OpKind::Bool => format!("b_r{target}"),
+                    _ => format!("i_r{target}"),
                 };
                 out.push_str(&format!(
                     "let k = {key};\n\
@@ -899,7 +976,7 @@ fn emit_instr(
                      }} else {{\n\
                          panic!(\"optimizer invariant violated: fast-path bounds check failed\");\n\
                      }}\n",
-                    key = iop_str!(*key, consts_i)
+                    key = iop_str!(*key, consts)
                 ));
             }
         }
@@ -949,7 +1026,7 @@ fn emit_seq(
     stop: Option<BlockId>,
     emitted: &mut [bool],
 ) {
-    let (program, _alloc, _consts_i, consts_b, _consts_f, _consts_s, _uses_handles) = env;
+    let (program, _alloc, consts, _uses_handles) = env;
     if Some(b) == stop { return; }
     if emitted[b] { panic!("structured codegen: block {b} reached twice — CFG is not a tree"); }
     emitted[b] = true;
@@ -991,7 +1068,7 @@ fn emit_seq(
             // non-header branch = structured if/else. Both arms converge
             // on the join block, which the parent emits after the arms.
             let join = common_join(program, *true_block, *false_block);
-            out.push_str(&format!("if {} {{\n", bop_str!(*cond, consts_b)));
+            out.push_str(&format!("if {} {{\n", bop_str!(*cond, consts)));
             emit_seq(out, env, *true_block, hdr, join, emitted);
             // skip an `else` that would be empty: bare else-block with
             // no instructions jumping straight to the join. The block
@@ -1025,7 +1102,7 @@ fn emit_loop(
     body: BlockId,
     emitted: &mut [bool],
 ) {
-    let (program, alloc, consts_i, consts_b, consts_f, _consts_s, _uses_handles) = env;
+    let (program, alloc, consts, _uses_handles) = env;
     if !is_loop_header(program, h) {
         panic!("structured codegen: Branch in block {h} is not a loop header");
     }
@@ -1048,22 +1125,21 @@ fn emit_loop(
     // bare Less alone in the header. Literal float bounds no longer load
     // in the header — the lowerer's loop-invariant load hoist relocates
     // them to the pre-header — so fwhile_02's shape reaches this arm as
-    // a lone Less too, declined by the operand checks alone). Both the
-    // physical
-    // float pool AND the const-float map are checked — a folded float
-    // operand's layer-B id is outside every mint range. The fallback
-    // emits the Less through emit_instr, whose float arm is correct —
-    // exactly what it exists for. Only Less needs the guard: Leq/Geq
-    // never ride the pretty arm, and bool/string cannot be `<` operands.
+    // a lone Less too, declined by the operand check alone). The check
+    // spans the physical float pool AND the const map's Float variant —
+    // a folded float operand's layer-B id is outside every mint range.
+    // The fallback emits the Less through emit_instr, whose float arm is
+    // correct — exactly what it exists for. Only Less needs the guard:
+    // Leq/Geq never ride the pretty arm, and bool/string cannot be `<`
+    // operands.
     let pretty = if block.instrs.is_empty() {
-        Some(bop_str!(cond, consts_b).to_string())
+        Some(bop_str!(cond, consts).to_string())
     } else if block.instrs.len() == 1 {
         match &block.instrs[0] {
             Instruction::Less { target, left, right }
                 if *target == cond && count_uses(program, cond) == 1
-                    && !is_float_reg(*left, alloc)
-                    && !consts_f.contains_key(left) =>
-                Some(format!("{} < {}", iop_str!(*left, consts_i), iop_str!(*right, consts_i))),
+                    && !is_float_operand(*left, consts, alloc) =>
+                Some(format!("{} < {}", iop_str!(*left, consts), iop_str!(*right, consts))),
             _ => None,
         }
     } else { None };
@@ -1079,7 +1155,7 @@ fn emit_loop(
         // surprising CFG degrades to correct-but-ugly, not wrong.
         out.push_str("loop {\n");
         for i in &block.instrs { emit_instr(out, env, i); }
-        out.push_str(&format!("if {} {{\n", bop_str!(cond, consts_b)));
+        out.push_str(&format!("if {} {{\n", bop_str!(cond, consts)));
         emit_seq(out, env, body, Some(h), None, emitted);
         out.push_str("    } else {\n");
         out.push_str("        break;\n");
@@ -1090,10 +1166,7 @@ fn emit_loop(
 pub fn generate_rust_code(
     program: &IrProgram,
     alloc: &AllocInfo,
-    consts_i: &HashMap<RegId, i64>,
-    consts_b: &HashMap<RegId, bool>,
-    consts_f: &HashMap<RegId, f64>,
-    consts_s: &HashMap<RegId, String>,
+    consts: &HashMap<RegId, ConstVal>,
 ) -> String {
     // AllocInfo is a named tuple of pool counts + range bases — pull out
     // every value once up front; emission below only reads these.
@@ -1149,7 +1222,7 @@ pub fn generate_rust_code(
     for r in tbbase..tbbase + n_tb { emit_table_decl(&mut out, alloc, r as RegId, uses_handles, &fast_phys); }
     out.push_str("    let mut tables = Vec::<Box<Table>>::with_capacity(128);\n\n");
 
-    let env: EmitEnv = (program, alloc, consts_i, consts_b, consts_f, consts_s, uses_handles);
+    let env: EmitEnv = (program, alloc, consts, uses_handles);
     let mut emitted = vec![false; program.blocks.len()];
     emit_seq(&mut out, env, 0, None, None, &mut emitted);
     let orphans: Vec<usize> = emitted.iter().enumerate()

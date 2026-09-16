@@ -119,6 +119,22 @@ pub const CONST_REG_BASE: RegId = 1 << 31;
 
 pub fn is_const_reg(r: RegId) -> bool { r >= CONST_REG_BASE }
 
+/// Layer B's VALUE domain — one map, four variants. The const layer is
+/// a single namespace (one remint timeline, Invariant 2), so its values
+/// ride ONE map keyed by the reminted ids: the variant is the value's
+/// kind, and a single lookup answers both "is this id const?" and "of
+/// what kind?". (History: four parallel maps keyed by the same ids —
+/// every pipeline signature carried four HashMaps and every membership
+/// question was four probes. The fold still works kind-locally inside
+/// propagate_constants; only the published artifact is unified.)
+#[derive(Debug, Clone)]
+pub enum ConstVal {
+    Int(i64),
+    Bool(bool),
+    Float(f64),
+    String(String),
+}
+
 #[derive(Debug, Clone)]
 pub enum Terminator {
     /// Unconditional jump to another block
