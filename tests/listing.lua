@@ -133,6 +133,13 @@ return {
         "uniqueid_01_no_shared_ids.lua",
         "fwhile_02_float_literal_bound.lua",
         "opt_hoist_01_phi_carried_literal.lua",
+        "logic_01_and_truth_table.lua",
+        "logic_02_or_truth_table.lua",
+        "logic_03_short_circuit_and.lua",
+        "logic_04_short_circuit_or.lua",
+        "logic_05_precedence_chain.lua",
+        "logic_06_value_binding.lua",
+        "logic_07_if_cond_and_or.lua",
     },
     negative = {
         "bug_10a.lua",
@@ -164,6 +171,9 @@ return {
         "feat_local_neg_arity_short.lua",
         "feat_local_neg_arity_long.lua",
         "feat_local_neg_dup_name.lua",
+        "logic_neg_and_int.lua",
+        "logic_neg_or_value_default.lua",
+        "logic_neg_while_cond.lua",
     },
     panic = {
         "bug_05a.lua",

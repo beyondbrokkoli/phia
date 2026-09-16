@@ -41,11 +41,17 @@ grid[0][2] = 102
 -- ERR: Mixed element types forbidden: bool_list[2] = 42
 
 
--- [4] LOGIC: 'not' only. No 'and'/'or'.
+-- [4] LOGIC: 'not', 'and', 'or'. Strictly Boolean operands; short-circuit
+-- evaluation is Lua-faithful (the guard idiom `i > 0 and t[i-1] > 0` never
+-- touches t[-1] when i == 0). Precedence: or < and < comparisons.
 local is_active = not false
 local num_cmp = (int_val < 20)
 local str_eq = (prefix == "Value: ")
--- ERR: 'and'/'or' missing: local compound = true and false
+local both = is_active and num_cmp
+local either = num_cmp or str_eq
+-- ERR: Boolean-only operands (no truthiness, no value-returning): local compound = 1 and true
+-- ERR: The Lua default-value idiom is refused: local fallback = false or 5
+-- ERR: Not yet allowed in a while condition (bind to a local first): while a and b do end
 -- ERR: Relational ops (<, >) forbidden on strings: local str_cmp = (prefix < suffix)
 
 
@@ -79,6 +85,8 @@ print(
     int_val,
     trunc_div,
     is_active,
+    both,
+    either,
     prefix .. suffix,
     grid[0][2],
     missing_num,

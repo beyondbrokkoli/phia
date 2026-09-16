@@ -240,6 +240,21 @@ impl IrLowerer {
                 });
             }
             Stmt::While { condition, body } => {
+                // and/or restriction (milestone scope): the desugar puts
+                // the loop's real condition branch MID-LOOP, giving the
+                // loop two exits — the structured codegen only walks a
+                // header's true edge into the body, so the const arm of
+                // the chain becomes an orphan and the build dies with
+                // "blocks never reached". Honest fix = loop-exit break
+                // support (documented follow-up); until then, refuse
+                // with a clear message instead of the orphan panic.
+                if expr_has_and_or(condition) {
+                    panic!(
+                        "Lowerer: 'and'/'or' in a while condition is not yet supported — \
+                         bind it to a local first (loops compile to single-exit shapes)"
+                    );
+                }
+
                 let pre_header = self.current_block;
 
                 // --- Literal bound materialization --------------------------------
@@ -590,6 +605,52 @@ impl IrLowerer {
                 self.emit(Instruction::GetTable { target: reg, table: t_reg, key: i_reg, ty: ret_ty.clone() });
                 (reg, ret_ty)
             }
+            // Short-circuit and/or, desugared to the structured if-shape: the
+            // right operand lowers INSIDE the arm that reaches it — that is the
+            // whole semantics (a panicking right side must never evaluate when
+            // the left decides: `i > 0 and t[i-1] > 0`). Mint then/else/join
+            // consecutively BEFORE filling arms (the Stmt::If idiom — common_join
+            // in the backend relies on joins being the minimal common id above
+            // both arms). No scope work: expressions cannot mutate variables.
+            Expr::BinaryOp { op: op @ (BinOp::And | BinOp::Or), left, right } => {
+                let (l_reg, _) = self.lower_expr(left, None); // checker: Boolean
+                let then_block = self.new_block();
+                let else_block = self.new_block();
+                let join_block = self.new_block();
+                self.terminate(Terminator::Branch {
+                    cond: l_reg, true_block: then_block, false_block: else_block,
+                });
+                // and: a true evaluates b (then arm), a false short-circuits to false.
+                // or:  a false evaluates b (else arm), a true short-circuits to true.
+                let and_op = matches!(op, BinOp::And);
+                let (value_block, const_block, short_val) =
+                    if and_op { (then_block, else_block, false) } else { (else_block, then_block, true) };
+
+                self.current_block = value_block;
+                let (v_reg, _) = self.lower_expr(right, None); // fresh reg; may itself contain and/or
+                let value_end = self.current_block;
+                self.terminate(Terminator::Jump(join_block));
+
+                self.current_block = const_block;
+                let c_reg = self.next_reg();
+                self.emit(Instruction::LoadBool { target: c_reg, val: short_val });
+                let const_end = const_block;
+                self.terminate(Terminator::Jump(join_block));
+
+                self.current_block = join_block;
+                // phi args in (then_end, else_end) order, the Stmt::If convention
+                let (t_end, t_reg, e_end, e_reg) = if and_op {
+                    (value_end, v_reg, const_end, c_reg)
+                } else {
+                    (const_end, c_reg, value_end, v_reg)
+                };
+                self.emit(Instruction::Phi {
+                    target: reg,
+                    ty: StaticType::Boolean,
+                    args: vec![(t_end, t_reg), (e_end, e_reg)],
+                });
+                (reg, StaticType::Boolean)
+            }
             Expr::BinaryOp { op, left, right } => {
                 let (l_reg, l_ty) = self.lower_expr(left, None);
                 let (r_reg, r_ty) = self.lower_expr(right, None);
@@ -629,6 +690,8 @@ impl IrLowerer {
                     }
                     BinOp::Concat =>
                         self.emit(Instruction::Concat { target: reg, left: l_reg, right: r_reg }),
+                    // intercepted by the dedicated short-circuit arm above
+                    BinOp::And | BinOp::Or => unreachable!(),
                 }
                 // The checker guarantees same-type numeric operands, so the
                 // static result type follows either operand. The IR Add/Sub
@@ -667,6 +730,21 @@ impl IrLowerer {
                 }
             }
         }
+    }
+}
+
+// Does this expression contain an and/or anywhere? The while-condition
+// gate needs the whole tree (an and/or hiding in an index sub-expression
+// desugars just as mid-loop as a top-level one).
+fn expr_has_and_or(expr: &Expr) -> bool {
+    match expr {
+        Expr::BinaryOp { op, left, right } =>
+            matches!(op, BinOp::And | BinOp::Or)
+                || expr_has_and_or(left) || expr_has_and_or(right),
+        Expr::UnaryOp { expr, .. } => expr_has_and_or(expr),
+        Expr::TableIndex { table, index } =>
+            expr_has_and_or(table) || expr_has_and_or(index),
+        _ => false,
     }
 }
 

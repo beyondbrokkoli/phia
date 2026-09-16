@@ -48,6 +48,10 @@ pub enum Token<'a> {
     While,
     #[token("not")]
     Not,
+    #[token("and")]
+    And,
+    #[token("or")]
+    Or,
     #[token("+")]
     Plus,
     #[token("-")]

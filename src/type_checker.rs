@@ -387,6 +387,32 @@ impl TypeChecker {
                     (Ty::Float, Ty::Float) => Ty::Float,
                     (Ty::Integer, Ty::Float) | (Ty::Float, Ty::Integer) =>
                         panic!("Type Error: Binary operations do not support mixed Integer and Float"),
+                    // and/or: strictly Boolean on both sides — a pinned
+                    // divergence from Lua's any-type truthiness and
+                    // value-returning semantics (the Lua `x or default`
+                    // idiom is a build error here). Short-circuit
+                    // evaluation IS Lua-faithful (the lowerer desugars to
+                    // the if-shape). These arms precede the unguarded Var
+                    // arms below: an and/or operand must bind Boolean,
+                    // never adopt a numeric sibling's type.
+                    (Ty::Boolean, Ty::Boolean) if matches!(op, BinOp::And | BinOp::Or) => Ty::Boolean,
+                    (Ty::Var(_), Ty::Boolean) if matches!(op, BinOp::And | BinOp::Or) => {
+                        if let Ty::Var(v) = left_type { self.bind(v, &Ty::Boolean); }
+                        Ty::Boolean
+                    }
+                    (Ty::Boolean, Ty::Var(_)) if matches!(op, BinOp::And | BinOp::Or) => {
+                        if let Ty::Var(v) = right_type { self.bind(v, &Ty::Boolean); }
+                        Ty::Boolean
+                    }
+                    (Ty::Var(_), Ty::Var(_)) if matches!(op, BinOp::And | BinOp::Or) => {
+                        // both deferred (e.g. two bool-table reads): each USE fixes Boolean
+                        if let Ty::Var(v) = left_type { self.bind(v, &Ty::Boolean); }
+                        if let Ty::Var(v) = right_type { self.bind(v, &Ty::Boolean); }
+                        Ty::Boolean
+                    }
+                    // any other and/or pairing: reject with the milestone's own message
+                    _ if matches!(op, BinOp::And | BinOp::Or) =>
+                        panic!("Type Error: 'and'/'or' require Boolean operands on both sides"),
                     (Ty::Var(_), Ty::Integer | Ty::Float | Ty::String) => {
                         let t = right_type.clone();
                         if let Ty::Var(v) = left_type { self.bind(v, &t); }
@@ -439,6 +465,7 @@ impl TypeChecker {
                     BinOp::Equal | BinOp::NotEqual
                         if matches!(operand_ty, Ty::Integer | Ty::Float | Ty::Boolean | Ty::String) =>
                         Ty::Boolean,
+                    BinOp::And | BinOp::Or => Ty::Boolean,
                     // comparisons on non-numeric operands (e.g. tables)
                     _ => panic!("Type Error: comparisons require numeric operands"),
                 }

@@ -206,10 +206,40 @@ impl<'a> Parser<'a> {
     // --- Expression Parsing (Recursive Descent with Precedence) ---
 
     pub fn parse_expr(&mut self) -> Expr {
-        self.parse_comparison()
+        self.parse_or()
     }
 
-    // Lowest precedence: comparisons (all non-chaining, like Lua)
+    // Lowest precedence: or (left-associative, like Lua)
+    fn parse_or(&mut self) -> Expr {
+        let mut left = self.parse_and();
+        while let Some(Token::Or) = self.tokens.peek() {
+            self.tokens.next(); // consume 'or'
+            let right = self.parse_and();
+            left = Expr::BinaryOp {
+                op: BinOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        left
+    }
+
+    // Next precedence: and
+    fn parse_and(&mut self) -> Expr {
+        let mut left = self.parse_comparison();
+        while let Some(Token::And) = self.tokens.peek() {
+            self.tokens.next(); // consume 'and'
+            let right = self.parse_comparison();
+            left = Expr::BinaryOp {
+                op: BinOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        left
+    }
+
+    // Next precedence: comparisons (all non-chaining, like Lua)
     fn parse_comparison(&mut self) -> Expr {
         let left = self.parse_concat();
 
