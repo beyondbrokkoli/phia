@@ -240,21 +240,6 @@ impl IrLowerer {
                 });
             }
             Stmt::While { condition, body } => {
-                // and/or restriction (milestone scope): the desugar puts
-                // the loop's real condition branch MID-LOOP, giving the
-                // loop two exits — the structured codegen only walks a
-                // header's true edge into the body, so the const arm of
-                // the chain becomes an orphan and the build dies with
-                // "blocks never reached". Honest fix = loop-exit break
-                // support (documented follow-up); until then, refuse
-                // with a clear message instead of the orphan panic.
-                if expr_has_and_or(condition) {
-                    panic!(
-                        "Lowerer: 'and'/'or' in a while condition is not yet supported — \
-                         bind it to a local first (loops compile to single-exit shapes)"
-                    );
-                }
-
                 let pre_header = self.current_block;
 
                 // --- Literal bound materialization --------------------------------
@@ -730,21 +715,6 @@ impl IrLowerer {
                 }
             }
         }
-    }
-}
-
-// Does this expression contain an and/or anywhere? The while-condition
-// gate needs the whole tree (an and/or hiding in an index sub-expression
-// desugars just as mid-loop as a top-level one).
-fn expr_has_and_or(expr: &Expr) -> bool {
-    match expr {
-        Expr::BinaryOp { op, left, right } =>
-            matches!(op, BinOp::And | BinOp::Or)
-                || expr_has_and_or(left) || expr_has_and_or(right),
-        Expr::UnaryOp { expr, .. } => expr_has_and_or(expr),
-        Expr::TableIndex { table, index } =>
-            expr_has_and_or(table) || expr_has_and_or(index),
-        _ => false,
     }
 }
 

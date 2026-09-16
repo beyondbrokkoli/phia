@@ -23,7 +23,6 @@ Phia is an ahead-of-time compiler for a statically typed Lua subset.
 * **Mixed-Type Tables**: Every table is monomorphic (i64, f64, string, boolean, or table elements — never a mix).
 
 #### Types & Operators
-* **Logical Operators in Loop Conditions**: `and`/`or` work in `if` conditions, assignments, and arbitrarily nested expressions (strictly Boolean operands — no truthiness, no value-returning, so the Lua `x or default` idiom is a build error — with Lua-faithful short-circuit evaluation), but a `while` condition must currently be and/or-free; bind the chain to a local first.
 * **Numeric Coercion**: Mixed integer/float arithmetic and implicit string-to-number conversions are strict build errors.
 * **Integer Division**: The `/` operator performs truncating division on integers, whereas standard Lua always yields a float.
 * **String Ordering**: Relational operators (`<`, `>`, etc.) cannot be used to compare strings.
@@ -84,7 +83,6 @@ local both = is_active and num_cmp
 local either = num_cmp or str_eq
 -- ERR: Boolean-only operands (no truthiness, no value-returning): local compound = 1 and true
 -- ERR: The Lua default-value idiom is refused: local fallback = false or 5
--- ERR: Not yet allowed in a while condition (bind to a local first): while a and b do end
 -- ERR: Relational ops (<, >) forbidden on strings: local str_cmp = (prefix < suffix)
 
 

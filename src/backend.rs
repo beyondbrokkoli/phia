@@ -1014,16 +1014,78 @@ fn common_join(program: &IrProgram, tb: BlockId, fb: BlockId) -> Option<BlockId>
         .min()
 }
 
+/// The natural loop of header `h`: `h` plus every block that can reach
+/// `h`'s back edge without passing through `h` (pred-walk from the back
+/// edge, stopping at `h`). The loop's condition chain — the desugared
+/// and/or blocks sitting between the header and the body — is inside by
+/// construction: it reaches the body, which reaches the back edge.
+fn natural_loop_region(program: &IrProgram, h: BlockId) -> HashSet<BlockId> {
+    let targets = |t: &Option<Terminator>| -> Vec<BlockId> {
+        match t {
+            Some(Terminator::Jump(t)) => vec![*t],
+            Some(Terminator::Branch { true_block, false_block, .. }) => vec![*true_block, *false_block],
+            _ => vec![],
+        }
+    };
+    let mut region = HashSet::from([h]);
+    for (id, block) in program.blocks.iter().enumerate() {
+        // back edge: a later block targeting h that h dominates (the
+        // is_loop_header definition; a Jump-only loop tail is the shape
+        // this lowerer mints)
+        if targets(&block.terminator).contains(&h) && dominates(program, h, id) {
+            let mut stack = vec![id];
+            while let Some(b) = stack.pop() {
+                if region.insert(b) {
+                    for (p, pblk) in program.blocks.iter().enumerate() {
+                        if targets(&pblk.terminator).contains(&b) { stack.push(p); }
+                    }
+                }
+            }
+        }
+    }
+    region
+}
+
+/// The loop's condition gate: the unique branch inside the region whose
+/// false edge leaves it. For a plain `while c` this is the header's own
+/// Branch; for `while a and b` the header branches on `a` and the gate
+/// sits at the end of the condition chain, branching on the join phi
+/// (true -> body, false -> exit). Nothing else in this language branches
+/// to a loop's exit, so a count other than one is a malformed CFG.
+fn loop_gate(
+    program: &IrProgram,
+    region: &HashSet<BlockId>,
+    h: BlockId,
+) -> (BlockId, RegId, BlockId, BlockId) {
+    let mut gates: Vec<(BlockId, RegId, BlockId, BlockId)> = Vec::new();
+    for &b in region {
+        if let Some(Terminator::Branch { cond, true_block, false_block }) = &program.blocks[b].terminator
+            && !region.contains(false_block)
+        {
+            gates.push((b, *cond, *true_block, *false_block));
+        }
+    }
+    match gates.as_slice() {
+        [(g, c, t, f)] => (*g, *c, *t, *f),
+        _ => panic!("structured codegen: loop at {h} has {} exit branches, expected exactly 1", gates.len()),
+    }
+}
+
 /// Emit block `b` and everything that follows it, staying inside the loop
 /// whose header is `hdr` (a back edge to `hdr` closes the loop body).
 /// `stop` is the join block of an enclosing structured if: reaching it
 /// ends this arm — the parent emits the join after both arms.
+/// `gate` is the enclosing loop's exit block while walking a condition
+/// chain: the branch whose false edge is the gate is the chain's last
+/// block, emitted as `if cond { body } else { break; }` — the caller's
+/// `loop {` wrapper (emit_loop) makes the break close the iteration.
 fn emit_seq(
     out: &mut String,
     env: EmitEnv,
     b: BlockId,
     hdr: Option<BlockId>,
     stop: Option<BlockId>,
+    gate: Option<BlockId>,
     emitted: &mut [bool],
 ) {
     let (program, _alloc, consts, _uses_handles) = env;
@@ -1047,29 +1109,39 @@ fn emit_seq(
                 panic!("structured codegen: stray backward jump {b} -> {t}");
             } else if is_loop_header(program, *t) {
                 // forward jump into a loop header = entering a loop
-                let (cond, tb, fb) = match &program.blocks[*t].terminator {
-                    Some(Terminator::Branch { cond, true_block, false_block }) =>
-                        (*cond, *true_block, *false_block),
-                    _ => panic!("structured codegen: block {t} has a back edge but no Branch"),
-                };
-                emit_loop(out, env, *t, cond, tb, emitted);
-                emit_seq(out, env, fb, hdr, stop, emitted);
+                let after = emit_loop(out, env, *t, emitted);
+                emit_seq(out, env, after, hdr, stop, gate, emitted);
             } else {
-                emit_seq(out, env, *t, hdr, stop, emitted);
+                emit_seq(out, env, *t, hdr, stop, gate, emitted);
             }
         }
-        Some(Terminator::Branch { cond, true_block, false_block }) if is_loop_header(program, b) => {
+        Some(Terminator::Branch { cond, true_block, false_block })
+            if is_loop_header(program, b) && gate.is_none() =>
+        {
             // a header reached directly (not via its pre-header Jump):
-            // same handling as the Jump-into-header case
-            emit_loop(out, env, b, *cond, *true_block, emitted);
-            emit_seq(out, env, *false_block, hdr, stop, emitted);
+            // same handling as the Jump-into-header case. Never fires
+            // inside a condition chain — the chain walk entered that
+            // header already (gate.is_some()), so this Branch is the
+            // chain's first if, not a loop entry.
+            let after = emit_loop(out, env, b, emitted);
+            emit_seq(out, env, after, hdr, stop, gate, emitted);
         }
         Some(Terminator::Branch { cond, true_block, false_block }) => {
+            // the tail of an and/or condition chain: the false edge is
+            // the loop's exit. The true arm is the body (it ends at the
+            // back edge); the false arm breaks — emit_loop's caller
+            // continues from the exit after the loop.
+            if Some(*false_block) == gate {
+                out.push_str(&format!("if {} {{\n", bop_str!(*cond, consts)));
+                emit_seq(out, env, *true_block, hdr, stop, None, emitted);
+                out.push_str("    } else {\n        break;\n    }\n");
+                return;
+            }
             // non-header branch = structured if/else. Both arms converge
             // on the join block, which the parent emits after the arms.
             let join = common_join(program, *true_block, *false_block);
             out.push_str(&format!("if {} {{\n", bop_str!(*cond, consts)));
-            emit_seq(out, env, *true_block, hdr, join, emitted);
+            emit_seq(out, env, *true_block, hdr, join, gate, emitted);
             // skip an `else` that would be empty: bare else-block with
             // no instructions jumping straight to the join. The block
             // is still CONSUMED — mark it emitted, or the orphan check
@@ -1082,31 +1154,57 @@ fn emit_seq(
                             Some(Terminator::Jump(t)) if Some(*t) == join);
             if !trivial_else {
                 out.push_str("} else {\n");
-                emit_seq(out, env, *false_block, hdr, join, emitted);
+                emit_seq(out, env, *false_block, hdr, join, gate, emitted);
             } else {
                 emitted[*false_block] = true;
             }
             out.push_str("}\n");
             if let Some(j) = join {
-                emit_seq(out, env, j, hdr, stop, emitted);
+                emit_seq(out, env, j, hdr, stop, gate, emitted);
             }
         }
     }
 }
 
+/// Emit a whole loop. Derives the loop's condition gate from the natural
+/// loop region (the unique in-region branch whose false edge exits it)
+/// and returns the after-loop continuation block — the block emit_loop's
+/// caller emits next, outside the loop.
+///
+/// Direct gate (every loop without and/or in its condition): the gate IS
+/// the header's Branch, byte-identical to the historical emission.
+///
+/// Condition chain (`while a and b`): the header branches on `a`, the
+/// chain's blocks form structured ifs inside the region, and the gate
+/// sits at the chain's end (the join, branching on the merged phi). The
+/// emission is `loop { <chain as if/else> ; if <gate> { body } else {
+/// break; } }` — the condition re-evaluates every iteration, exactly
+/// like a while header does.
 fn emit_loop(
     out: &mut String,
     env: EmitEnv,
     h: BlockId,
-    cond: RegId,
-    body: BlockId,
     emitted: &mut [bool],
-) {
+) -> BlockId {
     let (program, alloc, consts, _uses_handles) = env;
     if !is_loop_header(program, h) {
         panic!("structured codegen: Branch in block {h} is not a loop header");
     }
     if emitted[h] { panic!("structured codegen: header {h} reached twice"); }
+
+    let region = natural_loop_region(program, h);
+    let (gate_b, cond, body, exit) = loop_gate(program, &region, h);
+
+    if gate_b != h {
+        // Condition chain: the header's own Branch is the chain's first
+        // if; emit_seq walks the chain (gate = the exit block marks the
+        // chain's tail) and the body inside one Rust loop.
+        out.push_str("loop {\n");
+        emit_seq(out, env, h, Some(h), None, Some(exit), emitted);
+        out.push_str("}\n");
+        return exit;
+    }
+
     emitted[h] = true;
 
     let block = &program.blocks[h];
@@ -1146,7 +1244,7 @@ fn emit_loop(
 
     if let Some(c) = pretty {
         out.push_str(&format!("while {c} {{\n"));
-        emit_seq(out, env, body, Some(h), None, emitted);
+        emit_seq(out, env, body, Some(h), None, None, emitted);
         out.push_str("}\n");
     } else {
         // General fallback: everything in the header runs every
@@ -1156,11 +1254,12 @@ fn emit_loop(
         out.push_str("loop {\n");
         for i in &block.instrs { emit_instr(out, env, i); }
         out.push_str(&format!("if {} {{\n", bop_str!(cond, consts)));
-        emit_seq(out, env, body, Some(h), None, emitted);
+        emit_seq(out, env, body, Some(h), None, None, emitted);
         out.push_str("    } else {\n");
         out.push_str("        break;\n");
         out.push_str("    }\n}\n");
     }
+    exit
 }
 
 pub fn generate_rust_code(
@@ -1224,7 +1323,7 @@ pub fn generate_rust_code(
 
     let env: EmitEnv = (program, alloc, consts, uses_handles);
     let mut emitted = vec![false; program.blocks.len()];
-    emit_seq(&mut out, env, 0, None, None, &mut emitted);
+    emit_seq(&mut out, env, 0, None, None, None, &mut emitted);
     let orphans: Vec<usize> = emitted.iter().enumerate()
         .filter(|(_, e)| !**e).map(|(i, _)| i).collect();
     if !orphans.is_empty() {

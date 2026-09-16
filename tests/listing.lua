@@ -140,6 +140,10 @@ return {
         "logic_05_precedence_chain.lua",
         "logic_06_value_binding.lua",
         "logic_07_if_cond_and_or.lua",
+        "logic_08_while_cond_and.lua",
+        "logic_09_while_cond_or.lua",
+        "logic_10_while_cond_nested.lua",
+        "logic_11_while_cond_not_btab.lua",
     },
     negative = {
         "bug_10a.lua",
@@ -173,7 +177,6 @@ return {
         "feat_local_neg_dup_name.lua",
         "logic_neg_and_int.lua",
         "logic_neg_or_value_default.lua",
-        "logic_neg_while_cond.lua",
     },
     panic = {
         "bug_05a.lua",
