@@ -51,7 +51,7 @@ class PhiaLuaGenerator:
         return self.gen_literal(typ)
 
     # --- Expressions ---
-    def gen_expr(self, typ, allow_table_read=True):
+    def gen_expr(self, typ, allow_table_read=True, depth=0):
         """Generates a valid type-safe expression."""
         # 20% chance to read from a table, if allowed and a table exists
         valid_tables = [t for t, t_typ in self.tables.items() if t_typ == typ]
@@ -82,17 +82,32 @@ class PhiaLuaGenerator:
             return self.get_value('str')
 
         elif typ == 'bool':
-            k = self.r.randrange(3)
+            # 0: Unary, 1: Eq/Neq, 2: Relational, 3: Logical (and/or)
+            opts = [1, 2]
+            # Allow recursion for logical operators and unaries if depth isn't too high
+            if depth < 3:
+                opts.extend([0, 3])
+
+            k = self.r.choice(opts)
+
             if k == 0: # Unary
-                return f"(not {self.get_value('bool')})"
+                return f"(not {self.gen_expr('bool', allow_table_read, depth + 1)})"
+
             elif k == 1: # Eq/Neq (Any type)
                 cmp_typ = self.r.choice(['int', 'float', 'str', 'bool'])
                 op = self.r.choice(['==', '~='])
                 return f"({self.get_value(cmp_typ)} {op} {self.get_value(cmp_typ)})"
-            else: # Relational (Numbers only)
+
+            elif k == 2: # Relational (Numbers only)
                 cmp_typ = self.r.choice(['int', 'float'])
                 op = self.r.choice(['<', '>', '<=', '>='])
                 return f"({self.get_value(cmp_typ)} {op} {self.get_value(cmp_typ)})"
+
+            elif k == 3: # Logical AND / OR
+                op = self.r.choice(['and', 'or'])
+                left = self.gen_expr('bool', allow_table_read, depth + 1)
+                right = self.gen_expr('bool', allow_table_read, depth + 1)
+                return f"({left} {op} {right})"
 
     # --- Statements ---
     def gen_local_decl(self):
@@ -160,7 +175,11 @@ class PhiaLuaGenerator:
         v_iter = self.fresh_var()
         limit = self.r.randint(2, 5)
         self.emit(f"local {v_iter} = 0")
-        self.emit(f"while {v_iter} < {limit} do")
+
+        # Inject spicy combinatorics into the loop condition
+        # while keeping the v_iter bound to prevent fuzzer hangs.
+        spicy_cond = self.gen_expr('bool')
+        self.emit(f"while ({v_iter} < {limit}) and ({spicy_cond}) do")
         self.indent_level += 1
 
         state = self.push_scope()
@@ -218,7 +237,8 @@ class PhiaLuaGenerator:
 
         return "\n".join(self.lines) + "\n", sink_types
 
+
 # Quick test if run directly
 if __name__ == "__main__":
     gen = PhiaLuaGenerator(seed=42)
-    print(gen.generate())
+    print(gen.generate()[0])
