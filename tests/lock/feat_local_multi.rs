@@ -34,11 +34,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r3 };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = 1;
+        *t.as_int_mut().get_unchecked_mut(idx) = 1;
     }
     let k = 0;
     if k < 0 {
@@ -46,11 +46,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r6 };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 1.5;
+        *t.as_float_mut().get_unchecked_mut(idx) = 1.5;
     }
     let k = 0;
     if k < 0 {
@@ -58,11 +58,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r7 };
-    if idx >= t.sarray.len() {
-        t.sarray.resize(idx + 1, String::new());
+    if idx >= t.as_string_mut().len() {
+        t.as_string_mut().resize(idx + 1, String::new());
     }
     unsafe {
-        *t.sarray.get_unchecked_mut(idx) = "left".to_string();
+        *t.as_string_mut().get_unchecked_mut(idx) = "left".to_string();
     }
     let k = 0;
     if k < 0 {
@@ -70,8 +70,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &*t_r3 };
-    i_r0 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    i_r0 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -81,8 +81,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &*t_r6 };
-    f_r5 = if idx < t.farray.len() {
-        unsafe { *t.farray.get_unchecked(idx) }
+    f_r5 = if idx < t.as_float().len() {
+        unsafe { *t.as_float().get_unchecked(idx) }
     } else {
         0.0
     };
@@ -92,8 +92,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &*t_r7 };
-    s_r4 = if idx < t.sarray.len() {
-        unsafe { t.sarray.get_unchecked(idx).clone() }
+    s_r4 = if idx < t.as_string().len() {
+        unsafe { t.as_string().get_unchecked(idx).clone() }
     } else {
         String::new()
     };

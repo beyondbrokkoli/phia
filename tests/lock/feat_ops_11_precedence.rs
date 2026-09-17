@@ -56,11 +56,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r28 };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r2;
+        *t.as_int_mut().get_unchecked_mut(idx) = i_r2;
     }
     i_r2 = i_r5 * 100;
     i_r5 = i_r2 + i_r6;
@@ -70,11 +70,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r28 };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r5;
+        *t.as_int_mut().get_unchecked_mut(idx) = i_r5;
     }
     if b_r24 {
         i_r5 = 1;
@@ -93,11 +93,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r28 };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = i_r6;
+        *t.as_int_mut().get_unchecked_mut(idx) = i_r6;
     }
     return tables;
 }

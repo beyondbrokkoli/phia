@@ -19,12 +19,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 8;
     if lim > 0 {
         let t = unsafe { &mut *t_r6 };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
-    len_r6 = unsafe { (*t_r6).farray.len() };
-    p_r6 = unsafe { (*t_r6).farray.as_mut_ptr() };
+    len_r6 = unsafe { (*t_r6).as_float_mut().len() };
+    p_r6 = unsafe { (*t_r6).as_float_mut().as_mut_ptr() };
     i_r0 = 0;
     loop {
         b_r2 = i_r0 < 8;
@@ -48,12 +48,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 8;
     if lim > 0 {
         let t = unsafe { &mut *t_r6 };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
-    len_r6 = unsafe { (*t_r6).farray.len() };
-    p_r6 = unsafe { (*t_r6).farray.as_mut_ptr() };
+    len_r6 = unsafe { (*t_r6).as_float_mut().len() };
+    p_r6 = unsafe { (*t_r6).as_float_mut().as_mut_ptr() };
     f_r4 = 0.0;
     i_r0 = 0;
     loop {

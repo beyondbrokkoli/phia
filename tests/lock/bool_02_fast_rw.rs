@@ -20,12 +20,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 8;
     if lim > 0 {
         let t = unsafe { &mut *t_r12 };
-        if (lim as usize) > t.barray.len() {
-            t.barray.resize(lim as usize, false);
+        if (lim as usize) > t.as_bool_mut().len() {
+            t.as_bool_mut().resize(lim as usize, false);
         }
     }
-    len_r12 = unsafe { (*t_r12).barray.len() };
-    p_r12 = unsafe { (*t_r12).barray.as_mut_ptr() };
+    len_r12 = unsafe { (*t_r12).as_bool_mut().len() };
+    p_r12 = unsafe { (*t_r12).as_bool_mut().as_mut_ptr() };
     i_r0 = 0;
     loop {
         b_r5 = i_r0 < 8;
@@ -51,12 +51,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 8;
     if lim > 0 {
         let t = unsafe { &mut *t_r12 };
-        if (lim as usize) > t.barray.len() {
-            t.barray.resize(lim as usize, false);
+        if (lim as usize) > t.as_bool_mut().len() {
+            t.as_bool_mut().resize(lim as usize, false);
         }
     }
-    len_r12 = unsafe { (*t_r12).barray.len() };
-    p_r12 = unsafe { (*t_r12).barray.as_mut_ptr() };
+    len_r12 = unsafe { (*t_r12).as_bool_mut().len() };
+    p_r12 = unsafe { (*t_r12).as_bool_mut().as_mut_ptr() };
     i_r1 = 0;
     i_r0 = 0;
     loop {
@@ -87,8 +87,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &*t_r12 };
-    b_r6 = if idx < t.barray.len() {
-        unsafe { *t.barray.get_unchecked(idx) }
+    b_r6 = if idx < t.as_bool().len() {
+        unsafe { *t.as_bool().get_unchecked(idx) }
     } else {
         false
     };

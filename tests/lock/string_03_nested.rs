@@ -27,11 +27,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.sarray.len() {
-        t.sarray.resize(idx + 1, String::new());
+    if idx >= t.as_string_mut().len() {
+        t.as_string_mut().resize(idx + 1, String::new());
     }
     unsafe {
-        *t.sarray.get_unchecked_mut(idx) = "alpha".to_string();
+        *t.as_string_mut().get_unchecked_mut(idx) = "alpha".to_string();
     }
     let k = 1;
     if k < 0 {
@@ -45,11 +45,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.sarray.len() {
-        t.sarray.resize(idx + 1, String::new());
+    if idx >= t.as_string_mut().len() {
+        t.as_string_mut().resize(idx + 1, String::new());
     }
     unsafe {
-        *t.sarray.get_unchecked_mut(idx) = "beta".to_string();
+        *t.as_string_mut().get_unchecked_mut(idx) = "beta".to_string();
     }
     let k = 0;
     if k < 0 {
@@ -63,11 +63,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r2;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r2;
     }
     let k = 0;
     if k < 0 {
@@ -81,8 +81,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r3 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r3 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -98,8 +98,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r4 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r4 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -115,8 +115,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    s_r1 = if idx < t.sarray.len() {
-        unsafe { t.sarray.get_unchecked(idx).clone() }
+    s_r1 = if idx < t.as_string().len() {
+        unsafe { t.as_string().get_unchecked(idx).clone() }
     } else {
         String::new()
     };
@@ -124,16 +124,16 @@ pub fn run_baked() -> Vec<Box<Table>> {
         "{}\t{}\t{}\t{}\t{}",
         "nested",
         match tables.get((t_r0 - 1) as usize) {
-            Some(t) => format!("table#{}(len={})", t_r0, t.array.len()),
+            Some(t) => format!("table#{}(len={})", t_r0, t.as_int().len()),
             None => "nil".to_string(),
         },
         match tables.get((t_r3 - 1) as usize) {
-            Some(t) => format!("table#{}(len={})", t_r3, t.sarray.len()),
+            Some(t) => format!("table#{}(len={})", t_r3, t.as_string().len()),
             None => "nil".to_string(),
         },
         s_r1,
         match tables.get((t_r2 - 1) as usize) {
-            Some(t) => format!("table#{}(len={})", t_r2, t.sarray.len()),
+            Some(t) => format!("table#{}(len={})", t_r2, t.as_string().len()),
             None => "nil".to_string(),
         }
     );

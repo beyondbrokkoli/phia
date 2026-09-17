@@ -22,21 +22,21 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r4 };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.75;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.75;
     }
     let lim = 4;
     if lim > 0 {
         let t = unsafe { &mut *t_r4 };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
-    len_r4 = unsafe { (*t_r4).farray.len() };
-    p_r4 = unsafe { (*t_r4).farray.as_mut_ptr() };
+    len_r4 = unsafe { (*t_r4).as_float_mut().len() };
+    p_r4 = unsafe { (*t_r4).as_float_mut().as_mut_ptr() };
     i_r0 = 0;
     while i_r0 < 4 {
         let k = i_r0;

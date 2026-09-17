@@ -27,12 +27,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 2000;
     if lim > 0 {
         let t = unsafe { &mut *t_r10 };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
-    len_r10 = unsafe { (*t_r10).array.len() };
-    p_r10 = unsafe { (*t_r10).array.as_mut_ptr() };
+    len_r10 = unsafe { (*t_r10).as_int_mut().len() };
+    p_r10 = unsafe { (*t_r10).as_int_mut().as_mut_ptr() };
     i_r0 = 0;
     loop {
         b_r7 = i_r0 < 2000;
@@ -60,21 +60,21 @@ pub fn run_baked() -> Vec<Box<Table>> {
             let lim = 2000;
             if lim > 0 {
                 let t = unsafe { &mut *t_r10 };
-                if (lim as usize) > t.array.len() {
-                    t.array.resize(lim as usize, 0);
+                if (lim as usize) > t.as_int_mut().len() {
+                    t.as_int_mut().resize(lim as usize, 0);
                 }
             }
-            len_r10 = unsafe { (*t_r10).array.len() };
-            p_r10 = unsafe { (*t_r10).array.as_mut_ptr() };
+            len_r10 = unsafe { (*t_r10).as_int_mut().len() };
+            p_r10 = unsafe { (*t_r10).as_int_mut().as_mut_ptr() };
             let lim = 2002;
             if lim > 0 {
                 let t = unsafe { &mut *t_r11 };
-                if (lim as usize) > t.array.len() {
-                    t.array.resize(lim as usize, 0);
+                if (lim as usize) > t.as_int_mut().len() {
+                    t.as_int_mut().resize(lim as usize, 0);
                 }
             }
-            len_r11 = unsafe { (*t_r11).array.len() };
-            p_r11 = unsafe { (*t_r11).array.as_mut_ptr() };
+            len_r11 = unsafe { (*t_r11).as_int_mut().len() };
+            p_r11 = unsafe { (*t_r11).as_int_mut().as_mut_ptr() };
             i_r1 = 0;
             loop {
                 b_r7 = i_r1 < 2000;

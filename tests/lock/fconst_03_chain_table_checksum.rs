@@ -16,11 +16,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r0 };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.9000000000000001;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.9000000000000001;
     }
     return tables;
 }

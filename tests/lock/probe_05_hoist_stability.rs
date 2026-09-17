@@ -22,12 +22,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 4;
     if lim > 0 {
         let t = unsafe { &mut *t_r5 };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
-    len_r5 = unsafe { (*t_r5).array.len() };
-    p_r5 = unsafe { (*t_r5).array.as_mut_ptr() };
+    len_r5 = unsafe { (*t_r5).as_int_mut().len() };
+    p_r5 = unsafe { (*t_r5).as_int_mut().as_mut_ptr() };
     i_r0 = 0;
     while i_r0 < 4 {
         i_r1 = i_r0 + 100;
@@ -49,11 +49,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
         let idx = k as usize;
         let t = unsafe { &mut *t_r6 };
-        if idx >= t.array.len() {
-            t.array.resize(idx + 1, 0);
+        if idx >= t.as_int_mut().len() {
+            t.as_int_mut().resize(idx + 1, 0);
         }
         unsafe {
-            *t.array.get_unchecked_mut(idx) = 1;
+            *t.as_int_mut().get_unchecked_mut(idx) = 1;
         }
         let k = i_r0;
         if k < 0 {
@@ -68,9 +68,9 @@ pub fn run_baked() -> Vec<Box<Table>> {
             "{}\t{}\ttable(len={})\t{}\ttable(len={})",
             "iter",
             i_r0,
-            unsafe { (*t_r5).array.len() },
+            unsafe { (*t_r5).as_int().len() },
             i_r1,
-            unsafe { (*t_r6).array.len() }
+            unsafe { (*t_r6).as_int().len() }
         );
         i_r0 = i_r0 + 1;
     }

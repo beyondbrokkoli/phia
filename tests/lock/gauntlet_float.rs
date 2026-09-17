@@ -41,8 +41,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
     if t_r73 == 0 {
@@ -52,8 +52,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r73 = t.farray.len();
-    p_r73 = t.farray.as_mut_ptr();
+    len_r73 = t.as_float_mut().len();
+    p_r73 = t.as_float_mut().as_mut_ptr();
     f_r64 = 0.5;
     i_r0 = 0;
     loop {
@@ -92,11 +92,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r73;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r73;
     }
     let k = 0;
     if k < 0 {
@@ -110,8 +110,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r73 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r73 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -124,8 +124,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
     if t_r73 == 0 {
@@ -135,8 +135,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r73 = t.farray.len();
-    p_r73 = t.farray.as_mut_ptr();
+    len_r73 = t.as_float_mut().len();
+    p_r73 = t.as_float_mut().as_mut_ptr();
     i_r0 = 0;
     loop {
         b_r26 = i_r0 < 8;
@@ -175,11 +175,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     let k = 0;
     if k < 0 {
@@ -193,11 +193,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r73;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r73;
     }
     let k = 0;
     if k < 0 {
@@ -211,11 +211,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r50;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r50;
     }
     let k = 0;
     if k < 0 {
@@ -229,8 +229,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r50 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r50 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -246,8 +246,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r73 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r73 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -260,8 +260,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
     if t_r73 == 0 {
@@ -271,8 +271,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r73 = t.farray.len();
-    p_r73 = t.farray.as_mut_ptr();
+    len_r73 = t.as_float_mut().len();
+    p_r73 = t.as_float_mut().as_mut_ptr();
     i_r0 = 0;
     loop {
         b_r26 = i_r0 < 16;
@@ -304,8 +304,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r50 == 0 {
@@ -315,8 +315,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r50 = t.array.len();
-    p_r50 = t.array.as_mut_ptr();
+    len_r50 = t.as_int_mut().len();
+    p_r50 = t.as_int_mut().as_mut_ptr();
     i_r0 = 0;
     loop {
         b_r26 = i_r0 < 32;
@@ -348,8 +348,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r50 == 0 {
@@ -359,8 +359,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r50 = t.array.len();
-    p_r50 = t.array.as_mut_ptr();
+    len_r50 = t.as_int_mut().len();
+    p_r50 = t.as_int_mut().as_mut_ptr();
     i_r0 = 0;
     loop {
         b_r26 = i_r0 < 32;
@@ -383,8 +383,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     Some(t) => &mut **t,
                     None => panic!("Runtime Error: table is nil"),
                 };
-                if (lim as usize) > t.farray.len() {
-                    t.farray.resize(lim as usize, 0.0);
+                if (lim as usize) > t.as_float_mut().len() {
+                    t.as_float_mut().resize(lim as usize, 0.0);
                 }
             }
             if t_r73 == 0 {
@@ -394,8 +394,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            len_r73 = t.farray.len();
-            p_r73 = t.farray.as_mut_ptr();
+            len_r73 = t.as_float_mut().len();
+            p_r73 = t.as_float_mut().as_mut_ptr();
             i_r1 = 0;
             loop {
                 b_r26 = i_r1 < 1024;
@@ -430,8 +430,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r50 == 0 {
@@ -441,8 +441,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r50 = t.array.len();
-    p_r50 = t.array.as_mut_ptr();
+    len_r50 = t.as_int_mut().len();
+    p_r50 = t.as_int_mut().as_mut_ptr();
     f_r64 = 0.0;
     i_r2 = 0;
     loop {
@@ -466,8 +466,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     Some(t) => &mut **t,
                     None => panic!("Runtime Error: table is nil"),
                 };
-                if (lim as usize) > t.farray.len() {
-                    t.farray.resize(lim as usize, 0.0);
+                if (lim as usize) > t.as_float_mut().len() {
+                    t.as_float_mut().resize(lim as usize, 0.0);
                 }
             }
             if t_r73 == 0 {
@@ -477,8 +477,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            len_r73 = t.farray.len();
-            p_r73 = t.farray.as_mut_ptr();
+            len_r73 = t.as_float_mut().len();
+            p_r73 = t.as_float_mut().as_mut_ptr();
             i_r1 = 0;
             loop {
                 b_r26 = i_r1 < 1024;
@@ -517,11 +517,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r64;
+        *t.as_float_mut().get_unchecked_mut(idx) = f_r64;
     }
     tables.push(Box::new(Table::new()));
     t_r49 = tables.len() as i64;
@@ -534,8 +534,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r49 == 0 {
@@ -545,8 +545,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r49 = t.array.len();
-    p_r49 = t.array.as_mut_ptr();
+    len_r49 = t.as_int_mut().len();
+    p_r49 = t.as_int_mut().as_mut_ptr();
     i_r0 = 0;
     loop {
         b_r26 = i_r0 < 48;
@@ -579,8 +579,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
     if t_r74 == 0 {
@@ -590,8 +590,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r74 = t.farray.len();
-    p_r74 = t.farray.as_mut_ptr();
+    len_r74 = t.as_float_mut().len();
+    p_r74 = t.as_float_mut().as_mut_ptr();
     i_r1 = 0;
     loop {
         b_r26 = i_r1 < 48;
@@ -626,11 +626,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = 7;
+        *t.as_int_mut().get_unchecked_mut(idx) = 7;
     }
     tables.push(Box::new(Table::new()));
     t_r51 = tables.len() as i64;
@@ -648,11 +648,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     let k = 0;
     if k < 0 {
@@ -666,11 +666,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r74;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r74;
     }
     let k = 0;
     if k < 0 {
@@ -684,8 +684,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    i_r1 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    i_r1 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -706,8 +706,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r74 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r74 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -723,11 +723,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            if idx >= t.farray.len() {
-                t.farray.resize(idx + 1, 0.0);
+            if idx >= t.as_float_mut().len() {
+                t.as_float_mut().resize(idx + 1, 0.0);
             }
             unsafe {
-                *t.farray.get_unchecked_mut(idx) = 0.75;
+                *t.as_float_mut().get_unchecked_mut(idx) = 0.75;
             }
             i_r1 = i_r1 + 1;
         } else {
@@ -750,11 +750,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     let k = 0;
     if k < 0 {
@@ -768,11 +768,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r74;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r74;
     }
     i_r1 = 100;
     loop {
@@ -790,8 +790,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r74 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r74 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -807,11 +807,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            if idx >= t.farray.len() {
-                t.farray.resize(idx + 1, 0.0);
+            if idx >= t.as_float_mut().len() {
+                t.as_float_mut().resize(idx + 1, 0.0);
             }
             unsafe {
-                *t.farray.get_unchecked_mut(idx) = 0.5;
+                *t.as_float_mut().get_unchecked_mut(idx) = 0.5;
             }
             i_r1 = i_r1 + 1;
         } else {
@@ -834,11 +834,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     let k = 0;
     if k < 0 {
@@ -852,11 +852,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r74;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r74;
     }
     tables.push(Box::new(Table::new_float()));
     t_r74 = tables.len() as i64;
@@ -872,11 +872,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     i_r1 = 0;
     loop {
@@ -894,8 +894,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r73 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r73 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -911,11 +911,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            if idx >= t.farray.len() {
-                t.farray.resize(idx + 1, 0.0);
+            if idx >= t.as_float_mut().len() {
+                t.as_float_mut().resize(idx + 1, 0.0);
             }
             unsafe {
-                *t.farray.get_unchecked_mut(idx) = 0.625;
+                *t.as_float_mut().get_unchecked_mut(idx) = 0.625;
             }
             let k = 0;
             if k < 0 {
@@ -929,11 +929,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
+            if idx >= t.as_int_mut().len() {
+                t.as_int_mut().resize(idx + 1, 0);
             }
             unsafe {
-                *t.array.get_unchecked_mut(idx) = t_r74;
+                *t.as_int_mut().get_unchecked_mut(idx) = t_r74;
             }
             i_r1 = i_r1 + 1;
         } else {
@@ -956,11 +956,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = 0.0;
+        *t.as_float_mut().get_unchecked_mut(idx) = 0.0;
     }
     let k = 0;
     if k < 0 {
@@ -974,11 +974,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.array.len() {
-        t.array.resize(idx + 1, 0);
+    if idx >= t.as_int_mut().len() {
+        t.as_int_mut().resize(idx + 1, 0);
     }
     unsafe {
-        *t.array.get_unchecked_mut(idx) = t_r73;
+        *t.as_int_mut().get_unchecked_mut(idx) = t_r73;
     }
     let k = 0;
     if k < 0 {
@@ -992,8 +992,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r73 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r73 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -1006,8 +1006,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
     if t_r73 == 0 {
@@ -1017,8 +1017,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r73 = t.farray.len();
-    p_r73 = t.farray.as_mut_ptr();
+    len_r73 = t.as_float_mut().len();
+    p_r73 = t.as_float_mut().as_mut_ptr();
     i_r1 = 0;
     loop {
         b_r26 = i_r1 < 8;
@@ -1061,8 +1061,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r51 == 0 {
@@ -1072,8 +1072,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r51 = t.array.len();
-    p_r51 = t.array.as_mut_ptr();
+    len_r51 = t.as_int_mut().len();
+    p_r51 = t.as_int_mut().as_mut_ptr();
     i_r1 = 0;
     loop {
         b_r26 = i_r1 < 4;
@@ -1112,8 +1112,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r49 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r49 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -1131,11 +1131,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            if idx >= t.array.len() {
-                t.array.resize(idx + 1, 0);
+            if idx >= t.as_int_mut().len() {
+                t.as_int_mut().resize(idx + 1, 0);
             }
             unsafe {
-                *t.array.get_unchecked_mut(idx) = t_r73;
+                *t.as_int_mut().get_unchecked_mut(idx) = t_r73;
             }
             i_r1 = i_r1 + 1;
         } else {
@@ -1158,8 +1158,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r49 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r49 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -1175,8 +1175,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &**t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            t_r73 = if idx < t.array.len() {
-                unsafe { *t.array.get_unchecked(idx) }
+            t_r73 = if idx < t.as_int().len() {
+                unsafe { *t.as_int().get_unchecked(idx) }
             } else {
                 0
             };
@@ -1189,8 +1189,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     Some(t) => &mut **t,
                     None => panic!("Runtime Error: table is nil"),
                 };
-                if (lim as usize) > t.farray.len() {
-                    t.farray.resize(lim as usize, 0.0);
+                if (lim as usize) > t.as_float_mut().len() {
+                    t.as_float_mut().resize(lim as usize, 0.0);
                 }
             }
             if t_r73 == 0 {
@@ -1200,8 +1200,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            len_r73 = t.farray.len();
-            p_r73 = t.farray.as_mut_ptr();
+            len_r73 = t.as_float_mut().len();
+            p_r73 = t.as_float_mut().as_mut_ptr();
             i_r0 = 0;
             loop {
                 b_r26 = i_r0 < 8;
@@ -1240,8 +1240,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     Some(t) => &mut **t,
                     None => panic!("Runtime Error: table is nil"),
                 };
-                if (lim as usize) > t.array.len() {
-                    t.array.resize(lim as usize, 0);
+                if (lim as usize) > t.as_int_mut().len() {
+                    t.as_int_mut().resize(lim as usize, 0);
                 }
             }
             if t_r50 == 0 {
@@ -1251,8 +1251,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            len_r50 = t.array.len();
-            p_r50 = t.array.as_mut_ptr();
+            len_r50 = t.as_int_mut().len();
+            p_r50 = t.as_int_mut().as_mut_ptr();
             i_r0 = 0;
             loop {
                 b_r26 = i_r0 < 32;
@@ -1275,8 +1275,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                             Some(t) => &mut **t,
                             None => panic!("Runtime Error: table is nil"),
                         };
-                        if (lim as usize) > t.farray.len() {
-                            t.farray.resize(lim as usize, 0.0);
+                        if (lim as usize) > t.as_float_mut().len() {
+                            t.as_float_mut().resize(lim as usize, 0.0);
                         }
                     }
                     if t_r73 == 0 {
@@ -1286,8 +1286,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                         Some(t) => &mut **t,
                         None => panic!("Runtime Error: table is nil"),
                     };
-                    len_r73 = t.farray.len();
-                    p_r73 = t.farray.as_mut_ptr();
+                    len_r73 = t.as_float_mut().len();
+                    p_r73 = t.as_float_mut().as_mut_ptr();
                     i_r3 = 0;
                     loop {
                         b_r26 = i_r3 < 1024;
@@ -1341,8 +1341,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
             Some(t) => &mut **t,
             None => panic!("Runtime Error: table is nil"),
         };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
     if t_r50 == 0 {
@@ -1352,8 +1352,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    len_r50 = t.array.len();
-    p_r50 = t.array.as_mut_ptr();
+    len_r50 = t.as_int_mut().len();
+    p_r50 = t.as_int_mut().as_mut_ptr();
     f_r65 = 0.0;
     i_r1 = 0;
     loop {
@@ -1377,8 +1377,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     Some(t) => &mut **t,
                     None => panic!("Runtime Error: table is nil"),
                 };
-                if (lim as usize) > t.farray.len() {
-                    t.farray.resize(lim as usize, 0.0);
+                if (lim as usize) > t.as_float_mut().len() {
+                    t.as_float_mut().resize(lim as usize, 0.0);
                 }
             }
             if t_r73 == 0 {
@@ -1388,8 +1388,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
                 Some(t) => &mut **t,
                 None => panic!("Runtime Error: table is nil"),
             };
-            len_r73 = t.farray.len();
-            p_r73 = t.farray.as_mut_ptr();
+            len_r73 = t.as_float_mut().len();
+            p_r73 = t.as_float_mut().as_mut_ptr();
             i_r3 = 0;
             loop {
                 b_r26 = i_r3 < 1024;
@@ -1428,8 +1428,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r75 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r75 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -1445,8 +1445,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    f_r66 = if idx < t.farray.len() {
-        unsafe { *t.farray.get_unchecked(idx) }
+    f_r66 = if idx < t.as_float().len() {
+        unsafe { *t.as_float().get_unchecked(idx) }
     } else {
         0.0
     };
@@ -1462,11 +1462,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r66;
+        *t.as_float_mut().get_unchecked_mut(idx) = f_r66;
     }
     let k = 31;
     if k < 0 {
@@ -1480,8 +1480,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    t_r75 = if idx < t.array.len() {
-        unsafe { *t.array.get_unchecked(idx) }
+    t_r75 = if idx < t.as_int().len() {
+        unsafe { *t.as_int().get_unchecked(idx) }
     } else {
         0
     };
@@ -1497,8 +1497,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &**t,
         None => panic!("Runtime Error: table is nil"),
     };
-    f_r66 = if idx < t.farray.len() {
-        unsafe { *t.farray.get_unchecked(idx) }
+    f_r66 = if idx < t.as_float().len() {
+        unsafe { *t.as_float().get_unchecked(idx) }
     } else {
         0.0
     };
@@ -1514,11 +1514,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r66;
+        *t.as_float_mut().get_unchecked_mut(idx) = f_r66;
     }
     let k = 2;
     if k < 0 {
@@ -1532,11 +1532,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
         Some(t) => &mut **t,
         None => panic!("Runtime Error: table is nil"),
     };
-    if idx >= t.farray.len() {
-        t.farray.resize(idx + 1, 0.0);
+    if idx >= t.as_float_mut().len() {
+        t.as_float_mut().resize(idx + 1, 0.0);
     }
     unsafe {
-        *t.farray.get_unchecked_mut(idx) = f_r65;
+        *t.as_float_mut().get_unchecked_mut(idx) = f_r65;
     }
     return tables;
 }

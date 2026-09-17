@@ -23,8 +23,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
         let idx = k as usize;
         let t = unsafe { &*t_r5 };
-        i_r0 = if idx < t.array.len() {
-            unsafe { *t.array.get_unchecked(idx) }
+        i_r0 = if idx < t.as_int().len() {
+            unsafe { *t.as_int().get_unchecked(idx) }
         } else {
             0
         };

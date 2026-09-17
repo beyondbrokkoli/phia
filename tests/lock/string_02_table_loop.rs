@@ -19,12 +19,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 4;
     if lim > 0 {
         let t = unsafe { &mut *t_r4 };
-        if (lim as usize) > t.sarray.len() {
-            t.sarray.resize(lim as usize, String::new());
+        if (lim as usize) > t.as_string_mut().len() {
+            t.as_string_mut().resize(lim as usize, String::new());
         }
     }
-    len_r4 = unsafe { (*t_r4).sarray.len() };
-    p_r4 = unsafe { (*t_r4).sarray.as_mut_ptr() };
+    len_r4 = unsafe { (*t_r4).as_string_mut().len() };
+    p_r4 = unsafe { (*t_r4).as_string_mut().as_mut_ptr() };
     s_r2 = "x".to_string();
     i_r0 = 0;
     while i_r0 < 4 {
@@ -54,13 +54,13 @@ pub fn run_baked() -> Vec<Box<Table>> {
             "iter",
             i_r0,
             s_r2,
-            unsafe { (*t_r4).sarray.len() },
+            unsafe { (*t_r4).as_string().len() },
             s_r3
         );
         i_r0 = i_r0 + 1;
     }
     println!("{}\t{}\ttable(len={})", "exit", s_r2, unsafe {
-        (*t_r4).sarray.len()
+        (*t_r4).as_string().len()
     });
     return tables;
 }

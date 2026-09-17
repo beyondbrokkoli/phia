@@ -19,12 +19,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 310;
     if lim > 0 {
         let t = unsafe { &mut *t_r4 };
-        if (lim as usize) > t.array.len() {
-            t.array.resize(lim as usize, 0);
+        if (lim as usize) > t.as_int_mut().len() {
+            t.as_int_mut().resize(lim as usize, 0);
         }
     }
-    len_r4 = unsafe { (*t_r4).array.len() };
-    p_r4 = unsafe { (*t_r4).array.as_mut_ptr() };
+    len_r4 = unsafe { (*t_r4).as_int_mut().len() };
+    p_r4 = unsafe { (*t_r4).as_int_mut().as_mut_ptr() };
     i_r0 = 0;
     while i_r0 < 10 {
         i_r1 = i_r0;

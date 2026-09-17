@@ -2,6 +2,8 @@
 mod memory;
 mod fnv;
 
+use memory::Table;
+
 mod aot {
     include!(concat!(env!("OUT_DIR"), "/baked_native.rs"));
 }
@@ -39,47 +41,56 @@ fn main() {
     let elapsed = t0.elapsed();
 
     for (id, t) in tables.iter().enumerate() {
-        if t.is_string {
-            // String tables: same position-weighted checksum formula, with
-            // FNV-1a over each element's bytes standing in for the value.
-            // Deterministic in content, never in address. NZ counts
-            // non-empty elements — the empty string is the pool's zero
-            // (absence), exactly like 0 and 0.0.
-            let (mut nz, mut ck) = (0u64, 0i64);
-            for (i, v) in t.sarray.iter().enumerate() {
-                if !v.is_empty() { nz += 1; }
-                ck = ck.wrapping_add((i as i64 + 1)
-                    .wrapping_mul(fnv::fnv1a64(v.as_bytes()) as i64));
+        // The variant IS the dump branch now — exactly one side exists
+        // per table (the pool oracle's monomorphism), so the old
+        // is_string -> is_float -> is_bool flag chain collapses into a
+        // match with the same String/Float/Bool/Int precedence.
+        match &**t {
+            Table::String(sarray) => {
+                // String tables: same position-weighted checksum formula, with
+                // FNV-1a over each element's bytes standing in for the value.
+                // Deterministic in content, never in address. NZ counts
+                // non-empty elements — the empty string is the pool's zero
+                // (absence), exactly like 0 and 0.0.
+                let (mut nz, mut ck) = (0u64, 0i64);
+                for (i, v) in sarray.iter().enumerate() {
+                    if !v.is_empty() { nz += 1; }
+                    ck = ck.wrapping_add((i as i64 + 1)
+                        .wrapping_mul(fnv::fnv1a64(v.as_bytes()) as i64));
+                }
+                println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", sarray.len());
             }
-            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.sarray.len());
-        } else if t.is_float {
-            // Float tables: bit-pattern checksum (absolutely deterministic,
-            // same position-weighted formula as integers) plus a sequential
-            // SUM for human-readable pins.
-            let (mut nz, mut ck, mut sum) = (0u64, 0i64, 0f64);
-            for (i, v) in t.farray.iter().enumerate() {
-                if *v != 0.0 { nz += 1; }
-                ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(v.to_bits() as i64));
-                sum += v;
+            Table::Float(farray) => {
+                // Float tables: bit-pattern checksum (absolutely deterministic,
+                // same position-weighted formula as integers) plus a sequential
+                // SUM for human-readable pins.
+                let (mut nz, mut ck, mut sum) = (0u64, 0i64, 0f64);
+                for (i, v) in farray.iter().enumerate() {
+                    if *v != 0.0 { nz += 1; }
+                    ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(v.to_bits() as i64));
+                    sum += v;
+                }
+                println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck} SUM {sum}", farray.len());
             }
-            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck} SUM {sum}", t.farray.len());
-        } else if t.is_bool {
-            // Bool tables: the integer template with true as 1 — NZ counts
-            // true elements (false is the pool's zero, exactly like 0,
-            // 0.0 and "").
-            let (mut nz, mut ck) = (0u64, 0i64);
-            for (i, v) in t.barray.iter().enumerate() {
-                if *v { nz += 1; }
-                ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v as i64));
+            Table::Bool(barray) => {
+                // Bool tables: the integer template with true as 1 — NZ counts
+                // true elements (false is the pool's zero, exactly like 0,
+                // 0.0 and "").
+                let (mut nz, mut ck) = (0u64, 0i64);
+                for (i, v) in barray.iter().enumerate() {
+                    if *v { nz += 1; }
+                    ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v as i64));
+                }
+                println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", barray.len());
             }
-            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.barray.len());
-        } else {
-            let (mut nz, mut ck) = (0u64, 0i64);
-            for (i, v) in t.array.iter().enumerate() {
-                if *v != 0 { nz += 1; }
-                ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v)); // position-weighted
+            Table::Int(array) => {
+                let (mut nz, mut ck) = (0u64, 0i64);
+                for (i, v) in array.iter().enumerate() {
+                    if *v != 0 { nz += 1; }
+                    ck = ck.wrapping_add((i as i64 + 1).wrapping_mul(*v)); // position-weighted
+                }
+                println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", array.len());
             }
-            println!("TABLE {id} LEN {} NZ {nz} CHECKSUM {ck}", t.array.len());
         }
     }
     println!("STATS {}", aot::STATS);

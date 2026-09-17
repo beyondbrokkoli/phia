@@ -18,12 +18,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
     let lim = 8;
     if lim > 0 {
         let t = unsafe { &mut *t_r3 };
-        if (lim as usize) > t.farray.len() {
-            t.farray.resize(lim as usize, 0.0);
+        if (lim as usize) > t.as_float_mut().len() {
+            t.as_float_mut().resize(lim as usize, 0.0);
         }
     }
-    len_r3 = unsafe { (*t_r3).farray.len() };
-    p_r3 = unsafe { (*t_r3).farray.as_mut_ptr() };
+    len_r3 = unsafe { (*t_r3).as_float_mut().len() };
+    p_r3 = unsafe { (*t_r3).as_float_mut().as_mut_ptr() };
     f_r2 = 0.0;
     i_r0 = 0;
     while i_r0 < 8 {

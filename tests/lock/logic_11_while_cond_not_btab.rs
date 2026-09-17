@@ -41,11 +41,11 @@ pub fn run_baked() -> Vec<Box<Table>> {
     }
     let idx = k as usize;
     let t = unsafe { &mut *t_r11 };
-    if idx >= t.barray.len() {
-        t.barray.resize(idx + 1, false);
+    if idx >= t.as_bool_mut().len() {
+        t.as_bool_mut().resize(idx + 1, false);
     }
     unsafe {
-        *t.barray.get_unchecked_mut(idx) = true;
+        *t.as_bool_mut().get_unchecked_mut(idx) = true;
     }
     i_r1 = 0;
     loop {
@@ -55,8 +55,8 @@ pub fn run_baked() -> Vec<Box<Table>> {
         }
         let idx = k as usize;
         let t = unsafe { &*t_r11 };
-        b_r5 = if idx < t.barray.len() {
-            unsafe { *t.barray.get_unchecked(idx) }
+        b_r5 = if idx < t.as_bool().len() {
+            unsafe { *t.as_bool().get_unchecked(idx) }
         } else {
             false
         };

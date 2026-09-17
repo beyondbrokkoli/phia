@@ -74,7 +74,7 @@ fn is_btable_reg(r: RegId, alloc: &AllocInfo) -> bool {
 //
 // Element kind of a table physical is answered ONCE, by the pool the id
 // was minted into (Layer C: the range is the type). Every emission site
-// that needs "which struct field / pointer type / resize zero?" asks
+// that needs "which Table accessor / pointer type / resize zero?" asks
 // these functions — the decl block's p_r type, NewTable's constructor,
 // the dyn getter/setters' fld, EC's (fld, zero), HR's fld, and the
 // probe's length token — so two sites can no longer disagree by
@@ -96,23 +96,25 @@ fn is_btable_reg(r: RegId, alloc: &AllocInfo) -> bool {
 // arms still render by ty. The sites below are where the pool already
 // answers, so the ty riding along is pure tripwire.
 
-// Storage side (Table struct field) of a table physical, by pool. The
+// Storage side (Table accessor) of a table physical, by pool. The
 // plain-table range is the i64 side: integer elements and nested-table
-// handles (handle mode) share it.
+// handles (handle mode) share it. Sites render `{fld}()` for shared
+// reads and `{fld}_mut()` where they resize/write — same one oracle,
+// two spellings.
 fn table_fld(r: RegId, alloc: &AllocInfo) -> &'static str {
-    if is_ftable_reg(r, alloc) { "farray" }
-    else if is_tstr_reg(r, alloc) { "sarray" }
-    else if is_btable_reg(r, alloc) { "barray" }
-    else { "array" }
+    if is_ftable_reg(r, alloc) { "as_float" }
+    else if is_tstr_reg(r, alloc) { "as_string" }
+    else if is_btable_reg(r, alloc) { "as_bool" }
+    else { "as_int" }
 }
 
 // Storage side plus the pool's resize zero (EC and the dyn ops' grow
 // path): the absent-key default of the element pool.
 fn table_fld_zero(r: RegId, alloc: &AllocInfo) -> (&'static str, &'static str) {
-    if is_ftable_reg(r, alloc) { ("farray", "0.0") }
-    else if is_tstr_reg(r, alloc) { ("sarray", "String::new()") }
-    else if is_btable_reg(r, alloc) { ("barray", "false") }
-    else { ("array", "0") }
+    if is_ftable_reg(r, alloc) { ("as_float", "0.0") }
+    else if is_tstr_reg(r, alloc) { ("as_string", "String::new()") }
+    else if is_btable_reg(r, alloc) { ("as_bool", "false") }
+    else { ("as_int", "0") }
 }
 
 // Hoisted-pointer element type — the decl block's p_r declaration and
@@ -131,10 +133,10 @@ fn table_ptr_ty(r: RegId, alloc: &AllocInfo) -> &'static str {
 // side's pool.
 fn elem_fld(elem: &StaticType) -> &'static str {
     match elem {
-        StaticType::Float => "farray",
-        StaticType::String => "sarray",
-        StaticType::Boolean => "barray",
-        _ => "array",
+        StaticType::Float => "as_float",
+        StaticType::String => "as_string",
+        StaticType::Boolean => "as_bool",
+        _ => "as_int",
     }
 }
 
@@ -720,7 +722,7 @@ fn emit_instr(
                             fields.push("{}".to_string());
                             args.push(format!(
                                 "match tables.get((t_r{r} - 1) as usize) \
-                                 {{ Some(t) => format!(\"table#{{}}(len={{}})\", t_r{r}, t.{fld}.len()), \
+                                 {{ Some(t) => format!(\"table#{{}}(len={{}})\", t_r{r}, t.{fld}().len()), \
                                  None => \"nil\".to_string() }}"
                             ));
                         } else {
@@ -730,7 +732,7 @@ fn emit_instr(
                             // and those render handle mode), so the
                             // deref cannot see null
                             fields.push("table(len={})".to_string());
-                            args.push(format!("unsafe {{ (*t_r{r}).{fld}.len() }}"));
+                            args.push(format!("unsafe {{ (*t_r{r}).{fld}().len() }}"));
                         }
                     }
                 }
@@ -760,8 +762,8 @@ fn emit_instr(
                      if lim > 0 {{\n\
                          if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         if (lim as usize) > t.{fld}.len() {{\n\
-                             t.{fld}.resize(lim as usize, {zero});\n\
+                         if (lim as usize) > t.{fld}_mut().len() {{\n\
+                             t.{fld}_mut().resize(lim as usize, {zero});\n\
                          }}\n\
                      }}\n",
                     lim = iop_str!(*limit, consts)
@@ -771,8 +773,8 @@ fn emit_instr(
                     "let lim = {lim};\n\
                      if lim > 0 {{\n\
                          let t = unsafe {{ &mut *t_r{table} }};\n\
-                         if (lim as usize) > t.{fld}.len() {{\n\
-                             t.{fld}.resize(lim as usize, {zero});\n\
+                         if (lim as usize) > t.{fld}_mut().len() {{\n\
+                             t.{fld}_mut().resize(lim as usize, {zero});\n\
                          }}\n\
                      }}\n",
                     lim = iop_str!(*limit, consts)
@@ -785,13 +787,13 @@ fn emit_instr(
                 out.push_str(&format!(
                     "if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                      let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     len_r{table} = t.{fld}.len();\n\
-                     p_r{table} = t.{fld}.as_mut_ptr();\n"
+                     len_r{table} = t.{fld}_mut().len();\n\
+                     p_r{table} = t.{fld}_mut().as_mut_ptr();\n"
                 ));
             } else {
                 out.push_str(&format!(
-                    "len_r{table} = unsafe {{ (*t_r{table}).{fld}.len() }};\n\
-                     p_r{table} = unsafe {{ (*t_r{table}).{fld}.as_mut_ptr() }};\n"
+                    "len_r{table} = unsafe {{ (*t_r{table}).{fld}_mut().len() }};\n\
+                     p_r{table} = unsafe {{ (*t_r{table}).{fld}_mut().as_mut_ptr() }};\n"
                 ));
             }
         }
@@ -802,7 +804,7 @@ fn emit_instr(
             // variant); the carried element type is verified against
             // the pool, never consulted for the choice. Integer and
             // table-element stores render byte-identically to the
-            // frozen templates (fld="array", zero="0"); floats,
+            // frozen templates (fld="as_int", zero="0"); floats,
             // strings, bools take their own sides.
             assert_fld(*table, ty, alloc, "SetTable");
             let (fld, zero) = table_fld_zero(*table, alloc);
@@ -833,8 +835,8 @@ fn emit_instr(
                      let idx = k as usize;\n\
                      if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                      let t = match tables.get_mut((t_r{table} - 1) as usize) {{ Some(t) => &mut **t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                     if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
-                     unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
+                     if idx >= t.{fld}_mut().len() {{ t.{fld}_mut().resize(idx + 1, {zero}); }}\n\
+                     unsafe {{ *t.{fld}_mut().get_unchecked_mut(idx) = {val_str}; }}\n",
                     key = iop_str!(*key, consts)
                 ));
             } else {
@@ -843,8 +845,8 @@ fn emit_instr(
                      if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                      let idx = k as usize;\n\
                      let t = unsafe {{ &mut *t_r{table} }};\n\
-                     if idx >= t.{fld}.len() {{ t.{fld}.resize(idx + 1, {zero}); }}\n\
-                     unsafe {{ *t.{fld}.get_unchecked_mut(idx) = {val_str}; }}\n",
+                     if idx >= t.{fld}_mut().len() {{ t.{fld}_mut().resize(idx + 1, {zero}); }}\n\
+                     unsafe {{ *t.{fld}_mut().get_unchecked_mut(idx) = {val_str}; }}\n",
                     key = iop_str!(*key, consts)
                 ));
             }
@@ -866,7 +868,7 @@ fn emit_instr(
                          let idx = k as usize;\n\
                          if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
+                         s_r{target} = if idx < t.as_string().len() {{ unsafe {{ t.as_string().get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
                         key = iop_str!(*key, consts)
                     ));
                 } else {
@@ -875,7 +877,7 @@ fn emit_instr(
                          if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                          let idx = k as usize;\n\
                          let t = unsafe {{ &*t_r{table} }};\n\
-                         s_r{target} = if idx < t.sarray.len() {{ unsafe {{ t.sarray.get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
+                         s_r{target} = if idx < t.as_string().len() {{ unsafe {{ t.as_string().get_unchecked(idx).clone() }} }} else {{ String::new() }};\n",
                         key = iop_str!(*key, consts)
                     ));
                 }
@@ -894,7 +896,7 @@ fn emit_instr(
                          let idx = k as usize;\n\
                          if t_r{table} == 0 {{ panic!(\"Runtime Error: table is nil\"); }}\n\
                          let t = match tables.get((t_r{table} - 1) as usize) {{ Some(t) => &**t, None => panic!(\"Runtime Error: table is nil\") }};\n\
-                         {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                         {target_str} = if idx < t.{fld}().len() {{ unsafe {{ *t.{fld}().get_unchecked(idx) }} }} else {{ {zero} }};\n",
                         key = iop_str!(*key, consts)
                     ));
                 } else {
@@ -903,7 +905,7 @@ fn emit_instr(
                          if k < 0 {{ panic!(\"Runtime Error: Negative table index\"); }}\n\
                          let idx = k as usize;\n\
                          let t = unsafe {{ &*t_r{table} }};\n\
-                         {target_str} = if idx < t.{fld}.len() {{ unsafe {{ *t.{fld}.get_unchecked(idx) }} }} else {{ {zero} }};\n",
+                         {target_str} = if idx < t.{fld}().len() {{ unsafe {{ *t.{fld}().get_unchecked(idx) }} }} else {{ {zero} }};\n",
                         key = iop_str!(*key, consts)
                     ));
                 }

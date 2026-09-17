@@ -28,12 +28,12 @@ pub fn run_baked() -> Vec<Box<Table>> {
                     let lim = 60;
                     if lim > 0 {
                         let t = unsafe { &mut *t_r7 };
-                        if (lim as usize) > t.array.len() {
-                            t.array.resize(lim as usize, 0);
+                        if (lim as usize) > t.as_int_mut().len() {
+                            t.as_int_mut().resize(lim as usize, 0);
                         }
                     }
-                    len_r7 = unsafe { (*t_r7).array.len() };
-                    p_r7 = unsafe { (*t_r7).array.as_mut_ptr() };
+                    len_r7 = unsafe { (*t_r7).as_int_mut().len() };
+                    p_r7 = unsafe { (*t_r7).as_int_mut().as_mut_ptr() };
                     i_r2 = 0;
                     loop {
                         b_r4 = i_r2 < 60;
