@@ -34,6 +34,8 @@ return {
         "bug_16b.lua",
         "bug_17.lua",
         "bug_18.lua",
+        "bug_19_if_region_miscompile.lua",
+        "bug_20_stale_defmap.lua",
         "gauntlet_pA.lua",
         "gauntlet_pB.lua",
         "gauntlet_pC.lua",

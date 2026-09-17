@@ -84,14 +84,15 @@ fn loop_region(blocks: &[BasicBlock], header: BlockId, body: BlockId) -> Vec<Blo
 //   * the tier-4 mints and S5's EC/Hoist pairs only APPEND to pre-header
 //     blocks (existing indices preserved — the appends deliberately
 //     happen before PASS 3 could run again on the same header);
-//   * the orphan-feeder cleanup RETAINS (removes) instructions, which
-//     DOES shift indices — but only for blocks inside the region, only
-//     after this header's analysis is complete, and only for feeders
-//     whose sole use was just rewritten away, so their def_map entries
-//     can never be queried again (the LATER headers' analyses look up
-//     live operands only). If a future pass ever deletes or inserts
-//     mid-block, def_map must be rebuilt (or switched to instruction
-//     identity) in the same commit.
+//   * the orphan-feeder cleanup is DEFERRED to after the header loop,
+//     so nothing inside the loop ever removes instructions (a per-header
+//     retain would shift the indices of every instruction after the
+//     removed feeder in that block — def_map entries of LIVE operands
+//     included — and the next header's analysis would misread them;
+//     bug_20_stale_defmap crashed const_eval exactly there).
+// If a future pass ever deletes or inserts mid-block inside the header
+// loop, def_map must be rebuilt (or switched to instruction identity)
+// in the same commit.
 pub fn optimize(program: &mut IrProgram) {
     let mut def_map: HashMap<RegId, (BlockId, usize)> = HashMap::new();
     for block in &program.blocks {
@@ -269,6 +270,12 @@ pub fn optimize(program: &mut IrProgram) {
         }
     };
 
+    // Orphaned tier-4 feeders, accumulated across ALL headers; the dead
+    // reads are deleted in one program-wide retain AFTER the header loop
+    // (see the cleanup at the bottom and the index-stability invariant
+    // at the top of this file).
+    let mut orphan_feeders: HashSet<RegId> = HashSet::new();
+
     let num_blocks = program.blocks.len();
     for header_id in 0..num_blocks {
         let terminator = program.blocks[header_id].terminator.clone();
@@ -280,6 +287,36 @@ pub fn optimize(program: &mut IrProgram) {
             } else { None };
 
             if let Some((idx_reg, limit_reg)) = is_less {
+                // LOOP-HEADER GATE: a Less-Branch qualifies only when
+                // its body can reach the branch block again — a back
+                // edge. An `if`'s branch block has the same Less shape,
+                // but loop_region() from its then-block flows through
+                // the join into code that also executes when the
+                // condition is FALSE; the header's Less proved nothing
+                // there, so PASS 2 must not upgrade anything in it
+                // (bug_19_if_region_miscompile: t[x]=7 after `if x < y`
+                // panicked the fast path's bounds check with x=100,
+                // y=5). With the gate, every region block executes only
+                // under a header that proved idx < limit on this trip.
+                let mut back_edge = false;
+                {
+                    let mut seen = HashSet::new();
+                    let mut stack = vec![body_id];
+                    while let Some(b) = stack.pop() {
+                        if b == header_id { back_edge = true; break; }
+                        if !seen.insert(b) { continue; }
+                        match &program.blocks[b].terminator {
+                            Some(Terminator::Jump(t)) => stack.push(*t),
+                            Some(Terminator::Branch { true_block, false_block, .. }) => {
+                                stack.push(*true_block);
+                                stack.push(*false_block);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if !back_edge { continue; }
+
                 let (limit_def_block, _) = def_map.get(&limit_reg).unwrap_or(&(0, 0));
                 let limit_is_invariant = *limit_def_block < header_id;
 
@@ -457,7 +494,6 @@ pub fn optimize(program: &mut IrProgram) {
                     // pass (a global const-key purity rule
                     // would erase unused reads — nested_06
                     // pins their survival).
-                    let mut orphan_feeders: HashSet<RegId> = HashSet::new();
                     // Proven-positive COMPUTED limits: fold the
                     // limit's def chain locally instead of demanding
                     // a LoadInt def (tier4_07). Unprovable limits
@@ -690,19 +726,10 @@ pub fn optimize(program: &mut IrProgram) {
                     for (blk, i, new_instr) in upgrades {
                         program.blocks[blk].instrs[i] = new_instr;
                     }
-                    // tier-4 cleanup: the rewrites above dropped the
-                    // feeders' last use — remove the dead reads (dyn
-                    // and fast: the mint re-does the identical read,
-                    // panics included, in a dominating position)
-                    if !orphan_feeders.is_empty() {
-                        for &blk in &region {
-                            program.blocks[blk].instrs.retain(|ins| {
-                                !matches!(ins,
-                                    Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
-                                    if orphan_feeders.contains(target))
-                            });
-                        }
-                    }
+                    // NOTE: the orphaned feeders collected above are NOT
+                    // deleted here — see the deferred cleanup after the
+                    // header loop (deleting mid-loop is the index-stability
+                    // hazard documented at the top of this file).
 
                     let mut pre_header_id = 0;
                     for b in 0..header_id {
@@ -753,5 +780,25 @@ pub fn optimize(program: &mut IrProgram) {
                 }
             }
         }
+    }
+
+    // TIER 4 cleanup, DEFERRED past the header loop: the rewrites above
+    // dropped each surviving orphan's last use (the ≤1 count at scan
+    // time WAS the rewritten op), the mint re-does the identical read —
+    // panics included — in a dominating position, and nothing later in
+    // optimize() ever adds a use of an existing vreg, so every entry is
+    // provably dead right now. Deleting per-header instead would shift
+    // instruction indices inside region blocks out from under def_map
+    // (bug_20_stale_defmap: a feeder removed from the inner loop's
+    // pre-header block moved that loop's limit/entry defs; the next
+    // header's analysis then read the wrong instruction, or indexed out
+    // of bounds in const_eval). One program-wide retain produces the
+    // identical final IR with def_map stable for the whole loop.
+    for block in &mut program.blocks {
+        block.instrs.retain(|ins| {
+            !matches!(ins,
+                Instruction::GetTable { target, .. } | Instruction::GetTableFast { target, .. }
+                if orphan_feeders.contains(target))
+        });
     }
 }
