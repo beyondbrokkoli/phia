@@ -176,15 +176,16 @@ class PhiaLuaGenerator:
         limit = self.r.randint(2, 5)
         self.emit(f"local {v_iter} = 0")
 
-        # Inject spicy combinatorics into the loop condition
-        # while keeping the v_iter bound to prevent fuzzer hangs.
         spicy_cond = self.gen_expr('bool')
         self.emit(f"while ({v_iter} < {limit}) and ({spicy_cond}) do")
         self.indent_level += 1
 
         state = self.push_scope()
-        # Ensure we don't accidentally shadow the iterator
-        self.scalars['int'].append(v_iter)
+
+        # FIX: Intentionally do NOT append v_iter to self.scalars['int'].
+        # This fully isolates the loop counter so `gen_assignment` cannot
+        # randomly overwrite it during the loop body and cause infinite loops.
+
         for _ in range(self.r.randint(1, 3)):
             # Force table writes inside loops to stress arena bounds checking
             if self.r.random() < 0.7: self.gen_table_write()
@@ -238,7 +239,6 @@ class PhiaLuaGenerator:
         return "\n".join(self.lines) + "\n", sink_types
 
 
-# Quick test if run directly
 if __name__ == "__main__":
     gen = PhiaLuaGenerator(seed=42)
     print(gen.generate()[0])

@@ -107,10 +107,10 @@ def run_seed(seed):
 
     return {"status": "PASS"}
 
-# Infinite Loops
+# No Infinite Loops
 HARDCODED_BLACKLIST = {
-    4, 169, 278, 376, 399, 626, 780, 857, 1107,
-    1377, 1411, 1420, 1482, 1657, 1750, 1890, 1984, 1999
+    # Blacklist is now obsolete
+    9999999999999
 }
 
 def main():
